@@ -13,12 +13,18 @@ import pandas as pd
 from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
 from config import load_config, get_db
-from tools import highlight_polygons_on_map, find_cubes_for_unit_theme, find_units_by_postcode, \
+from tools import find_cubes_for_unit_theme, find_units_by_postcode, \
     find_themes_for_unit, find_places_by_name
 from langchain_core.runnables.graph import MermaidDrawMethod
+from mapinit import get_mapinit_polygons
 
+
+# Settings
 config = load_config()
 db = get_db(config)
+
+# Get the polygons
+gdf, geojson = get_mapinit_polygons()
 
 # Memory setup
 memory = MemorySaver()
@@ -43,6 +49,7 @@ postcode_regex = r"([Gg][Ii][Rr] 0[Aa]{2})|((([A-Za-z][0-9]{1,2})|(([A-Za-z][A-H
 # Define the state for the agent
 class lg_State(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
+    selection: Optional[Any]
     selected_place: Optional[Any]
     selected_place_g_place: Optional[Any]
     selected_place_g_unit: Optional[Any]
@@ -170,11 +177,12 @@ def postcode_tool_call(state: lg_State) -> lg_State:
 def place_tool_call(state: lg_State) -> lg_State:
     print(f"State in place_tool_call: {state}")
     if state.get('multiple_places_returned'):
-        text = state['messages'][-1].content
-        returned_places = pd.read_json(state['selected_place'])
-        returned_places = returned_places.iloc[int(text)].to_frame().T
-        state['selected_place'] = returned_places.to_json(index=True)
-        state['multiple_places_returned'] = False
+        selection = state.get('selection')
+        if selection != None:
+            returned_places = pd.read_json(state['selected_place'])
+            returned_places = returned_places.iloc[int(selection)].to_frame().T
+            state['selected_place'] = returned_places.to_json(index=True)
+            state['multiple_places_returned'] = False
     else:
         place_name = state['extracted_place_name']
         returned_places = find_places_by_name(place_name)
@@ -190,11 +198,12 @@ def place_tool_call(state: lg_State) -> lg_State:
         state['selected_place_g_place'] = int(
             returned_places['g_place'].values[0])
     elif num_results > 1:
-        response_message = AIMessage(
-            content=f"""Multiple places found:\n
-            {returned_places[['g_name', 'county_name']]}
-            \n\n
-            Please specify which place you meant by number (e.g., '1').""")
+        # Convert options to button-compatible data
+        button_options = [
+            {"type": "buttons", "label": row['g_name'], "value": index}
+            for index, row in returned_places[['g_name', 'county_name']].iterrows()
+        ]
+        response_message = AIMessage(content=button_options)
         state['multiple_places_returned'] = True
     else:
         response_message = AIMessage(content="No places found with that name.")
@@ -258,9 +267,6 @@ def get_place_themes_node(state: lg_State) -> lg_State:
 def create_workflow(lg_State, gdf):
     # Define a new graph
     workflow = StateGraph(lg_State)
-
-
-
 
     # Add nodes to handle user input and provide responses
 
