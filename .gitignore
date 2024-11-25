@@ -1,0 +1,9 @@
+database.ini
+unused/
+dbtools/
+.vscode/
+__pycache__/
+langchain.json
+langgraph.json
+polygons*
+.DS_Store
