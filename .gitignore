@@ -7,3 +7,5 @@ langchain.json
 langgraph.json
 polygons*
 .DS_Store
+langchain
+langgraph
