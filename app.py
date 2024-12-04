@@ -2,41 +2,21 @@ import os, json
 import plotly.express as px
 import plotly.graph_objects as go
 import dash
-from dash import dcc, html, ALL, MATCH, no_update, callback_context
+import typing_extensions
+from dash import dcc, html, ALL, no_update, callback_context
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 
 import dash_bootstrap_components as dbc
 
-from langchain_community.llms import OpenAI
-from langchain_community.agent_toolkits.sql.toolkit import SQLDatabaseToolkit
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, AIMessage, ToolMessage, AnyMessage
-from langchain_core.tools import tool, StructuredTool
+from langchain_core.messages import ToolMessage
 
-from langchain_community.agent_toolkits.sql.prompt import SQL_FUNCTIONS_SUFFIX
-from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
-from langchain_core.prompts.chat import (
-    ChatPromptTemplate,
-    HumanMessagePromptTemplate,
-    MessagesPlaceholder,
-)
-from typing import Annotated, Literal, Optional, List, Dict, Any
-
-from pydantic import BaseModel, Field
-from typing_extensions import TypedDict
-from langgraph.graph import END, StateGraph, START
-from langgraph.graph.message import AnyMessage, add_messages
-from langgraph.prebuilt import create_react_agent
-from langgraph.checkpoint.memory import MemorySaver
-import shapely
 from config import load_config, get_db
-from prompts import SQL_PREFIX
 from tools import calculate_center_and_zoom
 
 from workflow import lg_State, create_workflow
 from mapinit import get_mapinit_polygons
-
+from langgraph.errors import NodeInterrupt
 
 # Settings
 config = load_config()
@@ -248,70 +228,96 @@ def handle_button_click(n_clicks_list, chat_history, buttons):
     Output("selected_ids", "data", allow_duplicate=True),
     Output("options-container", "children"),
     Input("send-button", "n_clicks"),
-    Input("thread_id", "data"),
+    Input({"option_type": ALL, "type": "dynamic-button-user-choice", "index": ALL}, "n_clicks"),
+    State("thread_id", "data"),
     State("chat-input", "value"),
     State("chat-display", "children"),
-    Input("options-container", "children"),
+    State("options-container", "children"),
     prevent_initial_call=True
 )
-def update_chat(n_clicks, thread_id, user_input, chat_history, buttons):
-    # Check there was user input
-    selection = None
-    buttons = []
-
-    if n_clicks is None or user_input is None or user_input.strip() == "":
-        # Check if the last message in chat_history[-1]['props']['children'][0] starts with "User selected:"
-        if chat_history and chat_history[-1]['props']['children'].startswith("User selected:"):
-            selection = int(chat_history[-1]['props']['children'].split(": ")[1])
-        else:
-            return chat_history, "", no_update
-
-
-
-    # Add user message
-    user_message = html.Div(f"You: {user_input}", className="mb-2")
-    
-    config = {"configurable": {"thread_id": thread_id}}
-
-    # user_input could be: How has the population of Portsmouth changed over time?
-    inputs = {"messages": [("user", user_input)], "selection": str(selection)}
-    db_res = compiled_workflow.invoke(
-        inputs, config=config)
-    for message in db_res['messages']:
-        if isinstance(message, ToolMessage):
-            print(f"ToolMessage: {message}")
-    ai_out = db_res['messages'][-1].content
-    ai_response = f"AI: {ai_out}"
-    
-    # Present buttons if required.
-    if isinstance(ai_out, list):
-        if isinstance(ai_out[0], dict):
-            if ai_out[0].get("type") == "buttons":
-                # Generate buttons from the response
-                buttons = [
-                    html.Button(
-                        opt["label"], id={"type": "dynamic-button-user-choice", "index": opt["value"]}
-                    )
-                    for opt in ai_out
-                ]
-                # Add instruction message
-                ai_response = ("AI: Please select an option.")
-
-    gdf_id = db_res.get('selected_place_gdf_id')
-    
-    # Format response
-    ai_response = ai_response.split("\n")
-    ai_message_formatted = []
-    for i, line in enumerate(ai_response):
-        if line != "":
-            ai_message_formatted.append(line)
-            ai_message_formatted.append(html.Br())
-    ai_message = html.Div(ai_message_formatted, className="mb-2 text-primary")
-
+def update_chat(n_clicks, button_clicks, thread_id, user_input, chat_history, buttons):
+    # Determine if the user clicked a button or submitted input
+    selection_idx = None
     if chat_history is None:
         chat_history = []
-    
-    return chat_history + [user_message, ai_message], "", gdf_id, buttons
+    if any(button_clicks):
+        ctx = dash.callback_context.triggered[0]
+        selectiontext = json.loads(ctx["prop_id"].split(".")[0])
+        selection_idx = int(selectiontext["index"])
+        selection_option_type = selectiontext["option_type"]
+
+    elif n_clicks is None and (user_input is None or user_input.strip() == ""):
+        return chat_history, "", no_update, no_update
+
+    # Initialize user message for chat display
+    user_message = html.Div(f"You: {user_input}", className="mb-2") if user_input else None
+
+    # Configure graph execution
+    config = {"configurable": {"thread_id": thread_id}}
+
+    # Check the current state of the graph
+    state = compiled_workflow.get_state(config)
+
+    if state.tasks:  # If the graph is already interrupted
+        interrupt_task = state.tasks[0]  # Take the first task if multiple
+        if interrupt_task.interrupts:
+            interrupt = interrupt_task.interrupts[0]
+            interrupt_value = interrupt.value
+
+            if selection_idx is not None and selection_option_type == interrupt_value['options'][0]['option_type']:  # Resume graph with user selection_idx
+                compiled_workflow.update_state(config=config, values={"selection_idx": selection_idx})
+            elif user_input and user_input.strip():  # Resume graph with user input
+                compiled_workflow.update_state(config=config, values={"messages": [("user", user_input)]})
+            else:
+                # Display interrupt message and options
+                buttons = [
+                    html.Button(
+                        opt["label"],
+                        id={"option_type": opt['option_type'], "type": "dynamic-button-user-choice", "index": opt["value"]}
+                    )
+                    for opt in interrupt_value.get("options", [])
+                ]
+                interrupt_message = html.Div(f"AI: {interrupt_value.get('message', 'Action required.')}",
+                                             className="mb-2 text-primary")
+                return chat_history + [user_message, interrupt_message], "", no_update, buttons
+
+    # Handle new user input if there is no ongoing interrupt
+    inputs = {"messages": [("user", user_input)]} if user_input else None
+
+    # Invoke the graph
+    db_res = compiled_workflow.invoke(inputs, config=config)
+
+    # Check if the graph exited with a new interrupt
+    state = compiled_workflow.get_state(config)
+    if state.tasks:
+        interrupt_task = state.tasks[0]
+        if interrupt_task.interrupts:
+            interrupt = interrupt_task.interrupts[0]
+            interrupt_value = interrupt.value
+            buttons = [
+                html.Button(
+                    opt["label"],
+                    id={"option_type": opt['option_type'], "type": "dynamic-button-user-choice", "index": opt["value"]}
+                )
+                for opt in interrupt_value.get("options", [])
+            ]
+            interrupt_message = html.Div(f"AI: {interrupt_value.get('message', 'Action required.')}",
+                                         className="mb-2 text-primary")
+            return chat_history + [user_message, interrupt_message], "", no_update, buttons
+
+    # Process graph output if no interrupt occurred
+    ai_out = db_res['messages'][-1].content
+    gdf_id = db_res.get('selected_place_gdf_id')
+    ai_message = html.Div(f"AI: {ai_out}", className="mb-2 text-primary")
+
+    # Update chat history
+    if chat_history is None:
+        chat_history = []
+    if user_message:
+        chat_history.append(user_message)
+    chat_history.append(ai_message)
+
+    return chat_history, "", gdf_id, []
 
 # Run the app
 if __name__ == '__main__':

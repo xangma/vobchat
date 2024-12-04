@@ -17,7 +17,7 @@ from tools import find_cubes_for_unit_theme, find_units_by_postcode, \
     find_themes_for_unit, find_places_by_name
 from langchain_core.runnables.graph import MermaidDrawMethod
 from mapinit import get_mapinit_polygons
-
+from langgraph.errors import NodeInterrupt
 
 # Settings
 config = load_config()
@@ -49,13 +49,13 @@ postcode_regex = r"([Gg][Ii][Rr] 0[Aa]{2})|((([A-Za-z][0-9]{1,2})|(([A-Za-z][A-H
 # Define the state for the agent
 class lg_State(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
-    selection: Optional[Any]
+    selection_idx: Optional[Any]
     selected_place: Optional[Any]
     selected_place_g_place: Optional[Any]
     selected_place_g_unit: Optional[Any]
     selected_place_gdf_id: Optional[Any]
     selected_place_themes: Optional[Any]
-    multiple_places_returned: Optional[bool]
+    selected_theme: Optional[Any]
     is_postcode: bool
     extracted_postcode: Optional[str]  # Add field for the extracted postcode
     extracted_place_name: Optional[str]  # Add field for the extracted place name
@@ -88,10 +88,6 @@ def validate_user_input(state: lg_State) -> lg_State:
     print(f"Initial state: {state}")
     user_input = state['messages'][-1].content
     
-    # If the state already has multiple places (i.e.) from a previous invocation, skip validation
-    if state.get('multiple_places_returned'):
-        return state
-    
     postcode_match = re.search(postcode_regex, user_input)
 
     if postcode_match:
@@ -110,8 +106,6 @@ def validate_user_input(state: lg_State) -> lg_State:
 def decide_next_node(state):
     if state.get('is_postcode'):
         return "postcode_tool_call"
-    elif state.get('multiple_places'):
-        return "place_tool_call"
     else:
         return "extract_place_name_node"
 
@@ -176,46 +170,45 @@ def postcode_tool_call(state: lg_State) -> lg_State:
 
 def place_tool_call(state: lg_State) -> lg_State:
     print(f"State in place_tool_call: {state}")
-    if state.get('multiple_places_returned'):
-        selection = state.get('selection')
-        if selection != None:
-            returned_places = pd.read_json(state['selected_place'])
-            returned_places = returned_places.iloc[int(selection)].to_frame().T
-            state['selected_place'] = returned_places.to_json(index=True)
-            state['multiple_places_returned'] = False
-    else:
-        place_name = state['extracted_place_name']
-        returned_places = find_places_by_name(place_name)
+
+    # New query for places
+    place_name = state['extracted_place_name']
+    returned_places = find_places_by_name(place_name)
+    state['selected_place'] = returned_places.to_json(index=True)
+    return state
+
+def place_tool_handler(state: lg_State) -> lg_State:
+    
+    returned_places = pd.read_json(state['selected_place'])
+    # If we are resuming from an existing selection
+    selection_idx = state.get('selection_idx')
+    if selection_idx is not None:
+        returned_places = returned_places.iloc[int(selection_idx)].to_frame().T
         state['selected_place'] = returned_places.to_json(index=True)
-        print(
-            f"Result from find_places_by_name: {returned_places}, num_results: {len(returned_places)}")
+        state['selection_idx'] = None
+
     num_results = len(returned_places)
 
     if num_results == 1:
-        response_message = AIMessage(
-            content=f"Place found: {returned_places.to_string()}")
-        state['selected_place'] = returned_places.to_json(index=True)
-        state['selected_place_g_place'] = int(
-            returned_places['g_place'].values[0])
+        # Single result: update state and continue
+        state['selected_place_g_place'] = int(returned_places['g_place'].values[0])
+        state['messages'].append(AIMessage(content=f"Place found: {returned_places.to_string()}"))
     elif num_results > 1:
-        # Convert options to button-compatible data
+        # Multiple results: interrupt graph for user selection
         button_options = [
-            {"type": "buttons", "label": row['g_name'], "value": index}
+            {"option_type": "place", "label": row['g_name'] + ", " + row['county_name'], "value": index}
             for index, row in returned_places[['g_name', 'county_name']].iterrows()
         ]
-        response_message = AIMessage(content=button_options)
-        state['multiple_places_returned'] = True
+        raise NodeInterrupt(value={"message": "Multiple places found. Please select one.", "options": button_options})
     else:
-        response_message = AIMessage(content="No places found with that name.")
-    # update state with the message
-    state['messages'].append(response_message)
+        # No results found
+        state['messages'].append(AIMessage(content="No places found with that name."))
+
     print(f"State at end of place_tool_call: {state}")
     return state
 
 
-def handle_user_selection(state: lg_State) -> lg_State:
-    if state.get('multiple_places_returned'):
-        return state
+def handle_user_place_selection(state: lg_State) -> lg_State:
     # Assume we get the user's response in `selected_place`
     selected_place = state.get('selected_place')
     selected_place_df = pd.read_json(selected_place)
@@ -245,24 +238,84 @@ def handle_user_selection(state: lg_State) -> lg_State:
 
 def get_place_themes_node(state: lg_State) -> lg_State:
     # Assume we get the user's response in `selected_place`
-    if state.get('multiple_places_returned'):
-        return state
-    selected_place = state.get('selected_place')
-    selected_place_df = pd.read_json(selected_place)
     selected_place_g_unit = state.get('selected_place_g_unit')
     if selected_place_g_unit:
         selected_place_themes = find_themes_for_unit(str(selected_place_g_unit))
-        response_message = AIMessage(
-            content=f"Themes available for selected Place {selected_place_df['g_name'].values[0]}: {selected_place_themes.to_string()}")
         state['selected_place_themes'] = selected_place_themes.to_json(index=True)
-        
     else:
         response_message = AIMessage(
-            content="The selected place was not found.")
-    # update state with the message
-    state['messages'].append(response_message)
+            content="The selected place was not found."
+        )
+        state['messages'].append(response_message)
+
     return state
 
+def get_place_themes_handler(state: lg_State) -> lg_State:
+    # selected_place = state.get('selected_place')
+    # # selected_place_df = pd.read_json(selected_place)
+    selected_place_themes = pd.read_json(state['selected_place_themes'])
+    if selected_place_themes.empty:
+        response_message = AIMessage(
+            content="No themes found for the selected place."
+        )
+        state['messages'].append(response_message)
+        return state
+    
+    selection_idx = state.get('selection_idx')
+    if selection_idx is not None:
+        selected_theme = selected_place_themes.iloc[int(selection_idx)].to_frame().T
+        state['selected_theme'] = selected_theme.to_json(index=True)
+
+    selected_theme = state.get('selected_theme')
+
+    if not selected_theme:
+        # Convert themes to button-compatible data
+        button_options = [
+            {"option_type": "theme",  "label": row["labl"], "value": index}
+            for index, row in selected_place_themes.iterrows()
+        ]
+        raise NodeInterrupt(value={"message": "Select a theme for the selected place.", "options": button_options})
+    return state
+
+def find_cubes_node(state: lg_State) -> lg_State:
+    """
+    Node to find cubes for a selected unit and theme.
+    """
+    print(f"State at start of find_cubes_node: {state}")
+    # Retrieve the selected unit and theme from the state
+    selected_place_g_unit = state.get("selected_place_g_unit")
+    selected_theme = state.get("selected_theme")  # Assuming theme selection is stored here
+    selected_theme_df = pd.read_json(selected_theme)
+    if not selected_place_g_unit or not selected_theme:
+        response_message = AIMessage(content="A unit or theme has not been selected.")
+        state["messages"].append(response_message)
+        return state
+
+    # Use the tool to retrieve cubes for the selected unit and theme
+    cubes_df = find_cubes_for_unit_theme({"g_unit":str(selected_place_g_unit), "theme_id":str(selected_theme_df['ent_id'].values[0])})
+
+    if not cubes_df.empty:
+        # Convert cubes to a user-friendly response
+        cube_options = [
+            {"type": "buttons", "label": f"{row['Cube']} ({row['Start']} - {row['End']}, {row['Count']} records)", "value": row['Cube_ID']}
+            for _, row in cubes_df.iterrows()
+        ]
+        response_message = AIMessage(
+            content={
+                "message": "Cubes available for the selected unit and theme:",
+                "buttons": cube_options,
+            }
+        )
+        # Update state with the cubes information
+        state["selected_cubes"] = cubes_df.to_json(index=True)
+    else:
+        response_message = AIMessage(content="No cubes found for the selected unit and theme.")
+
+    # Add the response message to the state
+    state["messages"].append(response_message)
+
+    print(f"State at end of find_cubes_node: {state}")
+    return state
 
 def create_workflow(lg_State, gdf):
     # Define a new graph
@@ -276,8 +329,11 @@ def create_workflow(lg_State, gdf):
     # Adjust tool call based on the validation result
     workflow.add_node("postcode_tool_call", postcode_tool_call)
     workflow.add_node("place_tool_call", place_tool_call)
-    workflow.add_node("handle_user_selection", handle_user_selection)
+    workflow.add_node("place_tool_handler", place_tool_handler)
+    workflow.add_node("handle_user_place_selection", handle_user_place_selection)
     workflow.add_node("get_place_themes_node", get_place_themes_node)
+    workflow.add_node("get_place_themes_handler", get_place_themes_handler)
+    workflow.add_node("find_cubes_node", find_cubes_node)
 
     # Decide what path to take based on the user input
 
@@ -294,12 +350,17 @@ def create_workflow(lg_State, gdf):
         }
     )
     workflow.add_edge("extract_place_name_node", "place_tool_call")
-    workflow.add_edge("place_tool_call", "handle_user_selection")
+    workflow.add_edge("place_tool_call", "place_tool_handler")
+    workflow.add_edge("place_tool_handler", "handle_user_place_selection")
 
 
-    workflow.add_edge("postcode_tool_call", "handle_user_selection")
-    workflow.add_edge("handle_user_selection", "get_place_themes_node")
-    workflow.add_edge("get_place_themes_node", END)
+    workflow.add_edge("postcode_tool_call", "handle_user_place_selection")
+    workflow.add_edge("handle_user_place_selection", "get_place_themes_node")
+
+    # Connect it to the workflow
+    workflow.add_edge("get_place_themes_node", "get_place_themes_handler")
+    workflow.add_edge("get_place_themes_handler", "find_cubes_node")
+    workflow.add_edge("find_cubes_node", END)
 
 
     # Compile the workflow into a runnable

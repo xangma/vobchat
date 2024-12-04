@@ -106,8 +106,7 @@ def find_cubes_for_unit_theme(
     query = f"""select ncube.ent_ID as Cube_ID,
     ncube.labl as Cube,
     min(data.end_date_decimal) as Start,
-    max(data.end_date_decimal) as
-    End,
+    max(data.end_date_decimal) as End,
     count(data.g_data) as Count
     from hgis.g_data data,
         hgis.g_data_map map,
@@ -116,10 +115,8 @@ def find_cubes_for_unit_theme(
         and data.cellref = map.cellref
         and data.g_unit = '{g_unit}'
         and ncube.theme_ID = '{theme_id}'
-    group by ncube.ent_ID,
-        ncube.labl
+    group by ncube.ent_ID, ncube.labl
     order by ncube.labl;
-    ;
     """
     dbtool = QuerySQLDataBaseTool(db=db)
     res = dbtool.db._execute(query)
@@ -193,7 +190,7 @@ def find_themes_for_unit(
     """
     Find themes for a given unit.
     """
-    query = f"""select    distinct theme.labl
+    query = f"""select    distinct theme.labl, theme.ent_ID
     from hgis.g_data data, hgis.g_data_map map, hgis.g_data_ent ncube, hgis.g_data_ent theme
     where    theme.ent_ID=ncube.theme_ID and
         ncube.ent_id=map.ncuberef and
