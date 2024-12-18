@@ -1,3 +1,4 @@
+# app/workflow.py
 from typing import Annotated, Literal, Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
@@ -16,7 +17,7 @@ from config import load_config, get_db
 from tools import find_cubes_for_unit_theme, find_units_by_postcode, \
     find_themes_for_unit, find_places_by_name
 from langchain_core.runnables.graph import MermaidDrawMethod
-from mapinit import get_mapinit_polygons
+from mapinit import get_polygons_by_type
 from langgraph.errors import NodeInterrupt
 
 # Settings
@@ -24,7 +25,7 @@ config = load_config()
 db = get_db(config)
 
 # Get the polygons
-gdf, geojson = get_mapinit_polygons()
+# gdf, geojson = get_mapinit_polygons()
 
 # Memory setup
 memory = MemorySaver()
@@ -161,12 +162,16 @@ def postcode_tool_call(state: lg_State) -> lg_State:
 
     # Perform tool call using the extracted postcode
     response = find_units_by_postcode(extracted_postcode)
+    print("\n=== Postcode Search Results ===")
+    print(f"Postcode: {extracted_postcode}")
+    print(response.to_string())
+    print("==============================\n")
+    
     state['messages'].append(AIMessage(content=response.to_string()))
     state['selected_place'] = response.to_json(index=True)
     state['selected_place_g_unit'] = int(response['g_unit'].values[0])
     state['selected_place_g_place'] = int(response['g_place'].values[0])
     return state
-
 
 def place_tool_call(state: lg_State) -> lg_State:
     print(f"State in place_tool_call: {state}")
@@ -174,6 +179,11 @@ def place_tool_call(state: lg_State) -> lg_State:
     # New query for places
     place_name = state['extracted_place_name']
     returned_places = find_places_by_name(place_name)
+    print("\n=== Place Search Results ===")
+    print(f"Place name: {place_name}")
+    print(returned_places.to_string())
+    print("===========================\n")
+    
     state['selected_place'] = returned_places.to_json(index=True)
     return state
 
@@ -237,10 +247,14 @@ def handle_user_place_selection(state: lg_State) -> lg_State:
 
 
 def get_place_themes_node(state: lg_State) -> lg_State:
-    # Assume we get the user's response in `selected_place`
     selected_place_g_unit = state.get('selected_place_g_unit')
     if selected_place_g_unit:
         selected_place_themes = find_themes_for_unit(str(selected_place_g_unit))
+        print("\n=== Themes for Selected Place ===")
+        print(f"Unit ID: {selected_place_g_unit}")
+        print(selected_place_themes.to_string())
+        print("===============================\n")
+        
         state['selected_place_themes'] = selected_place_themes.to_json(index=True)
     else:
         response_message = AIMessage(
@@ -278,13 +292,9 @@ def get_place_themes_handler(state: lg_State) -> lg_State:
     return state
 
 def find_cubes_node(state: lg_State) -> lg_State:
-    """
-    Node to find cubes for a selected unit and theme.
-    """
     print(f"State at start of find_cubes_node: {state}")
-    # Retrieve the selected unit and theme from the state
     selected_place_g_unit = state.get("selected_place_g_unit")
-    selected_theme = state.get("selected_theme")  # Assuming theme selection is stored here
+    selected_theme = state.get("selected_theme")
     selected_theme_df = pd.read_json(selected_theme)
     if not selected_place_g_unit or not selected_theme:
         response_message = AIMessage(content="A unit or theme has not been selected.")
@@ -293,28 +303,26 @@ def find_cubes_node(state: lg_State) -> lg_State:
 
     # Use the tool to retrieve cubes for the selected unit and theme
     cubes_df = find_cubes_for_unit_theme({"g_unit":str(selected_place_g_unit), "theme_id":str(selected_theme_df['ent_id'].values[0])})
+    
+    print("\n=== Available Cubes ===")
+    print(f"Unit ID: {selected_place_g_unit}")
+    print(f"Theme ID: {selected_theme_df['ent_id'].values[0]}")
+    print(cubes_df.to_string())
+    print("====================\n")
 
     if not cubes_df.empty:
-        # Convert cubes to a user-friendly response
-        cube_options = [
-            {"type": "buttons", "label": f"{row['Cube']} ({row['Start']} - {row['End']}, {row['Count']} records)", "value": row['Cube_ID']}
-            for _, row in cubes_df.iterrows()
-        ]
+        state["selected_cubes"] = cubes_df.to_json(index=True)
         response_message = AIMessage(
-            content={
-                "message": "Cubes available for the selected unit and theme:",
-                "buttons": cube_options,
+            content="Here are all the available data cubes. Opening visualization panel...",
+            additional_kwargs={
+                "show_visualization": True,
+                "cubes": cubes_df.to_dict('records')
             }
         )
-        # Update state with the cubes information
-        state["selected_cubes"] = cubes_df.to_json(index=True)
     else:
         response_message = AIMessage(content="No cubes found for the selected unit and theme.")
 
-    # Add the response message to the state
     state["messages"].append(response_message)
-
-    print(f"State at end of find_cubes_node: {state}")
     return state
 
 def create_workflow(lg_State, gdf):

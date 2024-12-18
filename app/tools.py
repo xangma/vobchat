@@ -1,3 +1,4 @@
+# app/tools.py
 from langgraph.prebuilt import ToolNode
 from langchain_core.runnables import RunnableLambda
 from langchain_core.messages import ToolMessage
@@ -103,11 +104,12 @@ def find_cubes_for_unit_theme(
     """
     Find cubes for a given unit and theme.
     """
-    query = f"""select ncube.ent_ID as Cube_ID,
-    ncube.labl as Cube,
-    min(data.end_date_decimal) as Start,
-    max(data.end_date_decimal) as End,
-    count(data.g_data) as Count
+    query = f"""select 
+        ncube.ent_ID as cube_id,
+        ncube.labl as cube,
+        min(data.end_date_decimal) as start,
+        max(data.end_date_decimal) as end,
+        count(data.g_data) as count
     from hgis.g_data data,
         hgis.g_data_map map,
         hgis.g_data_ent ncube
@@ -121,6 +123,8 @@ def find_cubes_for_unit_theme(
     dbtool = QuerySQLDataBaseTool(db=db)
     res = dbtool.db._execute(query)
     df = pd.DataFrame(res)
+    # Convert column names to match what we expect
+    df.columns = ['Cube_ID', 'Cube', 'Start', 'End', 'Count']
     return df
 
 
@@ -219,3 +223,63 @@ def data_query(
     res = dbtool.db._execute(query)
     df = pd.DataFrame(res)
     return df
+
+@tool
+def get_cube_data(
+    cube_id: Annotated[str, "ID of the cube to fetch data for"]
+) -> pd.DataFrame:
+    """
+    Fetch the actual data for a given cube ID.
+    """
+    query = f"""
+    SELECT 
+        d.end_date_decimal as year,
+        d.g_unit,
+        d.g_data as value
+    FROM 
+        hgis.g_data d,
+        hgis.g_data_map m
+    WHERE 
+        d.cellref = m.cellref
+        AND m.ncuberef = '{cube_id}'
+    ORDER BY 
+        d.end_date_decimal;
+    """
+    dbtool = QuerySQLDataBaseTool(db=db)
+    res = dbtool.db._execute(query)
+    df = pd.DataFrame(res)
+    return df
+
+@tool
+def get_all_cube_data(
+    g_unit: Annotated[str, "unit identifier for the cube"],
+    cube_ids: List[str]
+) -> pd.DataFrame:
+    """
+    Fetch data for multiple cubes at once.
+    """
+    cube_ids_str = "','".join(cube_ids)
+    query = f"""
+    SELECT 
+        d.end_date_decimal as year,
+        d.g_unit,
+        d.g_data as value,
+        m.ncuberef as cube_id,
+        ncube.labl as cube_name
+    FROM 
+        hgis.g_data d
+        JOIN hgis.g_data_map m ON d.cellref = m.cellref
+        JOIN hgis.g_data_ent ncube ON m.ncuberef = ncube.ent_id
+    WHERE 
+        d.g_unit = '{g_unit}'
+        AND m.ncuberef IN ('{cube_ids_str}')
+    ORDER BY 
+        d.end_date_decimal;
+    """
+    dbtool = QuerySQLDataBaseTool(db=db)
+    res = dbtool.db._execute(query)
+    df = pd.DataFrame(res)
+    
+    # Pivot the data to create columns for each cube
+    pivot_df = df.pivot(index='year', columns='cube_name', values='value').reset_index()
+    return pivot_df

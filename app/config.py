@@ -1,3 +1,4 @@
+# app/config.py
 from configparser import ConfigParser
 import os
 from langchain_community.utilities import SQLDatabase
