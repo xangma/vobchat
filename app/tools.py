@@ -9,6 +9,7 @@ import pandas as pd
 from typing import List, Annotated
 from config import load_config, get_db
 import io
+from utils.constants import UNIT_TYPES
 
 config = load_config()
 db = get_db(config)
@@ -163,28 +164,56 @@ def find_places_by_name(
     """
     Find place names by provided parameters.
     """
+    types_tuple = tuple(UNIT_TYPES)
     query = f"""
-        SELECT p.g_place, p.g_name, p.g_county, p.g_nation, p.g_domain, p.g_state, p.county_name, p.nation_name, p.domain_name, p.state_name, n.g_unit, g.g_unit_type
-        FROM g_place p, g_name n, g_unit g
-        WHERE p.g_place = n.g_place
-        AND (g.g_unit_type = 'MOD_DIST' OR g.g_unit_type='MOD_REG')
+        SELECT 
+            p.g_place, 
+            p.g_name, 
+            p.g_county, 
+            p.g_nation, 
+            p.g_domain, 
+            p.g_state, 
+            p.county_name, 
+            p.nation_name, 
+            p.domain_name, 
+            p.state_name, 
+            array_agg(n.g_unit) AS g_unit,
+            array_agg(COALESCE(g.g_unit_type, 'NONE')) AS g_unit_type
+        FROM 
+            g_place p
+        JOIN 
+            g_name n ON p.g_place = n.g_place
+        LEFT JOIN 
+            g_unit g ON n.g_unit = g.g_unit
+        WHERE
+        (g.g_unit_type IS NULL OR g.g_unit_type in {types_tuple})
         AND n.g_name = UPPER('{place_name}')
         AND ({county}::integer = 0 OR p.g_county = {county}::integer)
         AND ({nation}::integer = 0 OR p.g_nation = {nation}::integer)
         AND ({domain}::integer = 0 OR p.g_domain = {domain}::integer)
         AND ({state}::integer = 0 OR p.g_state = {state}::integer)
-        GROUP BY p.g_place, p.g_name, p.g_county, p.g_nation, p.g_domain, p.g_state, p.county_name, p.nation_name, p.domain_name, p.state_name, n.g_unit, g.g_unit_type
+        GROUP BY 
+            p.g_place, 
+            p.g_name, 
+            p.g_county, 
+            p.g_nation, 
+            p.g_domain, 
+            p.g_state, 
+            p.county_name, 
+            p.nation_name, 
+            p.domain_name, 
+            p.state_name
         LIMIT 41;
     """
     dbtool = QuerySQLDataBaseTool(db=db)
     res = dbtool.db._execute(query)
     df = pd.DataFrame(res)
-    df = df.drop(columns=['g_unit_type'])
-    column_to_aggregate = 'g_unit'
-    group_columns = [col for col in df.columns if col != column_to_aggregate]
+    # df = df.drop(columns=['g_unit_type'])
+    # columns_to_aggregate = ['g_unit', 'g_unit_type']
+    # group_columns = [col for col in df.columns if col not in columns_to_aggregate]
 
-    df = df.groupby(group_columns, dropna=False, as_index=False).agg(
-        {column_to_aggregate: list})
+    # df = df.groupby(group_columns, dropna=False, as_index=False).agg(
+    #     {i: list for i in columns_to_aggregate})
     return df
 
 @tool

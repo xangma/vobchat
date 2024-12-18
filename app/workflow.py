@@ -19,13 +19,14 @@ from tools import find_cubes_for_unit_theme, find_units_by_postcode, \
 from langchain_core.runnables.graph import MermaidDrawMethod
 from mapinit import get_polygons_by_type
 from langgraph.errors import NodeInterrupt
+from utils.polygon_cache import polygon_cache
 
 # Settings
 config = load_config()
 db = get_db(config)
 
 # Get the polygons
-# gdf, geojson = get_mapinit_polygons()
+initial_gdf = get_polygons_by_type('MOD_REG')
 
 # Memory setup
 memory = MemorySaver()
@@ -218,30 +219,75 @@ def place_tool_handler(state: lg_State) -> lg_State:
     return state
 
 
+# def handle_user_place_selection(state: lg_State) -> lg_State:
+#     # Assume we get the user's response in `selected_place`
+#     selected_place = state.get('selected_place')
+#     selected_place_df = pd.read_json(selected_place)
+#     if not selected_place_df.empty:
+#         response_message = AIMessage(
+#             content=f"Place selected: {selected_place_df[['g_name', 'county_name']].to_string()}")
+#         # explode the selected place to get the g_unit
+#         selected_place_df = selected_place_df.explode('g_unit')
+#         # left join gdf['g_unit'] with selected_place_df['g_unit']
+#         selected_place_df = selected_place_df.dropna(subset='g_unit')
+#         selected_place_df = selected_place_df.astype({"g_unit": int})
+#         if len(selected_place_df) > 0:
+#             state['selected_place_g_unit'] = int(
+#                 selected_place_df['g_unit'].values[0])
+#             gdf['gdf_index'] = gdf.index
+#             gdf_merged = gdf.merge(
+#                 selected_place_df, on='g_unit', how='inner')
+#             if len(gdf_merged) > 0:
+#                 state['selected_place_gdf_id'] = int(gdf_merged['gdf_index'].values[0])
+#     else:
+#         response_message = AIMessage(
+#             content="The selected place was not found.")
+#     # update state with the message
+#     state['messages'].append(response_message)
+#     return state
+
 def handle_user_place_selection(state: lg_State) -> lg_State:
-    # Assume we get the user's response in `selected_place`
+    # Get the user's selected place
     selected_place = state.get('selected_place')
     selected_place_df = pd.read_json(selected_place)
+    
     if not selected_place_df.empty:
         response_message = AIMessage(
             content=f"Place selected: {selected_place_df[['g_name', 'county_name']].to_string()}")
-        # explode the selected place to get the g_unit
-        selected_place_df = selected_place_df.explode('g_unit')
-        # left join gdf['g_unit'] with selected_place_df['g_unit']
+        
+        # Explode the selected place to get the g_unit
+        selected_place_df = selected_place_df.explode(['g_unit', 'g_unit_type'])
         selected_place_df = selected_place_df.dropna(subset='g_unit')
         selected_place_df = selected_place_df.astype({"g_unit": int})
+        
         if len(selected_place_df) > 0:
-            state['selected_place_g_unit'] = int(
-                selected_place_df['g_unit'].values[0])
-            gdf['gdf_index'] = gdf.index
-            gdf_merged = gdf.merge(
-                selected_place_df, on='g_unit', how='inner')
-            if len(gdf_merged) > 0:
-                state['selected_place_gdf_id'] = int(gdf_merged['gdf_index'].values[0])
+            ###
+            # selected_place_df
+            # g_place      g_name  g_county  g_nation  g_domain  g_state county_name nation_name domain_name      state_name    g_unit   g_unit_type
+            # 0      429  PORTSMOUTH     17437     20003     20002    20001   HAMPSHIRE     England     Britain  United Kingdom  10168181      MOD_DIST
+            # 0      429  PORTSMOUTH     17437     20003     20002    20001   HAMPSHIRE     England     Britain  United Kingdom  12743221  CONSTITUENCY
+            # 0      429  PORTSMOUTH     17437     20003     20002    20001   HAMPSHIRE     England     Britain  United Kingdom  10073297       LG_DIST
+            ###
+            g_unit = int(selected_place_df['g_unit'].values[0])
+            state['selected_place_g_unit'] = g_unit
+            
+            # Get the unit type from the selected place
+            # MOD_DIST is the default unit type we want to use for places
+            unit_type = selected_place_df['g_unit_type'].values[0]
+            
+            # Get the polygons for this unit type from the cache
+            gdf = polygon_cache.get_polygons(unit_type)
+            
+            # Find the matching polygon
+            if g_unit in gdf.index:
+                # Get the position in the index where this g_unit appears
+                gdf_id = gdf.index.get_loc(g_unit)
+                state['selected_place_gdf_id'] = int(gdf_id)
     else:
         response_message = AIMessage(
             content="The selected place was not found.")
-    # update state with the message
+    
+    # Update state with the message
     state['messages'].append(response_message)
     return state
 
