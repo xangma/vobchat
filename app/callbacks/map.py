@@ -9,6 +9,9 @@ from utils.helpers import calculate_center_and_zoom
 from mapinit import get_polygons_by_type, get_date_ranges_by_type
 from utils.constants import UNIT_TYPES, TIMELESS_UNIT_TYPES
 from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 def register_map_callbacks(app, date_ranges_df):
 
@@ -49,6 +52,7 @@ def register_map_callbacks(app, date_ranges_df):
         prevent_initial_call=True
     )
     def update_map_from_store(selected_ids, current_fig, current_gdf_json):
+        logger.info(f"Callback: update_map_from_store")
         if not selected_ids:
             return current_fig, "No polygons selected."
         current_gdf = gpd.GeoDataFrame.from_features(json.loads(current_gdf_json))
@@ -67,7 +71,7 @@ def register_map_callbacks(app, date_ranges_df):
             if d['type'] == 'choroplethmapbox':
                 current_fig['data'][i]['selectedpoints'] = selected_ids
 
-        debug_info = f"Zoomed to selected polygons: Center=({map_properties["center"]}), Zoom={map_properties["zoom"]}"
+        debug_info = f"Zoomed to selected polygons: Center=({map_properties['center']}), Zoom={map_properties['zoom']}"
         return current_fig, debug_info
 
     # Callback to update slider based on filter state
@@ -79,6 +83,7 @@ def register_map_callbacks(app, date_ranges_df):
         Input('filter-state', 'data')
     )
     def update_slider_range(filter_state):
+        logger.info(f"Callback: update_slider_range")
         if not filter_state or not filter_state.get('year_bounds'):
             # Default to MOD_REG range
             unit_range = date_ranges_df[date_ranges_df['g_unit_type'] == 'MOD_REG'].iloc[0]
@@ -110,6 +115,7 @@ def register_map_callbacks(app, date_ranges_df):
         prevent_initial_call=True
     )
     def update_year_range_bounds(unit_state):
+        logger.info(f"Callback: update_year_range_bounds")
         if not unit_state:
             unit_type = 'MOD_REG'
         else:
@@ -142,6 +148,7 @@ def register_map_callbacks(app, date_ranges_df):
         prevent_initial_call=True
     )
     def update_unit_filter_state(unit_clicks, reset_clicks, current_state):
+        logger.info(f"Callback: update_unit_filter_state")
         ctx = callback_context
         if not ctx.triggered:
             raise PreventUpdate
@@ -149,14 +156,25 @@ def register_map_callbacks(app, date_ranges_df):
         triggered_id = ctx.triggered[0]['prop_id']
         
         if 'reset-filters' in triggered_id:
-            return {'unit_type': 'MOD_REG'}
+            return {'unit_types': ['MOD_REG']}
         
         try:
             button_id = json.loads(triggered_id.split('.')[0])
-            return {'unit_type': button_id['unit']}
+            current_types = set(current_state.get('unit_types', ['MOD_REG']))
+            clicked_type = button_id['unit']
+            
+            # Toggle the clicked type
+            if clicked_type in current_types:
+                current_types.remove(clicked_type)
+                # Ensure at least one type is selected
+                if not current_types:
+                    current_types.add('MOD_REG')
+            else:
+                current_types.add(clicked_type)
+            
+            return {'unit_types': list(current_types)}
         except:
-            return current_state if current_state else {'unit_type': 'MOD_REG'}
-
+            return current_state if current_state else {'unit_types': ['MOD_REG']}
 
     @app.callback(
         Output('choropleth-map', 'figure', allow_duplicate=True),
@@ -171,40 +189,45 @@ def register_map_callbacks(app, date_ranges_df):
         prevent_initial_call=True
     )
     def update_map_filter(unit_state, year_range, figure, button_ids):
+        logger.info(f"Callback: update_map_filter")
         if not unit_state:
             raise PreventUpdate
         
-        unit_type = unit_state.get('unit_type', 'MOD_REG')
+        unit_types = unit_state.get('unit_types', ['MOD_REG'])
         
         # Initialize button colors and outlines
         button_colors = ['secondary'] * len(UNIT_TYPES)
         button_outlines = [True] * len(UNIT_TYPES)
         
-        # Update button colors based on current unit type
+        # Update button colors based on current unit types
         for i, bid in enumerate(button_ids):
-            if bid['unit'] == unit_type:
+            if bid['unit'] in unit_types:
                 button_colors[i] = 'primary'
                 button_outlines[i] = False
         
-        # Get polygons for the selected unit type and year range
-        if year_range and unit_type not in TIMELESS_UNIT_TYPES:
-            filtered_gdf = get_polygons_by_type(unit_type, year_range[0], year_range[1])
-        else:
-            filtered_gdf = get_polygons_by_type(unit_type)
-
-        if filtered_gdf.empty:
-            debug_msg = f"No polygons found for {unit_type}"
+        # Get and combine polygons for all selected unit types
+        filtered_gdfs = []
+        for unit_type in unit_types:
             if year_range and unit_type not in TIMELESS_UNIT_TYPES:
-                debug_msg += f" in year range {year_range[0]}-{year_range[1]}"
-            return figure, filtered_gdf.to_json(), debug_msg, button_colors, button_outlines
+                gdf = get_polygons_by_type(unit_type, year_range[0], year_range[1])
+            else:
+                gdf = get_polygons_by_type(unit_type)
+            filtered_gdfs.append(gdf)
         
+        # Combine all GeoDataFrames
+        filtered_gdf = pd.concat(filtered_gdfs)
+        
+        if filtered_gdf.empty:
+            debug_msg = f"No polygons found for selected types"
+            return figure, filtered_gdf.to_json(), debug_msg, button_colors, button_outlines
+
         geojson_data = json.loads(filtered_gdf.to_json())
         locations = filtered_gdf.index.tolist()
         # Update the figure with new polygons
-        figure['data'][0]['locations'] = locations
-        figure['data'][0]['geojson'] = geojson_data
-        figure['data'][0]['selectedpoints'] = None
-        figure['data'][0]['z'] = [1] * len(locations)  # Set all polygons to the same color
+        # figure['data'][0]['locations'] = locations
+        # figure['data'][0]['geojson'] = geojson_data
+        # figure['data'][0]['selectedpoints'] = None
+        # figure['data'][0]['z'] = [1] * len(locations)  # Set all polygons to the same color
         
         
         # Update map center and zoom
@@ -212,8 +235,8 @@ def register_map_callbacks(app, date_ranges_df):
         center_lon = filtered_gdf.to_crs('+proj=cea').centroid.to_crs(filtered_gdf.crs).x.mean()
         figure['layout']['mapbox']['center'] = {"lat": center_lat, "lon": center_lon}
         
-        debug_msg = f"Showing {unit_type} units ({len(filtered_gdf)} polygons)"
-        if year_range and unit_type not in TIMELESS_UNIT_TYPES:
+        debug_msg = f"Showing {unit_types} units ({len(filtered_gdf)} polygons)"
+        if year_range and unit_types not in TIMELESS_UNIT_TYPES:
             debug_msg += f" for years {year_range[0]}-{year_range[1]}"
         
         return (
@@ -235,13 +258,18 @@ def register_map_callbacks(app, date_ranges_df):
         prevent_initial_call=True
     )
     def handle_click(clickData, current_fig, current_filter, current_gdf_json):
+        logger.info(f"Callback: handle_click")
         if clickData:
             clicked_id = clickData['points'][0]['location']
             
             # Convert the current GeoDataFrame from JSON
             if current_gdf_json:
-                current_gdf = gpd.GeoDataFrame.from_features(json.loads(current_gdf_json))
-                current_gdf.set_index('id', inplace=True)
+                gdf_jsons = json.loads(current_gdf_json)
+                current_gdf = gpd.GeoDataFrame.from_features(gdf_jsons)
+                
+                ids = pd.DataFrame(gdf_jsons['features'])['id']
+                # current_gdf.set_index(ids, inplace=True, drop=False)
+                current_gdf['id'] = ids
             else:
                 return current_fig, "No GeoDataFrame available"
             
@@ -253,7 +281,10 @@ def register_map_callbacks(app, date_ranges_df):
             debug_info = f"Single polygon selected with ID: {clicked_id}\n"
             for i, d in enumerate(current_fig['data']):
                 if d['type'] == 'choroplethmapbox':
-                    current_fig['data'][i]['selectedpoints'] = [clicked_id]
+                    # find the row in the GeoDataFrame where gdf['id'] == clicked_id
+                    row_idx = current_gdf.index[current_gdf.id == str(clicked_id)].tolist()
+                    current_fig['data'][i]['selectedpoints'] = row_idx
+                    
             return current_fig, debug_info
 
         return current_fig, "No polygon selected."
@@ -268,10 +299,10 @@ def register_map_callbacks(app, date_ranges_df):
         prevent_initial_call=True
     )
     def handle_box_lasso(selectedData, current_fig):
+        logger.info(f"Callback: handle_box_lasso")
         if selectedData:
             selected_ids = [p['location'] for p in selectedData['points']]
-            debug_info = f"Box/Lasso selection made with {
-                len(selected_ids)} polygons selected.\n"
+            debug_info = f"Box/Lasso selection made with {len(selected_ids)} polygons selected.\n"
             debug_info += f"Selected polygon IDs: {selected_ids}\n"
             for i, d in enumerate(current_fig['data']):
                 if d['type'] == 'choroplethmapbox':
@@ -290,6 +321,7 @@ def register_map_callbacks(app, date_ranges_df):
         prevent_initial_call=True
     )
     def reset_selection(n_clicks, current_fig):
+        logger.info(f"Callback: reset_selection")
         if n_clicks > 0:
             for i, d in enumerate(current_fig['data']):
                 if d['type'] == 'choroplethmapbox':

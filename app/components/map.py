@@ -25,6 +25,7 @@ def create_initial_map_figure(initial_gdf):
         margin={"r":0,"t":0,"l":0,"b":0},
         mapbox=dict(style="carto-positron", zoom=6)
     )
+    
     return fig
 
 def create_map_layout(initial_gdf):
@@ -39,7 +40,8 @@ def create_map_layout(initial_gdf):
                         id={'type': 'unit-filter', 'unit': unit_type},
                         color='primary' if unit_type == 'MOD_REG' else 'secondary',
                         outline=unit_type != 'MOD_REG',
-                        className="me-2 mb-2"
+                        className="me-2 mb-2",
+                        n_clicks=0
                     ) for unit_type in UNIT_TYPES
                 ], className="d-flex flex-wrap"),
                 dbc.Button("Reset Filters", id="reset-filters", color="secondary", className="mb-2"),
@@ -61,6 +63,6 @@ def create_map_layout(initial_gdf):
         dcc.Store(id="active-filter", data=None),
         dcc.Store(id="current-gdf", storage_type='memory'),
         dcc.Store(id='filter-state', data={'unit_type': 'MOD_REG', 'year_range': None, 'year_bounds': None}),
-        dcc.Store(id='unit-filter-state', data={'unit_type': 'MOD_REG'}),
+        dcc.Store(id='unit-filter-state', data={'unit_types': ['MOD_REG']}),
         dcc.Store(id='year-range-bounds', data=None),
     ])

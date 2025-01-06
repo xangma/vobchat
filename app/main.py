@@ -3,6 +3,7 @@ import os
 import dash
 import dash_bootstrap_components as dbc
 from dash import html
+import logging
 
 from components.chat import create_chat_layout
 from components.map import create_map_layout
@@ -13,6 +14,11 @@ from callbacks.visualization import register_visualization_callbacks
 from config import load_config, get_db
 from workflow import create_workflow, lg_State
 from mapinit import get_polygons_by_type, get_date_ranges_by_type
+from configure_logging import configure_logging
+
+configure_logging()
+
+logger = logging.getLogger(__name__)
 
 # Settings
 config = load_config()
