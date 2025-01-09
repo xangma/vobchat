@@ -1,153 +1,157 @@
-# app/workflow.py
-from typing import Annotated, Literal, Optional, List, Dict, Any
-from pydantic import BaseModel, Field
+from typing import Annotated, Optional, List
+import re
+import pandas as pd
 from typing_extensions import TypedDict
+
+# Pydantic / Models
+from pydantic import BaseModel, Field
+
+# LangChain / LangGraph
 from langgraph.graph import END, StateGraph, START
 from langgraph.graph.message import AnyMessage, add_messages
 from langchain_community.agent_toolkits.sql.toolkit import SQLDatabaseToolkit
 from langchain_openai import ChatOpenAI
-from langchain_core.runnables import Runnable, RunnableConfig
+from langchain_ollama import ChatOllama
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import SystemMessage, AIMessage, ToolMessage, AnyMessage
-import re
-import pandas as pd
-from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
-from config import load_config, get_db
-from tools import find_cubes_for_unit_theme, find_units_by_postcode, \
-    find_themes_for_unit, find_places_by_name
-from langchain_core.runnables.graph import MermaidDrawMethod
-from mapinit import get_polygons_by_type
 from langgraph.errors import NodeInterrupt
+from langchain_core.runnables.graph import MermaidDrawMethod
+
+# Local imports
+from config import load_config, get_db
+from tools import (
+    find_cubes_for_unit_theme,
+    find_units_by_postcode,
+    find_themes_for_unit,
+    find_places_by_name
+)
+from mapinit import get_polygons_by_type
 from utils.polygon_cache import polygon_cache
 
-# Settings
+
+# ----------------------------------------------------------------------------------------
+# CONFIG & SETUP
+# ----------------------------------------------------------------------------------------
+
 config = load_config()
 db = get_db(config)
 
-# Get the polygons
+# Get initial polygons (arbitrary example)
 initial_gdf = get_polygons_by_type('MOD_REG')
 
-# Memory setup
+# Memory for checkpointing
 memory = MemorySaver()
 
-
-
 # Model
-model = ChatOpenAI(model="gpt-4o-mini")
+# model = ChatOpenAI(model="gpt-4o-mini")
+model = ChatOllama( model="phi4tools.modelfile:latest", base_url="https://roni1.uni.ds.port.ac.uk/ollama/", client_kwargs={"verify": False})
 
 # Tools
 toolkit = SQLDatabaseToolkit(db=db, llm=model)
 tools = toolkit.get_tools()
 
-list_tables_tool = next(
-    tool for tool in tools if tool.name == "sql_db_list_tables")
+list_tables_tool = next(tool for tool in tools if tool.name == "sql_db_list_tables")
 get_schema_tool = next(tool for tool in tools if tool.name == "sql_db_schema")
 
-# Regular expression for UK postcodes
-postcode_regex = r"([Gg][Ii][Rr] 0[Aa]{2})|((([A-Za-z][0-9]{1,2})|(([A-Za-z][A-Ha-hJ-Yj-y][0-9]{1,2})|(([A-Za-z][0-9][A-Za-z])|([A-Za-z][A-Ha-hJ-Yj-y][0-9][A-Za-z]?))))\s?[0-9][A-Za-z]{2})"
+# UK postcode regex
+postcode_regex = (
+    r"([Gg][Ii][Rr] 0[Aa]{2})|"
+    r"((([A-Za-z][0-9]{1,2})|"
+    r"(([A-Za-z][A-Ha-hJ-Yj-y][0-9]{1,2})|"
+    r"(([A-Za-z][0-9][A-Za-z])|"
+    r"([A-Za-z][A-Ha-hJ-Yj-y][0-9][A-Za-z]?))"
+    r"))\s?[0-9][A-Za-z]{2})"
+)
 
-
-# Define the state for the agent
+# ----------------------------------------------------------------------------------------
+# STATE
+# ----------------------------------------------------------------------------------------
 class lg_State(TypedDict):
-    messages: Annotated[list[AnyMessage], add_messages]
-    selection_idx: Optional[Any]
-    selected_place: Optional[Any]
-    selected_place_g_place: Optional[Any]
-    selected_place_g_unit: Optional[Any]
-    selected_place_gdf_id: Optional[Any]
-    selected_place_themes: Optional[Any]
-    selected_theme: Optional[Any]
+    messages: Annotated[List[AnyMessage], add_messages]
+    selection_idx: Optional[int]
+    selected_place: Optional[str]
+    selected_place_g_place: Optional[int]
+    selected_place_g_unit: Optional[int]
+    selected_place_themes: Optional[str]
+    selected_theme: Optional[str]
     is_postcode: bool
-    extracted_postcode: Optional[str]  # Add field for the extracted postcode
-    extracted_place_name: Optional[str]  # Add field for the extracted place name
+    extracted_postcode: Optional[str]
+    extracted_place_name: Optional[str]
+    selected_polygons: Optional[List[int]]  # New: store polygon selections here
 
 
-# class Assistant:
-#     def __init__(self, runnable: Runnable):
-#         self.runnable = runnable
+# ----------------------------------------------------------------------------------------
+# NODES
+# ----------------------------------------------------------------------------------------
 
-#     def __call__(self, state: State, config: RunnableConfig):
-#         while True:
-#             result = self.runnable.invoke(state)
-#             # If the LLM happens to return an empty response, we will re-prompt it
-#             # for an actual response.
-#             if not result.tool_calls and (
-#                 not result.content
-#                 or isinstance(result.content, list)
-#                 and not result.content[0].get("text")
-#             ):
-#                 messages = state["messages"] + \
-#                     [("user", "Respond with a real output.")]
-#                 state = {**state, "messages": messages}
-#             else:
-#                 break
-#         return {"messages": result}
-
-
-# Add a node for validating user input
 def validate_user_input(state: lg_State) -> lg_State:
+    """
+    Looks at the last user message to check if it contains a valid UK postcode.
+    """
     print(f"Initial state: {state}")
-    user_input = state['messages'][-1].content
-    
-    postcode_match = re.search(postcode_regex, user_input)
+    user_input = state["messages"][-1].content
 
+    postcode_match = re.search(postcode_regex, user_input)
     if postcode_match:
-        # Extract the postcode from the user input
-        extracted_postcode = postcode_match.group(0)
         state["is_postcode"] = True
-        state["extracted_postcode"] = extracted_postcode
+        state["extracted_postcode"] = postcode_match.group(0)
     else:
         state["is_postcode"] = False
         state["extracted_postcode"] = None
 
     print(f"Validated state: {state}")
-
     return state
 
-def decide_next_node(state):
-    if state.get('is_postcode'):
+
+def decide_next_node(state: lg_State) -> str:
+    """
+    Decide whether to handle the input as a postcode, place name, or need extraction.
+    """
+    if state.get("is_postcode"):
         return "postcode_tool_call"
+    elif state.get("extracted_place_name"):
+        return "place_tool_call"
     else:
         return "extract_place_name_node"
 
+
 class Place(BaseModel):
     """Information about a place."""
-    name: Optional[str] = Field(
-        default=None, description="The name of the place")
+    name: Optional[str] = Field(default=None, description="The name of the place")
 
 
 class ExtractedData(BaseModel):
     """Extracted data about places."""
-    places: List[Place]
-    
-# Define a custom prompt to provide instructions for extraction
+    places: List
+
+
 place_extraction_prompt = ChatPromptTemplate.from_messages([
     (
-        "system",
+        "assistant",
         "You are an expert extraction algorithm. "
         "Only extract place names from the text. "
         "If you do not know the name of an attribute asked to extract, return null for the attribute's value."
     ),
-    ("human", "{text}"),
+    ("user", "{text}"),
 ])
 
-place_extraction_runnable = place_extraction_prompt | model.with_structured_output(
-    schema=ExtractedData)
-
-# Define a new node to use the extraction chain
+# Prompt + model combined into a runnable that returns ExtractedData
+place_extraction_runnable = place_extraction_prompt | model.with_structured_output(schema=ExtractedData)
 
 
 def extract_place_name_node(state: lg_State) -> lg_State:
+    """
+    Use the place_extraction_runnable chain to get a place name from the text.
+    """
     print(f"State at start of extract_place_name_node: {state}")
-    text = state['messages'][-1].content
-    
-    extracted_data = place_extraction_runnable.invoke(
-        {"text": text})
-
+    text = state["messages"][-1].content
+    if type(text) == str:
+        text = [text]
+    extracted_data = place_extraction_runnable.invoke({"text": text})
     if extracted_data and extracted_data.places:
-        extracted_place = extracted_data.places[0].name
-        state["extracted_place_name"] = extracted_place
+        state["extracted_place_name"] = extracted_data.places[0]
     else:
         state["extracted_place_name"] = None
 
@@ -156,213 +160,286 @@ def extract_place_name_node(state: lg_State) -> lg_State:
 
 
 def postcode_tool_call(state: lg_State) -> lg_State:
-    extracted_postcode = state.get('extracted_postcode')
+    """
+    If a postcode was extracted, find relevant units by postcode.
+    """
+    extracted_postcode = state.get("extracted_postcode")
     if not extracted_postcode:
-        state['messages'].append(AIMessage(content="No valid postcode was found."))
+        state["messages"].append(AIMessage(content="No valid postcode was found."))
         return state
 
-    # Perform tool call using the extracted postcode
     response = find_units_by_postcode(extracted_postcode)
     print("\n=== Postcode Search Results ===")
     print(f"Postcode: {extracted_postcode}")
     print(response.to_string())
     print("==============================\n")
-    
-    state['messages'].append(AIMessage(content=response.to_string()))
-    state['selected_place'] = response.to_json(index=True)
-    state['selected_place_g_unit'] = int(response['g_unit'].values[0])
-    state['selected_place_g_place'] = int(response['g_place'].values[0])
+
+    state["messages"].append(AIMessage(content=response.to_string()))
+    if not response.empty:
+        state["selected_place"] = response.to_json(index=True)
+        state["selected_place_g_unit"] = int(response["g_unit"].values[0])
+        state["selected_place_g_place"] = int(response["g_place"].values[0])
+    else:
+        state["messages"].append(AIMessage(content="No units found for that postcode."))
+
     return state
 
-def place_tool_call(state: lg_State) -> lg_State:
-    print(f"State in place_tool_call: {state}")
 
-    # New query for places
-    place_name = state['extracted_place_name']
+def place_tool_call(state: lg_State) -> lg_State:
+    """
+    If a place name was extracted, call the DB for matching places.
+    """
+    print(f"State in place_tool_call: {state}")
+    place_name = state["extracted_place_name"]
     returned_places = find_places_by_name(place_name)
     print("\n=== Place Search Results ===")
     print(f"Place name: {place_name}")
     print(returned_places.to_string())
     print("===========================\n")
-    
-    state['selected_place'] = returned_places.to_json(index=True)
+
+    state["selected_place"] = returned_places.to_json(index=True)
     return state
 
+
 def place_tool_handler(state: lg_State) -> lg_State:
-    
-    returned_places = pd.read_json(state['selected_place'])
-    # If we are resuming from an existing selection
-    selection_idx = state.get('selection_idx')
+    """
+    Handle the place tool results, possibly interrupting for user selection.
+    """
+    returned_places = pd.read_json(state["selected_place"])
+    selection_idx = state.get("selection_idx")
+
+    # If user has made a selection, narrow down to that row
     if selection_idx is not None:
         returned_places = returned_places.iloc[int(selection_idx)].to_frame().T
-        state['selected_place'] = returned_places.to_json(index=True)
-        state['selection_idx'] = None
+        state["selected_place"] = returned_places.to_json(index=True)
+        state["selection_idx"] = None
 
     num_results = len(returned_places)
-
     if num_results == 1:
-        # Single result: update state and continue
-        state['selected_place_g_place'] = int(returned_places['g_place'].values[0])
-        state['messages'].append(AIMessage(content=f"Place found: {returned_places.to_string()}"))
+        state["selected_place_g_place"] = int(returned_places["g_place"].values[0])
+        state["messages"].append(AIMessage(content=f"Place found: {returned_places.to_string()}"))
     elif num_results > 1:
-        # Multiple results: interrupt graph for user selection
         button_options = [
-            {"option_type": "place", "label": row['g_name'] + ", " + row['county_name'], "value": index}
-            for index, row in returned_places[['g_name', 'county_name']].iterrows()
+            {
+                "option_type": "place",
+                "label": row["g_name"] + ", " + row["county_name"],
+                "value": index
+            }
+            for index, row in returned_places[["g_name", "county_name"]].iterrows()
         ]
-        raise NodeInterrupt(value={"message": "Multiple places found. Please select one.", "options": button_options})
+        raise NodeInterrupt(value={
+            "message": "Multiple places found. Please select one.",
+            "options": button_options
+        })
     else:
-        # No results found
-        state['messages'].append(AIMessage(content="No places found with that name."))
+        state["messages"].append(AIMessage(content="No results found for that place."))
 
     print(f"State at end of place_tool_call: {state}")
     return state
 
 
-# def handle_user_place_selection(state: lg_State) -> lg_State:
-#     # Assume we get the user's response in `selected_place`
-#     selected_place = state.get('selected_place')
-#     selected_place_df = pd.read_json(selected_place)
-#     if not selected_place_df.empty:
-#         response_message = AIMessage(
-#             content=f"Place selected: {selected_place_df[['g_name', 'county_name']].to_string()}")
-#         # explode the selected place to get the g_unit
-#         selected_place_df = selected_place_df.explode('g_unit')
-#         # left join gdf['g_unit'] with selected_place_df['g_unit']
-#         selected_place_df = selected_place_df.dropna(subset='g_unit')
-#         selected_place_df = selected_place_df.astype({"g_unit": int})
-#         if len(selected_place_df) > 0:
-#             state['selected_place_g_unit'] = int(
-#                 selected_place_df['g_unit'].values[0])
-#             gdf['gdf_index'] = gdf.index
-#             gdf_merged = gdf.merge(
-#                 selected_place_df, on='g_unit', how='inner')
-#             if len(gdf_merged) > 0:
-#                 state['selected_place_gdf_id'] = int(gdf_merged['gdf_index'].values[0])
-#     else:
-#         response_message = AIMessage(
-#             content="The selected place was not found.")
-#     # update state with the message
-#     state['messages'].append(response_message)
-#     return state
-
 def handle_user_place_selection(state: lg_State) -> lg_State:
-    # Get the user's selected place
-    selected_place = state.get('selected_place')
+    """
+    Once the user or system has decided on a single place row, set g_unit and (optionally) g_unit_type.
+    If multiple (g_unit, g_unit_type) combos are available, ask user which one they want.
+    Otherwise, raise an interrupt that instructs the UI to update the filter and highlight the polygon.
+    """
+    selected_place = state.get("selected_place")
+    if not selected_place:
+        response_message = AIMessage(content="No place was selected previously.")
+        state["messages"].append(response_message)
+        return state
+
+    # Convert JSON -> DataFrame
     selected_place_df = pd.read_json(selected_place)
-    
-    if not selected_place_df.empty:
-        response_message = AIMessage(
-            content=f"Place selected: {selected_place_df[['g_name', 'county_name']].to_string()}")
-        
-        # Explode the selected place to get the g_unit
-        selected_place_df = selected_place_df.explode(['g_unit', 'g_unit_type'])
-        selected_place_df = selected_place_df.dropna(subset='g_unit')
-        selected_place_df = selected_place_df.astype({"g_unit": int})
-        
-        if len(selected_place_df) > 0:
-            ###
-            # selected_place_df
-            # g_place      g_name  g_county  g_nation  g_domain  g_state county_name nation_name domain_name      state_name    g_unit   g_unit_type
-            # 0      429  PORTSMOUTH     17437     20003     20002    20001   HAMPSHIRE     England     Britain  United Kingdom  10168181      MOD_DIST
-            # 0      429  PORTSMOUTH     17437     20003     20002    20001   HAMPSHIRE     England     Britain  United Kingdom  12743221  CONSTITUENCY
-            # 0      429  PORTSMOUTH     17437     20003     20002    20001   HAMPSHIRE     England     Britain  United Kingdom  10073297       LG_DIST
-            ###
-            g_unit = int(selected_place_df['g_unit'].values[0])
-            state['selected_place_g_unit'] = g_unit
-            
-            # Get the unit type from the selected place
-            # MOD_DIST is the default unit type we want to use for places
-            unit_type = selected_place_df['g_unit_type'].values[0]
-            
-            # Get the polygons for this unit type from the cache
-            gdf = polygon_cache.get_polygons(unit_type)
-            
-            # Find the matching polygon
-            if g_unit in gdf.index:
-                # Get the position in the index where this g_unit appears
-                gdf_id = gdf.index.get_loc(g_unit)
-                state['selected_place_gdf_id'] = int(gdf_id)
+
+    if selected_place_df.empty:
+        response_message = AIMessage(content="The selected place DataFrame is empty.")
+        state["messages"].append(response_message)
+        return state
+
+    # Provide a short summary message
+    response_message = AIMessage(
+        content=f"Place selected:\n{selected_place_df[['g_name', 'county_name']].to_string(index=False)}"
+    )
+    state["messages"].append(response_message)
+
+    # Explode so that each (g_unit, g_unit_type) appears on its own row
+    exploded_df = selected_place_df.explode(["g_unit", "g_unit_type"])
+    exploded_df = exploded_df.dropna(subset=["g_unit"]).copy()
+    exploded_df["g_unit"] = exploded_df["g_unit"].astype(int)
+
+    # If we have a user selection (selection_idx), use it to pick exactly one row
+    selection_idx = state.get("selection_idx")
+    if selection_idx is not None:
+        chosen_row = exploded_df.iloc[int(selection_idx)]
+        state["selected_place_g_unit"] = int(chosen_row["g_unit"])
+        state["selected_place_g_unit_type"] = chosen_row["g_unit_type"] or "MOD_DIST"
+        # Clear selection_idx so we don't get stuck
+        state["selection_idx"] = None
+
+        # Raise a NodeInterrupt that instructs the Dash UI to update the filter + select the unit
+        raise NodeInterrupt(value={
+            "message": "map_selection",
+            "g_unit": str(state["selected_place_g_unit"]),
+            "g_unit_type": state["selected_place_g_unit_type"]
+        })
+
+    # If no selection_idx yet, check how many rows are available
+    if len(exploded_df) == 0:
+        # No valid g_units
+        state["messages"].append(AIMessage(content="No valid g_unit was found for the selected place."))
+        return state
+    elif len(exploded_df) == 1:
+        # Exactly one row => set that automatically
+        single_row = exploded_df.iloc[0]
+        state["selected_place_g_unit"] = int(single_row["g_unit"])
+        state["selected_place_g_unit_type"] = single_row["g_unit_type"] or "MOD_DIST"
+
+        raise NodeInterrupt(value={
+            "message": "map_selection",
+            "g_unit": str(state["selected_place_g_unit"]),
+            "g_unit_type": state["selected_place_g_unit_type"]
+        })
     else:
-        response_message = AIMessage(
-            content="The selected place was not found.")
-    
-    # Update state with the message
-    state['messages'].append(response_message)
-    return state
+        # Multiple rows => ask the user which one
+        button_options = []
+        for i, row in exploded_df.iterrows():
+            label = f"{row['g_unit_type']} (ID={row['g_unit']})"
+            button_options.append({
+                "option_type": "unit_selection",
+                "label": label,
+                "value": i  # We'll use this index to pick the row next time
+            })
+
+        raise NodeInterrupt(value={
+            "message": "Multiple (g_unit, g_unit_type) options found. Please select one.",
+            "options": button_options
+        })
+
+    # If we haven't got a selection from the user yet, check how many possible rows
+    if len(exploded_df) == 0:
+        # No valid g_units
+        state["messages"].append(AIMessage(content="No valid g_unit was found for the selected place."))
+        return state
+    elif len(exploded_df) == 1:
+        # Exactly one row => set that automatically
+        single_row = exploded_df.iloc[0]
+        state["selected_place_g_unit"] = int(single_row["g_unit"])
+        # Attempt to retrieve polygons
+        unit_type = single_row["g_unit_type"] or "MOD_DIST"
+        gdf = polygon_cache.get_polygons(unit_type)
+        if state["selected_place_g_unit"] in gdf.index:
+            state["selected_polygons"] = [str(state["selected_place_g_unit"])]
+            raise NodeInterrupt(
+                value={
+                    "message": "selected_polygons",
+                    "value": [str(state["selected_place_g_unit"])]
+                }
+            )
+        else:
+            state["messages"].append(
+                AIMessage(content=f"Polygon not found for g_unit={state['selected_place_g_unit']}.")
+            )
+        return state
+    else:
+        # Multiple rows => ask the user which one
+        button_options = []
+        for i, row in exploded_df.iterrows():
+            # Construct a label, e.g. "MOD_DIST (ID=10168181)"
+            label = f"{row['g_unit_type']} (ID={row['g_unit']})"
+            # i is the index in exploded_df
+            button_options.append({
+                "option_type": "unit_selection",
+                "label": label,
+                "value": i  # We will pick up this index from the callback
+            })
+
+        raise NodeInterrupt(value={
+            "message": "Multiple (g_unit, g_unit_type) options found. Please select one.",
+            "options": button_options
+        })
 
 
 def get_place_themes_node(state: lg_State) -> lg_State:
-    selected_place_g_unit = state.get('selected_place_g_unit')
+    """
+    Retrieve themes for the selected place.
+    """
+    selected_place_g_unit = state.get("selected_place_g_unit")
     if selected_place_g_unit:
         selected_place_themes = find_themes_for_unit(str(selected_place_g_unit))
         print("\n=== Themes for Selected Place ===")
         print(f"Unit ID: {selected_place_g_unit}")
         print(selected_place_themes.to_string())
         print("===============================\n")
-        
-        state['selected_place_themes'] = selected_place_themes.to_json(index=True)
-    else:
-        response_message = AIMessage(
-            content="The selected place was not found."
-        )
-        state['messages'].append(response_message)
 
+        state["selected_place_themes"] = selected_place_themes.to_json(index=True)
+    else:
+        response_message = AIMessage(content="The selected place was not found.")
+        state["messages"].append(response_message)
     return state
+
 
 def get_place_themes_handler(state: lg_State) -> lg_State:
-    # selected_place = state.get('selected_place')
-    # # selected_place_df = pd.read_json(selected_place)
-    selected_place_themes = pd.read_json(state['selected_place_themes'])
+    """
+    If multiple themes are available, raise an interrupt to let user choose.
+    """
+    selected_place_themes = pd.read_json(state["selected_place_themes"])
     if selected_place_themes.empty:
-        response_message = AIMessage(
-            content="No themes found for the selected place."
-        )
-        state['messages'].append(response_message)
-        return state
-    
-    selection_idx = state.get('selection_idx')
-    if selection_idx is not None:
-        selected_theme = selected_place_themes.iloc[int(selection_idx)].to_frame().T
-        state['selected_theme'] = selected_theme.to_json(index=True)
-
-    selected_theme = state.get('selected_theme')
-
-    if not selected_theme:
-        # Convert themes to button-compatible data
-        button_options = [
-            {"option_type": "theme",  "label": row["labl"], "value": index}
-            for index, row in selected_place_themes.iterrows()
-        ]
-        raise NodeInterrupt(value={"message": "Select a theme for the selected place.", "options": button_options})
-    return state
-
-def find_cubes_node(state: lg_State) -> lg_State:
-    print(f"State at start of find_cubes_node: {state}")
-    selected_place_g_unit = state.get("selected_place_g_unit")
-    selected_theme = state.get("selected_theme")
-    selected_theme_df = pd.read_json(selected_theme)
-    if not selected_place_g_unit or not selected_theme:
-        response_message = AIMessage(content="A unit or theme has not been selected.")
+        response_message = AIMessage(content="No themes found for the selected place.")
         state["messages"].append(response_message)
         return state
 
-    # Use the tool to retrieve cubes for the selected unit and theme
-    cubes_df = find_cubes_for_unit_theme({"g_unit":str(selected_place_g_unit), "theme_id":str(selected_theme_df['ent_id'].values[0])})
-    
+    selection_idx = state.get("selection_idx")
+    if selection_idx is not None:
+        selected_theme = selected_place_themes.iloc[int(selection_idx)].to_frame().T
+        state["selected_theme"] = selected_theme.to_json(index=True)
+
+    if not state.get("selected_theme"):
+        button_options = [
+            {"option_type": "theme", "label": row["labl"], "value": index}
+            for index, row in selected_place_themes.iterrows()
+        ]
+        raise NodeInterrupt(value={
+            "message": "Select a theme for the selected place.",
+            "options": button_options
+        })
+
+    return state
+
+
+def find_cubes_node(state: lg_State) -> lg_State:
+    """
+    With a selected g_unit and theme, retrieve available data cubes.
+    """
+    print(f"State at start of find_cubes_node: {state}")
+    selected_place_g_unit = state.get("selected_place_g_unit")
+    selected_theme = state.get("selected_theme")
+    if not selected_place_g_unit or not selected_theme:
+        response_message = AIMessage(
+            content="A unit or theme has not been selected."
+        )
+        state["messages"].append(response_message)
+        return state
+
+    selected_theme_df = pd.read_json(selected_theme)
+    theme_id = str(selected_theme_df["ent_id"].values[0])
+
+    cubes_df = find_cubes_for_unit_theme({"g_unit": str(selected_place_g_unit), "theme_id": theme_id})
+
     print("\n=== Available Cubes ===")
     print(f"Unit ID: {selected_place_g_unit}")
-    print(f"Theme ID: {selected_theme_df['ent_id'].values[0]}")
+    print(f"Theme ID: {theme_id}")
     print(cubes_df.to_string())
     print("====================\n")
 
     if not cubes_df.empty:
         state["selected_cubes"] = cubes_df.to_json(index=True)
         response_message = AIMessage(
-            content="Here are all the available data cubes. Opening visualization panel...",
+            content="Here are the available data cubes. Opening visualization panel...",
             additional_kwargs={
                 "show_visualization": True,
-                "cubes": cubes_df.to_dict('records')
+                "cubes": cubes_df.to_dict("records")
             }
         )
     else:
@@ -371,16 +448,44 @@ def find_cubes_node(state: lg_State) -> lg_State:
     state["messages"].append(response_message)
     return state
 
-def create_workflow(lg_State, gdf):
-    # Define a new graph
-    workflow = StateGraph(lg_State)
 
-    # Add nodes to handle user input and provide responses
+# ----------------------------------------------------------------------------------------
+# MAP SELECTION NODES
+# ----------------------------------------------------------------------------------------
 
-    # workflow.add_node("assistant", Assistant(model))
+def check_map_selection_node(state: lg_State) -> lg_State:
+    """
+    If the user has polygons from the map, skip normal input parsing and go to theme selection.
+    """
+    selected_polygons = state.get("selected_polygons") or []
+    if len(selected_polygons) > 0:
+        state["selected_place_g_unit"] = selected_polygons[0]
+        msg = f"Map selection detected: using g_unit={selected_polygons[0]}"
+        state["messages"].append(AIMessage(content=msg))
+    return state
+
+
+def decide_if_map_selected(state: lg_State) -> str:
+    """
+    Conditional edge to skip input flow if map polygons are already chosen.
+    """
+    selected_polygons = state.get("selected_polygons") or []
+    if len(selected_polygons) > 0:
+        return "get_place_themes_node"
+    else:
+        return "validate_user_input"
+
+
+# ----------------------------------------------------------------------------------------
+# WORKFLOW DEFINITION
+# ----------------------------------------------------------------------------------------
+def create_workflow(lg_state, gdf):
+    workflow = StateGraph(lg_state)
+
+    # Nodes
+    workflow.add_node("check_map_selection_node", check_map_selection_node)
     workflow.add_node("validate_user_input", validate_user_input)
     workflow.add_node("extract_place_name_node", extract_place_name_node)
-    # Adjust tool call based on the validation result
     workflow.add_node("postcode_tool_call", postcode_tool_call)
     workflow.add_node("place_tool_call", place_tool_call)
     workflow.add_node("place_tool_handler", place_tool_handler)
@@ -389,11 +494,22 @@ def create_workflow(lg_State, gdf):
     workflow.add_node("get_place_themes_handler", get_place_themes_handler)
     workflow.add_node("find_cubes_node", find_cubes_node)
 
-    # Decide what path to take based on the user input
+    # Edges
+    workflow.add_edge(START, "check_map_selection_node")
 
+    # If map selection was made, go to place themes
+    # else proceed with normal user input flow
+    workflow.add_conditional_edges(
+        "check_map_selection_node",
+        decide_if_map_selected,
+        {
+            "get_place_themes_node": "get_place_themes_node",
+            "validate_user_input": "validate_user_input",
+        }
+    )
 
-    # workflow.add_edge(START, "assistant")
-    workflow.add_edge(START, "validate_user_input")
+    # Normal flow
+    workflow.add_edge("validate_user_input", "extract_place_name_node")
     workflow.add_conditional_edges(
         "validate_user_input",
         decide_next_node,
@@ -403,28 +519,26 @@ def create_workflow(lg_State, gdf):
             "extract_place_name_node": "extract_place_name_node",
         }
     )
+
     workflow.add_edge("extract_place_name_node", "place_tool_call")
     workflow.add_edge("place_tool_call", "place_tool_handler")
     workflow.add_edge("place_tool_handler", "handle_user_place_selection")
-
-
     workflow.add_edge("postcode_tool_call", "handle_user_place_selection")
-    workflow.add_edge("handle_user_place_selection", "get_place_themes_node")
 
-    # Connect it to the workflow
+    # After place_g_unit is set, get themes
+    workflow.add_edge("handle_user_place_selection", "get_place_themes_node")
     workflow.add_edge("get_place_themes_node", "get_place_themes_handler")
     workflow.add_edge("get_place_themes_handler", "find_cubes_node")
     workflow.add_edge("find_cubes_node", END)
 
-
-    # Compile the workflow into a runnable
+    # Compile
     compiled_workflow = workflow.compile(checkpointer=memory)
 
+    # Save a Mermaid diagram (optional)
     compiled_workflow_image = compiled_workflow.get_graph().draw_mermaid_png(
-    draw_method=MermaidDrawMethod.API,
+        draw_method=MermaidDrawMethod.API,
     )
-
-    # Save image
     with open("compiled_workflow.png", "wb") as png:
         png.write(compiled_workflow_image)
+
     return compiled_workflow

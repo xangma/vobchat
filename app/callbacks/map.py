@@ -224,10 +224,10 @@ def register_map_callbacks(app, date_ranges_df):
         geojson_data = json.loads(filtered_gdf.to_json())
         locations = filtered_gdf.index.tolist()
         # Update the figure with new polygons
-        # figure['data'][0]['locations'] = locations
-        # figure['data'][0]['geojson'] = geojson_data
-        # figure['data'][0]['selectedpoints'] = None
-        # figure['data'][0]['z'] = [1] * len(locations)  # Set all polygons to the same color
+        figure['data'][0]['locations'] = locations
+        figure['data'][0]['geojson'] = geojson_data
+        figure['data'][0]['selectedpoints'] = None
+        figure['data'][0]['z'] = [1] * len(locations)  # Set all polygons to the same color
         
         
         # Update map center and zoom

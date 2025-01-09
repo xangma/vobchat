@@ -10,6 +10,9 @@ from typing import List, Annotated
 from config import load_config, get_db
 import io
 from utils.constants import UNIT_TYPES
+import logging
+logger = logging.getLogger(__name__)
+
 
 config = load_config()
 db = get_db(config)
@@ -52,19 +55,6 @@ def _print_event(event: dict, _printed: set, max_length=1500):
 
 
 # MAP TOOLS
-
-# LangChain Tool to extract g_unit numbers
-# @tool("highlight_polygons_on_map")
-# def highlight_polygons_on_map(
-#     g_unit_numbers: Annotated[str, "String containing g_unit numbers to highlight on the map"],
-#     ) -> List[str]:
-#     """
-#     LangChain tool to highlight polygons on the map based on provided g_unit numbers.
-#     """
-#     print(f"Received g_unit numbers: {g_unit_numbers}")
-#     # Here we expect only numbers like '10032910' and return them as a list
-#     g_unit_list = [num for num in g_unit_numbers.split() if num.isdigit()]
-#     return g_unit_list
 
 
 def calculate_center_and_zoom(gdf_filtered):
@@ -121,11 +111,13 @@ def find_cubes_for_unit_theme(
     group by ncube.ent_ID, ncube.labl
     order by ncube.labl;
     """
+    logger.debug(f"[find_cubes_for_unit_theme] Running query:\n{query}")
     dbtool = QuerySQLDataBaseTool(db=db)
     res = dbtool.db._execute(query)
     df = pd.DataFrame(res)
     # Convert column names to match what we expect
     df.columns = ['Cube_ID', 'Cube', 'Start', 'End', 'Count']
+    logger.debug(f"[find_cubes_for_unit_theme] Query returned: \n\n{df}")
     return df
 
 
@@ -147,9 +139,11 @@ def find_units_by_postcode(
     group    by u.g_unit, gp.g_place, u.g_unit_type, gp.county_name
     order    by max(public.st_area(f.g_foot_ertslcc))
     """
+    logger.debug(f"[find_units_by_postcode] Running query:\n{query}")
     dbtool = QuerySQLDataBaseTool(db=db)
     res = dbtool.db._execute(query)
     df = pd.DataFrame(res)
+    logger.debug(f"[find_units_by_postcode] Query returned: \n\n{df}")
     return df
 
 
@@ -205,9 +199,11 @@ def find_places_by_name(
             p.state_name
         LIMIT 41;
     """
+    logger.debug(f"[find_places_by_name] Running query:\n{query}")
     dbtool = QuerySQLDataBaseTool(db=db)
     res = dbtool.db._execute(query)
     df = pd.DataFrame(res)
+    logger.debug(f"[find_places_by_name] Query returned: \n\n{df}")
     # df = df.drop(columns=['g_unit_type'])
     # columns_to_aggregate = ['g_unit', 'g_unit_type']
     # group_columns = [col for col in df.columns if col not in columns_to_aggregate]
@@ -230,9 +226,11 @@ def find_themes_for_unit(
         data.cellref=map.cellref and
         data.g_unit='{unit}';
     """
+    logger.debug(f"[find_themes_for_unit] Running query:\n{query}")
     dbtool = QuerySQLDataBaseTool(db=db)
     res = dbtool.db._execute(query)
     df = pd.DataFrame(res)
+    logger.debug(f"[find_themes_for_unit] Query returned: \n\n{df}")
     return df
 
 
