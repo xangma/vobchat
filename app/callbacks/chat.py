@@ -139,6 +139,7 @@ def register_chat_callbacks(app, compiled_workflow):
         """
         if chat_history is None:
             chat_history = []
+        selection_idx = None
         if any(button_clicks):
             ctx = dash.callback_context.triggered[0]
             selectiontext = json.loads(ctx["prop_id"].split(".")[0])
