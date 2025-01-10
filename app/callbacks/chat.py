@@ -7,61 +7,54 @@ from langchain_core.messages import AIMessage
 from langgraph.errors import NodeInterrupt
 import dash_bootstrap_components as dbc
 import logging
+from configure_logging import format_state_for_logging, format_complex_object
 
 logger = logging.getLogger(__name__)
-
 
 def handle_interrupts(chat_history, compiled_workflow, config, user_input=None, selection_idx=None):
     """
     Handles any interrupt the workflow might have.
-    Returns:
-      - updated chat history
-      - updated UI 'options-container' or other UI elements
-      - updated data store(s)
-      - boolean: is interrupt still ongoing or not?
     """
+    logger.debug("\n" + "="*50 + "\nStarting handle_interrupts")
+    logger.debug("Input params:\n%s", format_complex_object({
+        "user_input": user_input,
+        "selection_idx": selection_idx
+    }))
+
     state = compiled_workflow.get_state(config)
-    logger.debug(f"Interrupt: Current state: {state}")
+    logger.debug("Current state:\n%s", format_state_for_logging(state))
+
     if not state.tasks:
-        # No tasks => no interrupts.
+        logger.debug("No tasks found in state - returning without interrupts")
         return chat_history, dash.no_update, dash.no_update, False
 
     interrupt_task = state.tasks[0]
+    logger.debug("First task interrupts:\n%s", format_complex_object(interrupt_task.interrupts))
+
     if not interrupt_task.interrupts:
-        # No interrupts on the first task
+        logger.debug("No interrupts on first task - returning")
         return chat_history, dash.no_update, dash.no_update, False
 
-    # If we do have an interrupt:
     interrupt = interrupt_task.interrupts[0]
     interrupt_value = interrupt.value
-    
-    # Suppose the interrupt might be resolved by user text *or* a user selection *or* something else.
-    # Example logic:
-    if interrupt_value.get("message") == "map_selection":
-        # The backend wants the UI to set the filter to the chosen g_unit_type,
-        # fetch polygons for that type, and select the given g_unit.
+    logger.debug("Processing interrupt value:\n%s", format_complex_object(interrupt_value))
 
+    if interrupt_value.get("message") == "map_selection":
+        logger.debug("Handling map_selection interrupt")
         g_unit = interrupt_value["g_unit"]
         g_unit_type = interrupt_value["g_unit_type"]
+        logger.debug("Map selection params: g_unit=%s, g_unit_type=%s", g_unit, g_unit_type)
+        return (chat_history, dash.no_update, g_unit, False)
 
-        # Option A: directly update the `unit-filter-state` and `map-state`
-        # so your map callbacks fetch the correct polygons and select the given ID.
-        # We'll just assume we pass them out as "updates".
-        return (
-            chat_history,
-            dash.no_update,  # No new "options-container"
-            g_unit,
-            False
-        )
     if "options" in interrupt_value:
-        # Possibly a "choose 1 out of N" scenario
+        logger.debug("Handling options interrupt")
         if selection_idx is not None:
-            # The user clicked or selected an option
+            logger.debug("Processing user selection: %s", selection_idx)
             compiled_workflow.update_state(config=config, values={"selection_idx": selection_idx})
-            # return now, so the main function can re-check the new state
             return chat_history, dash.no_update, dash.no_update, True
         else:
-            # They haven't chosen yet => present the options
+            options = interrupt_value.get("options", [])
+            logger.debug("Creating buttons for %d options", len(options))
             buttons = [
                 dbc.Button(
                     opt["label"],
@@ -73,28 +66,27 @@ def handle_interrupts(chat_history, compiled_workflow, config, user_input=None, 
                     color="secondary",
                     className="mb-2"
                 )
-                for opt in interrupt_value.get("options", [])
+                for opt in options
             ]
             interrupt_message = html.Div(
                 f"AI: {interrupt_value.get('message', 'Action required.')}",
                 className="mb-2 text-primary"
             )
-            # Append interrupt message to chat (if not already appended)
             new_history = chat_history[:] + [interrupt_message]
             return new_history, buttons, dash.no_update, True
     elif "selected_polygons" in interrupt_value.get('message', {}):
-        # Possibly a "select polygon" scenario
+        logger.debug("Handling selected_polygons interrupt")
         new_polygons = interrupt_value['value']
+        logger.debug("New polygons data:\n%s", format_complex_object(new_polygons))
         return chat_history, dash.no_update, new_polygons, False
     else:
-        # Possibly a "user text needed" scenario or something else
-        # If the user typed something, update the workflow
+        logger.debug("Handling text input interrupt")
         if user_input:
+            logger.debug("Updating state with user input: %s", user_input)
             compiled_workflow.update_state(config=config, values={"messages": [("user", user_input)]})
-            # Let the main function re-check the new state
             return chat_history, dash.no_update, dash.no_update, True
         else:
-            # Prompt user for text
+            logger.debug("Creating prompt for user text input")
             interrupt_message = html.Div(
                 f"AI: {interrupt_value.get('message', 'Please provide input.')}",
                 className="mb-2 text-primary"
@@ -112,11 +104,12 @@ def register_chat_callbacks(app, compiled_workflow):
         prevent_initial_call=True
     )
     def clear_chat(n_clicks, thread_id):
-        """
-        Clears the conversation when the user clicks the clear button.
-        """
+        logger.debug("\n" + "="*50 + "\nClear chat called: n_clicks=%s, thread_id=%s", 
+                    n_clicks, thread_id)
         if n_clicks is None:
+            logger.debug("No clicks - preventing update")
             raise PreventUpdate
+        logger.debug("Clearing chat. New thread_id will be: %d", thread_id + 1)
         return [], "", thread_id + 1
 
     @app.callback(
@@ -132,32 +125,44 @@ def register_chat_callbacks(app, compiled_workflow):
         State("options-container", "children"),
         prevent_initial_call=True
     )
-    def update_chat(n_clicks, button_clicks, thread_id,
-                    user_input, chat_history, buttons):
-        """
-        Either user typed something or clicked an interrupt button. Update workflow accordingly.
-        """
+    def update_chat(n_clicks, button_clicks, thread_id, user_input, chat_history, buttons):
+        logger.debug("\n" + "="*50 + "\nUpdate chat called")
+        logger.debug("Callback parameters:\n%s", format_complex_object({
+            "n_clicks": n_clicks,
+            "button_clicks": button_clicks,
+            "thread_id": thread_id,
+            "user_input": user_input,
+            "chat_history_length": len(chat_history) if chat_history else 0,
+            "buttons_present": bool(buttons)
+        }))
+
         if chat_history is None:
+            logger.debug("Initializing empty chat history")
             chat_history = []
+
         selection_idx = None
         if any(button_clicks):
             ctx = dash.callback_context.triggered[0]
+            logger.debug("Button click detected. Context:\n%s", format_complex_object(ctx))
             selectiontext = json.loads(ctx["prop_id"].split(".")[0])
             selection_idx = int(selectiontext["index"])
             selection_option_type = selectiontext["option_type"]
+            logger.debug("Selected option: index=%d, type=%s", 
+                        selection_idx, selection_option_type)
         elif n_clicks is None and (not user_input or user_input.strip() == ""):
-            # Nothing happened
-            # raise PreventUpdate
+            logger.debug("No interaction detected - returning without updates")
             return chat_history, "", dash.no_update, dash.no_update
 
-        # Prepare user message (if typed)
         user_message = None
         if user_input and user_input.strip():
+            logger.debug("Processing user input: %s", user_input)
             user_message = html.Div(f"You: {user_input}", className="mb-2")
 
-        # If the graph was interrupted previously, handle that first
         config = {"configurable": {"thread_id": thread_id}}
+        logger.debug("Created workflow config: %s", format_complex_object(config))
+        
         state = compiled_workflow.get_state(config)
+        logger.debug("Current workflow state:\n%s", format_state_for_logging(state))
 
         chat_history, buttons, selected_ids, still_interrupting = handle_interrupts(
             chat_history, 
@@ -166,35 +171,46 @@ def register_chat_callbacks(app, compiled_workflow):
             user_input=user_input, 
             selection_idx=selection_idx
         )
+        
+        logger.debug("handle_interrupts result:\n%s", format_complex_object({
+            "still_interrupting": still_interrupting,
+            "selected_ids_updated": selected_ids != dash.no_update,
+            "buttons_updated": buttons != dash.no_update,
+            "chat_history_length": len(chat_history)
+        }))
 
         if still_interrupting:
-            # The interrupt logic is not resolved yet => return with the new UI
+            logger.debug("Interrupt ongoing - returning intermediate state")
             return chat_history, "", selected_ids or dash.no_update, buttons
+
         inputs = {"messages": [("user", user_input)]} if user_input else None
+        logger.debug("Invoking workflow with inputs:\n%s", format_complex_object(inputs))
 
-        # Invoke the graph
         db_res = compiled_workflow.invoke(inputs, config=config)
+        logger.debug("Workflow response:\n%s", format_complex_object(db_res))
 
-        # 3) Check again if there's a *new* interrupt
         chat_history, buttons, selected_ids, still_interrupting = handle_interrupts(
             chat_history, 
             compiled_workflow, 
             config
         )
+        
         if still_interrupting:
+            logger.debug("New interrupt detected - returning intermediate state")
             return chat_history, "", dash.no_update, buttons
         
-        # Otherwise, the workflow completed or continued normally
         ai_out = db_res['messages'][-1].content
+        logger.debug("Processing AI response:\n%s", ai_out)
         ai_message = html.Div(f"AI: {ai_out}", className="mb-2 text-primary")
 
-        # Update chat history
         new_chat_history = chat_history[:]
         if user_message:
             new_chat_history.append(user_message)
         new_chat_history.append(ai_message)
+        logger.debug("Updated chat history length: %d", len(new_chat_history))
 
-        # If a new polygon selection was set in the workflow
         new_polygons = db_res.get('selected_polygons', None)
+        logger.debug("New polygons present: %s", bool(new_polygons))
 
+        logger.debug("Completing update_chat")
         return new_chat_history, "", new_polygons, dash.no_update
