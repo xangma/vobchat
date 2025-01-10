@@ -656,6 +656,10 @@ def create_workflow(lg_state, gdf):
     # Save Mermaid diagram
     logger.info("Generating Mermaid diagram...")
     try:
+        logger.info(compiled_workflow.get_graph().draw_ascii())
+    except Exception as e:
+        logger.error("Error generating ascii Mermaid diagram", exc_info=True)
+    try:
         compiled_workflow_image = compiled_workflow.get_graph().draw_mermaid_png(
             draw_method=MermaidDrawMethod.API,
         )
