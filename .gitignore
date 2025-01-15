@@ -3,6 +3,7 @@ unused/
 dbtools/
 .vscode/
 __pycache__/
+polygon_cache
 langchain.json
 langgraph.json
 polygons*

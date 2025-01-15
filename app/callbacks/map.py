@@ -26,426 +26,407 @@ def register_map_callbacks(app, date_ranges_df):
         return year
 
     @app.callback(
-        Output('year-range-container', 'style'),
-        Input('unit-filter-state', 'data'),
+        Output("map-state", "data", allow_duplicate=True),
+        # Existing inputs:
+        Input({'type': 'unit-filter', 'unit': ALL}, 'n_clicks'),
+        Input('reset-filters', 'n_clicks'),
+        # New input for ctrl-click
+        State('ctrl-pressed-store', 'data'),
+        State("map-state", "data"),
         prevent_initial_call=True
     )
-    def update_year_range_visibility(unit_state):
+    def update_unit_filter_state(unit_filter_clicks, reset_clicks, ctrl_pressed, map_state):
+        """
+        If ctrl_pressed is True, we toggle the clicked filter.
+        If ctrl_pressed is False, we set the selection to ONLY the clicked filter.
+        """
         ctx = callback_context
-        logger.info(f"""
-            Callback: update_year_range_visibility
-            Triggered by: {ctx.triggered[0]['prop_id'] if ctx.triggered else 'No trigger'}
-            Input unit_state: {unit_state}
-        """)
-        
-        if not unit_state:
-            logger.debug("No unit state provided, hiding year range")
-            return {'display': 'none'}
-        
-        unit_type = unit_state.get('unit_type', 'MOD_REG')
-        logger.debug(f"Unit type: {unit_type}")
-        
-        if unit_type in TIMELESS_UNIT_TYPES:
-            logger.debug(f"Unit type {unit_type} is timeless, hiding year range")
-            return {'display': 'none'}
-        
-        logger.debug(f"Showing year range for unit type {unit_type}")
-        return {'display': 'block'}
+        if not ctx.triggered:
+            raise PreventUpdate
 
-    # Callback to update the map from the selected polygons in dcc.Store
+        triggered_id = ctx.triggered[0]['prop_id']
+
+        # If user reset the filters
+        if 'reset-filters' in triggered_id:
+            map_state["unit_types"] = ["MOD_REG"]
+            return map_state
+
+        # Otherwise, parse which button was clicked
+        try:
+            button_id = json.loads(triggered_id.split('.')[0])
+            clicked_type = button_id['unit']
+        except:
+            return map_state  # Could not parse — fallback
+
+        current_types = set(map_state.get('unit_types', ['MOD_REG']))
+
+        if ctrl_pressed:
+            # 1) Ctrl+Click => Toggle the clicked type
+            if clicked_type in current_types:
+                current_types.remove(clicked_type)
+                if not current_types:
+                    current_types.add('MOD_REG')
+            else:
+                current_types.add(clicked_type)
+        else:
+            # 2) Regular click => Single select the clicked type
+            current_types = {clicked_type}
+
+        map_state["unit_types"] = list(current_types)
+        return map_state
+
     @app.callback(
-        Output('choropleth-map', 'figure', allow_duplicate=True),
-        Output('debug-output', 'children', allow_duplicate=True),
-        Input('selected_ids', 'data'),
-        State('choropleth-map', 'figure'),
-        State('current-gdf', 'data'),
+        Output('year-range-container', 'style'),
+        Input("map-state", "data"),
         prevent_initial_call=True
     )
-    def update_map_from_store(selected_ids, current_fig, current_gdf_json):
-        ctx = callback_context
-        logger.info(f"""
-            Callback: update_map_from_store
-            Triggered by: {ctx.triggered[0]['prop_id'] if ctx.triggered else 'No trigger'}
-            Selected IDs: {selected_ids}
-        """)
-        
-        if not selected_ids:
-            logger.debug("No polygons selected")
-            return current_fig, "No polygons selected."
-            
-        logger.debug("Loading GeoDataFrame from JSON")
-        current_gdf = gpd.GeoDataFrame.from_features(json.loads(current_gdf_json))
-        
-        if type(selected_ids) is int:
-            selected_ids = [selected_ids]
-            logger.debug(f"Converted single ID to list: {selected_ids}")
-            
-        logger.debug(f"Filtering GeoDataFrame for IDs: {selected_ids}")
-        gdf_filtered = current_gdf[current_gdf.index.isin(selected_ids)]
+    def update_year_range_visibility(map_state):
+        """
+        Show/Hide the year-range slider container based on currently active 
+        (selected) unit types. If all selected types are timeless, hide it.
+        """
+        logger.info("Callback: update_year_range_visibility")
+        unit_types = map_state.get('unit_types', [])
+        # If no unit types, hide
+        if not unit_types:
+            logger.debug("No unit types found, hiding year range")
+            return {'display': 'none'}
 
-        map_properties = calculate_center_and_zoom(gdf_filtered)
-        logger.debug(f"Calculated map properties: {map_properties}")
-        
-        if map_properties["center"] and map_properties["zoom"] is not None:
-            current_fig['layout']['mapbox']['center'] = map_properties["center"]
-            current_fig['layout']['mapbox']['zoom'] = map_properties["zoom"]
-            logger.debug("Updated map center and zoom")
+        # If *any* selected unit type is NOT timeless, show the year range
+        # Otherwise, hide it
+        if any(utype not in TIMELESS_UNIT_TYPES for utype in unit_types):
+            logger.debug("Showing year range slider (at least one non-timeless type)")
+            return {'display': 'block'}
+        else:
+            logger.debug("Hiding year range slider (all selected types are timeless)")
+            return {'display': 'none'}
 
-        for i, d in enumerate(current_fig['data']):
-            if d['type'] == 'choroplethmapbox':
-                current_fig['data'][i]['selectedpoints'] = selected_ids
-                logger.debug(f"Updated selectedpoints for layer {i}")
-
-        debug_info = f"Zoomed to selected polygons: Center=({map_properties['center']}), Zoom={map_properties['zoom']}"
-        return current_fig, debug_info
-
-    # Callback to update slider based on filter state
     @app.callback(
         Output('year-range-slider', 'min'),
         Output('year-range-slider', 'max'),
         Output('year-range-slider', 'value'),
         Output('year-range-slider', 'marks'),
-        Input('filter-state', 'data')
+        Input("map-state", "data")
     )
-    def update_slider_range(filter_state):
-        ctx = callback_context
-        logger.info(f"""
-            Callback: update_slider_range
-            Triggered by: {ctx.triggered[0]['prop_id'] if ctx.triggered else 'No trigger'}
-            Filter state: {filter_state}
-        """)
+    def update_year_slider(map_state):
+        """
+        Update the year-range slider constraints and value based on
+        map_state['year_bounds'] and map_state['year_range'].
+        If no bounds are provided, fallback to the range for 'MOD_REG'.
+        """
+        logger.info("Callback: update_year_slider")
+        # Attempt to get user-defined bounds from state
+        year_bounds = map_state.get('year_bounds', None)
         
-        if not filter_state or not filter_state.get('year_bounds'):
-            logger.debug("Using default MOD_REG range")
-            unit_range = date_ranges_df[date_ranges_df['g_unit_type'] == 'MOD_REG'].iloc[0]
-            min_year = max(int(unit_range['min_year']), DEFAULT_MIN_YEAR)
-            max_year = normalize_year(int(unit_range['max_year']))
+        if not year_bounds:
+            # Fallback to default MOD_REG in date_ranges_df
+            logger.debug("No year_bounds found in map_state, using 'MOD_REG' fallback")
+            fallback = date_ranges_df[date_ranges_df['g_unit_type'] == 'MOD_REG'].iloc[0]
+            min_year = max(int(fallback['min_year']), DEFAULT_MIN_YEAR)
+            max_year = normalize_year(int(fallback['max_year']))
         else:
-            logger.debug("Using filter state year bounds")
-            min_year = max(filter_state['year_bounds'][0], DEFAULT_MIN_YEAR)
-            max_year = normalize_year(filter_state['year_bounds'][1])
-        
+            min_year = max(year_bounds[0], DEFAULT_MIN_YEAR)
+            max_year = normalize_year(year_bounds[1])
+
+        # Step for slider marks
         step = max(1, (max_year - min_year) // 10)
-        marks = {str(year): str(year) for year in range(min_year, max_year + 1, step)}
-        logger.debug(f"Created marks with step {step}")
-        
-        current_year = normalize_year(max_year)
-        value = filter_state.get('year_range', [current_year, current_year]) if filter_state.get('year_range') else [current_year, current_year]
-        value = [normalize_year(v) for v in value]
-        logger.debug(f"Set slider value to {value}")
-        
+        marks = {str(y): str(y) for y in range(min_year, max_year + 1, step)}
+
+        # Value is the user's chosen year range or the maximum year
+        year_range = map_state.get('year_range', None)
+        if not year_range:
+            # If no user-chosen range, default to [max_year, max_year]
+            value = [max_year, max_year]
+        else:
+            value = [
+                normalize_year(year_range[0]),
+                normalize_year(year_range[1])
+            ]
+
         return min_year, max_year, value, marks
 
     @app.callback(
-        Output('year-range-bounds', 'data', allow_duplicate=True),
-        Output('year-range-slider', 'min', allow_duplicate=True),
-        Output('year-range-slider', 'max', allow_duplicate=True),
-        Output('year-range-slider', 'marks', allow_duplicate=True),
-        Output('year-range-slider', 'value', allow_duplicate=True),
-        Input('unit-filter-state', 'data'),
+        Output("map-state", "data", allow_duplicate=True),
+        Input('year-range-slider', 'value'),
+        State("map-state", "data"),
         prevent_initial_call=True
     )
-    def update_year_range_bounds(unit_state):
-        ctx = callback_context
-        logger.info(f"""
-            Callback: update_year_range_bounds
-            Triggered by: {ctx.triggered[0]['prop_id'] if ctx.triggered else 'No trigger'}
-            Unit state: {unit_state}
-        """)
-        
-        try:
-            if not unit_state:
-                unit_type = 'MOD_REG'
-                logger.debug("No unit state provided, defaulting to MOD_REG")
-            else:
-                unit_type = unit_state.get('unit_type', 'MOD_REG')
-                logger.debug(f"Using unit type: {unit_type}")
-            
-            # Get range for current unit type
-            unit_range = date_ranges_df[date_ranges_df['g_unit_type'] == unit_type].iloc[0]
-            min_year = max(int(unit_range['min_year']), DEFAULT_MIN_YEAR)
-            max_year = normalize_year(int(unit_range['max_year']))
-            logger.debug(f"Year range: {min_year} - {max_year}")
-            
-            # Create marks
-            step = max(1, (max_year - min_year) // 10)
-            marks = {str(year): str(year) for year in range(min_year, max_year + 1, step)}
-            logger.debug(f"Created marks with step size {step}")
-            
-            current_year = normalize_year(max_year)
-            value = [current_year, current_year]
-            logger.debug(f"Set default value to {value}")
-            
-            bounds = {'min': min_year, 'max': max_year}
-            logger.debug(f"Set year bounds: {bounds}")
-            
-            return bounds, min_year, max_year, marks, value
-            
-        except Exception as e:
-            logger.error(f"Error updating year range bounds: {str(e)}")
-            return no_update, no_update, no_update, no_update, no_update
-
-
-    # Callback to update unit filter state
-    @app.callback(
-        Output('unit-filter-state', 'data'),
-        [Input({'type': 'unit-filter', 'unit': ALL}, 'n_clicks'),
-        Input('reset-filters', 'n_clicks')],
-        State('unit-filter-state', 'data'),
-        prevent_initial_call=True
-    )
-    def update_unit_filter_state(unit_clicks, reset_clicks, current_state):
-        logger.info(f"Callback: update_unit_filter_state")
-        ctx = callback_context
-        if not ctx.triggered:
-            raise PreventUpdate
-        
-        triggered_id = ctx.triggered[0]['prop_id']
-        
-        if 'reset-filters' in triggered_id:
-            return {'unit_types': ['MOD_REG']}
-        
-        try:
-            button_id = json.loads(triggered_id.split('.')[0])
-            current_types = set(current_state.get('unit_types', ['MOD_REG']))
-            clicked_type = button_id['unit']
-            
-            # Toggle the clicked type
-            if clicked_type in current_types:
-                current_types.remove(clicked_type)
-                # Ensure at least one type is selected
-                if not current_types:
-                    current_types.add('MOD_REG')
-            else:
-                current_types.add(clicked_type)
-            
-            return {'unit_types': list(current_types)}
-        except:
-            return current_state if current_state else {'unit_types': ['MOD_REG']}
+    def store_year_range_in_map_state(chosen_range, map_state):
+        """
+        Whenever the user adjusts the year-range slider, update 
+        map_state['year_range'] accordingly.
+        """
+        logger.info("Callback: store_year_range_in_map_state")
+        map_state['year_range'] = (
+            normalize_year(chosen_range[0]),
+            normalize_year(chosen_range[1])
+        )
+        logger.debug(f"Storing year_range={map_state['year_range']} in map-state")
+        return map_state
 
     @app.callback(
+        Output("map-state", "data", allow_duplicate=True),
         Output('choropleth-map', 'figure', allow_duplicate=True),
-        Output('current-gdf', 'data'),
-        Output('debug-output', 'children'),
+        Output('debug-output', 'children', allow_duplicate=True),
         [Output({'type': 'unit-filter', 'unit': ALL}, 'color')],
         [Output({'type': 'unit-filter', 'unit': ALL}, 'outline')],
-        Input('unit-filter-state', 'data'),
-        Input('year-range-slider', 'value'),
-        [State('choropleth-map', 'figure'),
-        State({'type': 'unit-filter', 'unit': ALL}, 'id')],
+        Input("map-state", "data"),
+        State('choropleth-map', 'figure'),
+        State({'type': 'unit-filter', 'unit': ALL}, 'id'),
         prevent_initial_call=True
     )
-    def update_map_filter(unit_state, year_range, figure, button_ids):
+    def update_map_filter(map_state, figure, button_ids):
+        """
+        1. Update filter button states (unit_types) -> button colors/outlines.
+        2. Fetch polygons for all selected unit types and combine them.
+        3. Update figure + store the resulting GeoJSON in map_state['current_geojson'].
+        """
         ctx = callback_context
-        logger.info(f"""
-            Callback: update_map_filter
-            Triggered by: {ctx.triggered[0]['prop_id'] if ctx.triggered else 'No trigger'}
-            Unit state: {unit_state}
-            Year range: {year_range}
-        """)
-        
-        if not unit_state:
-            logger.warning("No unit state provided")
-            raise PreventUpdate
-        
+        triggered_id = ctx.triggered[0]['prop_id']
+        logger.info("Callback: update_map_filter")
+
         try:
-            unit_types = unit_state.get('unit_types', ['MOD_REG'])
-            logger.debug(f"Processing unit types: {unit_types}")
-            
-            # Initialize button states
+            unit_types = map_state.get('unit_types', ['MOD_REG'])
+            year_range = map_state.get('year_range', None)
+            logger.debug(f"Using unit_types={unit_types}, year_range={year_range}")
+
+            # Update button states
             button_colors = ['secondary'] * len(UNIT_TYPES)
             button_outlines = [True] * len(UNIT_TYPES)
-            
-            # Update button states based on current unit types
+
+            # Mark the active ones as primary
             for i, bid in enumerate(button_ids):
                 if bid['unit'] in unit_types:
                     button_colors[i] = 'primary'
                     button_outlines[i] = False
-            logger.debug(f"Updated button states for {len(button_ids)} buttons")
-            
-            # Get and combine polygons for all selected unit types
-            filtered_gdfs = []
-            for unit_type in unit_types:
-                logger.debug(f"Fetching polygons for unit type: {unit_type}")
-                if year_range and unit_type not in TIMELESS_UNIT_TYPES:
-                    gdf = get_polygons_by_type(unit_type, year_range[0], year_range[1])
-                    logger.debug(f"Retrieved {len(gdf)} polygons for years {year_range[0]}-{year_range[1]}")
-                else:
-                    gdf = get_polygons_by_type(unit_type)
-                    logger.debug(f"Retrieved {len(gdf)} polygons (timeless)")
-                filtered_gdfs.append(gdf)
-            
-            # Combine GeoDataFrames
-            filtered_gdf = pd.concat(filtered_gdfs)
-            logger.debug(f"Combined GeoDataFrame has {len(filtered_gdf)} total polygons")
-            
-            if filtered_gdf.empty:
-                logger.warning("No polygons found for selected types")
-                debug_msg = f"No polygons found for selected types"
-                return figure, filtered_gdf.to_json(), debug_msg, button_colors, button_outlines
 
-            # Update the figure
+            # Gather polygons
+            filtered_gdfs = []
+            for utype in unit_types:
+                if year_range and utype not in TIMELESS_UNIT_TYPES:
+                    gdf = get_polygons_by_type(utype, year_range[0], year_range[1])
+                else:
+                    gdf = get_polygons_by_type(utype)
+                filtered_gdfs.append(gdf)
+
+            # Combine them
+            if filtered_gdfs:
+                combined_gdf = pd.concat(filtered_gdfs)
+            else:
+                combined_gdf = gpd.GeoDataFrame()
+
+            if combined_gdf.empty:
+                logger.warning("No polygons found for selected types")
+                debug_msg = "No polygons found for selected types."
+                # Clear the figure data but keep it from crashing
+                if figure['data']:
+                    figure['data'][0]['locations'] = []
+                    figure['data'][0]['geojson'] = {}
+                    figure['data'][0]['selectedpoints'] = []
+                # Also clear current_geojson
+                map_state["current_geojson"] = {}
+                return map_state, figure, debug_msg, button_colors, button_outlines
+
+            # Convert GDF to geojson
             try:
-                geojson_data = json.loads(filtered_gdf.to_json())
-                locations = filtered_gdf.index.tolist()
+                geojson_data = json.loads(combined_gdf.to_json())
+            except Exception as e:
+                logger.error(f"Error converting combined_gdf to JSON: {str(e)}")
+                debug_msg = f"Error updating map: {str(e)}"
+                return map_state, figure, debug_msg, button_colors, button_outlines
+
+            # Store in map_state
+            map_state["current_geojson"] = geojson_data
+
+            # Update figure
+            if figure['data']:
+                locations = combined_gdf.index.tolist()
                 figure['data'][0]['locations'] = locations
                 figure['data'][0]['geojson'] = geojson_data
-                figure['data'][0]['selectedpoints'] = None
+                # If triggered by 'year-range-slider' or 'unit-filter'
+                
+                if 'year-range-slider' in triggered_id or '{"type":"unit-filter"' in triggered_id:
+                    # The user changed filters => reset selection
+                    figure['data'][0]['selectedpoints'] = None
                 figure['data'][0]['z'] = [1] * len(locations)
-                logger.debug("Successfully updated figure data")
-                
-                # Update map center and zoom
-                center_lat = filtered_gdf.to_crs('+proj=cea').centroid.to_crs(filtered_gdf.crs).y.mean()
-                center_lon = filtered_gdf.to_crs('+proj=cea').centroid.to_crs(filtered_gdf.crs).x.mean()
+
+                # Update map center (rough approach)
+                center_lat = combined_gdf.to_crs('+proj=cea').centroid.to_crs(combined_gdf.crs).y.mean()
+                center_lon = combined_gdf.to_crs('+proj=cea').centroid.to_crs(combined_gdf.crs).x.mean()
                 figure['layout']['mapbox']['center'] = {"lat": center_lat, "lon": center_lon}
-                logger.debug(f"Updated map center to lat: {center_lat}, lon: {center_lon}")
-                
-            except Exception as e:
-                logger.error(f"Error updating figure: {str(e)}")
-                return figure, filtered_gdf.to_json(), "Error updating map", button_colors, button_outlines
-            
-            debug_msg = f"Showing {unit_types} units ({len(filtered_gdf)} polygons)"
-            if year_range and unit_types not in TIMELESS_UNIT_TYPES:
+
+            debug_msg = f"Showing {unit_types} units ({len(combined_gdf)} polygons)"
+            if year_range and any(ut not in TIMELESS_UNIT_TYPES for ut in unit_types):
                 debug_msg += f" for years {year_range[0]}-{year_range[1]}"
-            
-            return (
-                figure,
-                filtered_gdf.to_json(),
-                debug_msg,
-                button_colors,
-                button_outlines
-            )
-            
+
+            return map_state, figure, debug_msg, button_colors, button_outlines
+
         except Exception as e:
             logger.error(f"Error in update_map_filter: {str(e)}")
-            return figure, None, "Error updating map filter", button_colors, button_outlines
-
-
-    # Modify the handle_click callback to use the current filtered GeoDataFrame
+            return map_state, figure, "Error updating map filter", ['secondary'] * len(UNIT_TYPES), [True] * len(UNIT_TYPES)
+        
     @app.callback(
+        # We produce the same outputs: figure, map_state, debug-info
+        # Only in reset_selection did we update map_state; here we always can.
+        # If your code doesn't change map_state in other branches, you can return no_update.
         Output('choropleth-map', 'figure'),
-        Output('debug-output', 'children', allow_duplicate=True),
-        Input('choropleth-map', 'clickData'),
-        [State('choropleth-map', 'figure'),
-        State('current-filter', 'data'),
-        State('current-gdf', 'data')],
-        prevent_initial_call=True
-    )
-    def handle_click(clickData, current_fig, current_filter, current_gdf_json):
-        ctx = callback_context
-        logger.info(f"""
-            Callback: handle_click
-            Triggered by: {ctx.triggered[0]['prop_id'] if ctx.triggered else 'No trigger'}
-            Click data: {clickData}
-            Current filter: {current_filter}
-        """)
-        
-        if not clickData:
-            logger.debug("No click data received")
-            return current_fig, "No polygon selected."
-            
-        clicked_id = clickData['points'][0]['location']
-        logger.debug(f"Processing click on polygon ID: {clicked_id}")
-        
-        if not current_gdf_json:
-            logger.warning("No GeoDataFrame available")
-            return current_fig, "No GeoDataFrame available"
-            
-        try:
-            gdf_jsons = json.loads(current_gdf_json)
-            current_gdf = gpd.GeoDataFrame.from_features(gdf_jsons)
-            ids = pd.DataFrame(gdf_jsons['features'])['id']
-            current_gdf['id'] = ids
-            logger.debug("Successfully loaded GeoDataFrame from JSON")
-        except Exception as e:
-            logger.error(f"Error loading GeoDataFrame: {str(e)}")
-            return current_fig, "Error processing GeoDataFrame"
-        
-        if current_filter and str(clicked_id) in current_gdf.index:
-            if current_gdf.loc[str(clicked_id), 'g_unit_type'] != current_filter:
-                logger.debug(f"Selected polygon {clicked_id} does not match filter {current_filter}")
-                return current_fig, f"Selected polygon does not match current filter: {current_filter}"
-        
-        debug_info = f"Single polygon selected with ID: {clicked_id}\n"
-        
-        try:
-            for i, d in enumerate(current_fig['data']):
-                if d['type'] == 'choroplethmapbox':
-                    row_idx = current_gdf.index[current_gdf.id == str(clicked_id)].tolist()
-                    current_fig['data'][i]['selectedpoints'] = row_idx
-                    logger.debug(f"Updated selectedpoints for layer {i} with indices {row_idx}")
-        except Exception as e:
-            logger.error(f"Error updating figure: {str(e)}")
-            return current_fig, "Error updating selection"
-            
-        return current_fig, debug_info
-
-
-    @app.callback(
-        Output('choropleth-map', 'figure', allow_duplicate=True),
-        Output('debug-output', 'children', allow_duplicate=True),
-        Input('choropleth-map', 'selectedData'),
+        Output('map-state', 'data'),
+        Output('debug-output', 'children'),
+        # Combine all triggers:
+        Input("map-state", "data"),            # triggers old update_map_from_selected_polygons
+        Input('choropleth-map', 'clickData'),  # triggers old handle_click
+        Input('choropleth-map', 'selectedData'),  # triggers old box/lasso
+        Input('reset-btn', 'n_clicks'),        # triggers old reset_selection
+        # States
         State('choropleth-map', 'figure'),
+        State("map-state", "data"),
         prevent_initial_call=True
     )
-    def handle_box_lasso(selectedData, current_fig):
-        ctx = callback_context
-        logger.info(f"""
-            Callback: handle_box_lasso
-            Triggered by: {ctx.triggered[0]['prop_id'] if ctx.triggered else 'No trigger'}
-            Selected data points: {len(selectedData['points']) if selectedData else 0}
-        """)
-        
-        if not selectedData:
-            logger.debug("No selection data received")
-            return current_fig, "No polygons selected."
-            
-        try:
-            selected_ids = [p['location'] for p in selectedData['points']]
-            logger.debug(f"Extracted {len(selected_ids)} polygon IDs from selection")
-            
-            debug_info = f"Box/Lasso selection made with {len(selected_ids)} polygons selected.\n"
-            debug_info += f"Selected polygon IDs: {selected_ids}\n"
-            
-            for i, d in enumerate(current_fig['data']):
-                if d['type'] == 'choroplethmapbox':
-                    current_fig['data'][i]['selectedpoints'] = selected_ids
-                    logger.debug(f"Updated selectedpoints for layer {i}")
-                    
-            return current_fig, debug_info
-            
-        except Exception as e:
-            logger.error(f"Error processing box/lasso selection: {str(e)}")
-            return current_fig, "Error processing selection"
+    def handle_map_events(
+        new_map_state,
+        clickData,
+        selectedData,
+        n_clicks,
+        current_fig,
+        old_map_state
+    ):
+        """
+        This single callback replaces four separate callbacks:
+          1) update_map_from_selected_polygons
+          2) handle_click
+          3) handle_box_lasso
+          4) reset_selection
 
-
-    # Reset button callback
-    @app.callback(
-        Output('choropleth-map', 'figure', allow_duplicate=True),
-        Output("selected_ids", "data", allow_duplicate=True),
-        Output('debug-output', 'children', allow_duplicate=True),
-        Input('reset-btn', 'n_clicks'),
-        State('choropleth-map', 'figure'),
-        prevent_initial_call=True
-    )
-    def reset_selection(n_clicks, current_fig):
+        We detect which input triggered the callback and run the appropriate logic.
+        """
         ctx = callback_context
-        logger.info(f"""
-            Callback: reset_selection
-            Triggered by: {ctx.triggered[0]['prop_id'] if ctx.triggered else 'No trigger'}
-            Reset button clicks: {n_clicks}
-        """)
-        
-        if n_clicks > 0:
+        if not ctx.triggered:
+            raise PreventUpdate
+
+        # By default, assume we return the “old” figure, the “old” map_state, and no new debug-info
+        figure_out = current_fig
+        map_state_out = old_map_state
+        debug_out = no_update
+
+        triggered_prop_id = ctx.triggered[0]['prop_id']
+
+        # ---------------------------------------------------------------------
+        # 1) If "map-state" triggered => old `update_map_from_selected_polygons`
+        if "map-state" in triggered_prop_id:
+            # Access the just-updated map_state from new_map_state
+            selected_ids = new_map_state.get("selected_polygons", [])
+            current_geojson = new_map_state.get("current_geojson", {})
+
+            if not selected_ids:
+                logger.debug("No polygons selected in map_state")
+                return figure_out, map_state_out, "No polygons selected."
+
+            if not current_geojson:
+                logger.warning("No GeoJSON available in map_state, cannot update map")
+                return figure_out, map_state_out, "No polygons or no GeoJSON available."
+
             try:
-                for i, d in enumerate(current_fig['data']):
-                    if d['type'] == 'choroplethmapbox':
-                        current_fig['data'][i]['selectedpoints'] = None
-                        logger.debug(f"Cleared selection for layer {i}")
-                logger.debug("Successfully reset all selections")
-                return current_fig, [], "Reset button clicked. All selections cleared."
+                current_gdf = gpd.GeoDataFrame.from_features(current_geojson)
             except Exception as e:
-                logger.error(f"Error resetting selection: {str(e)}")
-                return current_fig, [], "Error resetting selections"
+                msg = f"Error converting current_geojson to GeoDataFrame: {str(e)}"
+                logger.error(msg)
+                return figure_out, map_state_out, msg
 
-        return current_fig, [], ""
+            # Filter for selected ids
+            gdf_filtered = current_gdf[current_gdf.index.isin(selected_ids)]
+            if gdf_filtered.empty:
+                return figure_out, map_state_out, "No polygons found for the selected IDs"
+
+            map_properties = calculate_center_and_zoom(gdf_filtered)
+            if map_properties["center"] and map_properties["zoom"] is not None:
+                figure_out['layout']['mapbox']['center'] = map_properties["center"]
+                figure_out['layout']['mapbox']['zoom'] = map_properties["zoom"]
+
+            for i, d in enumerate(figure_out['data']):
+                if d['type'] == 'choroplethmapbox':
+                    figure_out['data'][i]['selectedpoints'] = selected_ids
+
+            debug_out = (
+                f"Zoomed to {len(selected_ids)} polygons. "
+                f"Center={map_properties['center']}, Zoom={map_properties['zoom']}"
+            )
+            return figure_out, map_state_out, debug_out
+
+        # ---------------------------------------------------------------------
+        # 2) If "choropleth-map.clickData" triggered => old `handle_click`
+        if "choropleth-map.clickData" in triggered_prop_id:
+            if not clickData:
+                return figure_out, map_state_out, "No polygon selected."
+
+            clicked_id = clickData['points'][0]['location']
+            current_geojson = old_map_state.get("current_geojson", {})
+
+            if not current_geojson:
+                return figure_out, map_state_out, "No GeoDataFrame available"
+
+            try:
+                current_gdf = gpd.GeoDataFrame.from_features(current_geojson)
+                ids = pd.json_normalize(current_geojson["features"])["id"].values
+                current_gdf['id'] = ids
+            except Exception as e:
+                logger.error(f"Error loading GeoDataFrame: {str(e)}")
+                return figure_out, map_state_out, "Error processing GeoDataFrame"
+
+            if str(clicked_id) not in current_gdf.id.values.astype(str):
+                return figure_out, map_state_out, f"Clicked polygon {clicked_id} not found in data."
+
+            # Highlight the selected polygon
+            debug_info = f"Single polygon selected with ID: {clicked_id}"
+            for i, d in enumerate(figure_out['data']):
+                if d['type'] == 'choroplethmapbox':
+                    row_idx = current_gdf.index[
+                        current_gdf.id.values.astype(str) == str(clicked_id)
+                    ].tolist()
+                    figure_out['data'][i]['selectedpoints'] = row_idx
+
+            return figure_out, map_state_out, debug_info
+
+        # ---------------------------------------------------------------------
+        # 3) If "choropleth-map.selectedData" triggered => old `handle_box_lasso`
+        if "choropleth-map.selectedData" in triggered_prop_id:
+            if not selectedData:
+                return figure_out, map_state_out, "No polygons selected."
+
+            try:
+                selected_ids = [p['location'] for p in selectedData['points']]
+                debug_info = (
+                    f"Box/Lasso selection: {len(selected_ids)} polygons selected.\n"
+                    f"Selected polygon IDs: {selected_ids}\n"
+                )
+                for i, d in enumerate(figure_out['data']):
+                    if d['type'] == 'choroplethmapbox':
+                        figure_out['data'][i]['selectedpoints'] = selected_ids
+
+                return figure_out, map_state_out, debug_info
+
+            except Exception as e:
+                logger.error(f"Error processing box/lasso selection: {str(e)}")
+                return figure_out, map_state_out, "Error processing selection"
+
+        # ---------------------------------------------------------------------
+        # 4) If "reset-btn" triggered => old `reset_selection`
+        if "reset-btn" in triggered_prop_id:
+            if n_clicks > 0:
+                try:
+                    for i, d in enumerate(figure_out['data']):
+                        if d['type'] == 'choroplethmapbox':
+                            figure_out['data'][i]['selectedpoints'] = None
+
+                    # Also clear map_state's selected_polygons
+                    old_map_state["selected_polygons"] = []
+                    debug_msg = "Reset button clicked. All selections cleared."
+                    return figure_out, old_map_state, debug_msg
+                except Exception as e:
+                    logger.error(f"Error resetting selection: {str(e)}")
+                    return figure_out, old_map_state, "Error resetting selections"
+
+            return figure_out, old_map_state, no_update
+
+        # ---------------------------------------------------------------------
+        # If we got here but none of the conditions matched, do nothing
+        raise PreventUpdate

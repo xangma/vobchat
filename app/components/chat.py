@@ -13,7 +13,6 @@ def create_chat_layout():
                 dbc.Button("Send", id="send-button", color="primary", className="mt-2", n_clicks=0),
                 html.Br(),
                 dbc.Button("Clear Chat", id="clear-button", color="danger", className="mt-2", n_clicks=0),
-                dcc.Store(id="thread_id", data=1),
             ])
         ]),
     ])

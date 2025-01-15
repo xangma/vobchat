@@ -15,7 +15,7 @@ def register_visualization_callbacks(app, compiled_workflow):
         Output("cube-selector", "options"),
         Output("cube-data", "data"),
         Input("chat-display", "children"),
-        State("thread_id", "data"),
+        State("thread-id", "data"),
         prevent_initial_call=True
     )
     def handle_visualization_request(chat_history, thread_id):

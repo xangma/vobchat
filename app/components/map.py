@@ -40,7 +40,7 @@ def create_map_layout(initial_gdf):
                         id={'type': 'unit-filter', 'unit': unit_type},
                         color='primary' if unit_type == 'MOD_REG' else 'secondary',
                         outline=unit_type != 'MOD_REG',
-                        className="me-2 mb-2",
+                        className="filter-button me-2 mb-2",
                         n_clicks=0
                     ) for unit_type in UNIT_TYPES
                 ], className="d-flex flex-wrap"),
@@ -58,11 +58,4 @@ def create_map_layout(initial_gdf):
         dcc.Graph(id='choropleth-map', figure=create_initial_map_figure(initial_gdf), style={"height": "70vh"}),
         html.Div(id='debug-output', style={'whiteSpace': 'pre-line'}),
         html.Button("Reset Selections", id="reset-btn", n_clicks=0),
-        dcc.Store(id="selected_ids"),
-        dcc.Store(id="current-filter"),
-        dcc.Store(id="active-filter", data=None),
-        dcc.Store(id="current-gdf", storage_type='memory'),
-        dcc.Store(id='filter-state', data={'unit_type': 'MOD_REG', 'year_range': None, 'year_bounds': None}),
-        dcc.Store(id='unit-filter-state', data={'unit_types': ['MOD_REG']}),
-        dcc.Store(id='year-range-bounds', data=None),
     ])
