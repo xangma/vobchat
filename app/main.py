@@ -11,7 +11,7 @@ from components.chat import create_chat_layout
 from components.map import create_map_layout
 from components.visualization import create_visualization_layout
 from callbacks.chat import register_chat_callbacks
-from callbacks.map import register_map_callbacks
+from callbacks.map_leaflet import register_map_leaflet_callbacks
 from callbacks.visualization import register_visualization_callbacks
 from callbacks.clientside_callbacks import register_clientside_callbacks
 from config import load_config, get_db
@@ -51,7 +51,7 @@ app.layout = dbc.Container([
 
 # Register all callbacks
 register_chat_callbacks(app, compiled_workflow)
-register_map_callbacks(app, date_ranges_df)
+register_map_leaflet_callbacks(app, date_ranges_df)
 register_visualization_callbacks(app, compiled_workflow)
 register_clientside_callbacks(app)
 
