@@ -290,6 +290,7 @@ def get_all_cube_data(
     SELECT 
         d.end_date_decimal as year,
         d.g_unit,
+        d.cellref,
         d.g_data as value,
         m.ncuberef as cube_id,
         ncube.labl as cube_name
@@ -308,5 +309,8 @@ def get_all_cube_data(
     df = pd.DataFrame(res)
     
     # Pivot the data to create columns for each cube
-    pivot_df = df.pivot(index='year', columns='cube_name', values='value').reset_index()
+    pivot_df = df.pivot(index='year', columns='cellref', values='value').reset_index()
     return pivot_df
+
+
+# tool to choose theme from sentence

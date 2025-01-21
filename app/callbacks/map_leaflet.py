@@ -80,37 +80,37 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
         # B) Check if we clicked or ctrl-clicked a unit-filter button
         unit_type_trigs = [t for t in triggered_prop_ids if "unit-filter" in t]
         for i, t in enumerate(unit_type_trigs):
-            if unit_filter_clicks[i]:
-                dict_part = t.split(".")[0]
-                try:
-                    dict_part = json.loads(dict_part)
-                except:
-                    dict_part = None
+            # if unit_filter_clicks[i]:
+            dict_part = t.split(".")[0]
+            try:
+                dict_part = json.loads(dict_part)
+            except:
+                dict_part = None
 
-                if dict_part and dict_part.get("type") == "unit-filter":
-                    clicked_type = dict_part["unit"]
-                    prev_types = set(new_map_state.get(
-                        "unit_types", ["MOD_REG"]))
-                    current_types = set(prev_types)
+            if dict_part and dict_part.get("type") == "unit-filter":
+                clicked_type = dict_part["unit"]
+                prev_types = set(new_map_state.get(
+                    "unit_types", ["MOD_REG"]))
+                current_types = set(prev_types)
 
-                    if ctrl_pressed:
-                        # toggle
-                        if clicked_type in current_types:
-                            current_types.remove(clicked_type)
-                            if not current_types:
-                                current_types = {"MOD_REG"}
-                        else:
-                            current_types.add(clicked_type)
-                        ctrl_pressed = False  # we used ctrl
+                if ctrl_pressed:
+                    # toggle
+                    if clicked_type in current_types:
+                        current_types.remove(clicked_type)
+                        if not current_types:
+                            current_types = {"MOD_REG"}
                     else:
-                        # single choice
-                        current_types = {clicked_type}
+                        current_types.add(clicked_type)
+                    ctrl_pressed = False  # we used ctrl
+                else:
+                    # single choice
+                    current_types = {clicked_type}
 
-                    new_map_state["unit_types"] = list(current_types)
-                    if current_types - prev_types:
-                        # if new type was added, clear selected polygons
-                        new_map_state["selected_polygons"] = []
-                    filter_triggered = True
+                new_map_state["unit_types"] = list(current_types)
+                if current_types - prev_types:
+                    # if new type was added, clear selected polygons
+                    new_map_state["selected_polygons"] = []
+                filter_triggered = True
 
         # C) If the user changed the year-range slider
         if "year-range-slider.value" in triggered_prop_ids and chosen_year_range:

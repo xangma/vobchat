@@ -14,6 +14,4 @@ def create_visualization_layout():
             dcc.Graph(id="data-plot"),
             dbc.Button("Clear Plot", id="clear-plot-button", color="secondary", className="mt-2")
         ]),
-        dcc.Store(id="cube-data"),
-        dcc.Store(id="selected-cube"),
     ])

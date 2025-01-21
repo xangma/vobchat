@@ -23,7 +23,8 @@ def create_stores():
             "unit_type": None,
             "themes": None,
             "selected_theme_id": None,
-            "cubes": None
+            "cubes": None,
+            "cube_data": None
         }),
 
         # Global app state
@@ -32,7 +33,8 @@ def create_stores():
             "awaiting_user_selection": None,
             "button_options": [],
             "selection_idx": None,
-            "retrigger_chat": False
+            "retrigger_chat": False,
+            "show_visualization": False,
         }),
 
 

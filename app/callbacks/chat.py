@@ -44,12 +44,14 @@ def register_chat_callbacks(app, compiled_workflow):
         Output("chat-input", "value", allow_duplicate=True),
         Output("app-state", "data", allow_duplicate=True),
         Output("map-state", "data", allow_duplicate=True),
+        Output("place-state", "data", allow_duplicate=True),
         Output("options-container", "children"),
         Input("send-button", "n_clicks"),
         Input({"option_type": ALL, "type": "dynamic-button-user-choice", "index": ALL}, "n_clicks"),
         CycleBreakerInput("retrigger-chat", "data"),
         State("app-state", "data"),
         State("map-state", "data"),
+        State("place-state", "data"),
         State("chat-input", "value"),
         State("chat-display", "children"),
         State("options-container", "children"),
@@ -61,6 +63,7 @@ def register_chat_callbacks(app, compiled_workflow):
         retrigger_chat,
         app_state,
         map_state,
+        place_state,
         user_input,
         chat_history,
         buttons,
@@ -69,6 +72,7 @@ def register_chat_callbacks(app, compiled_workflow):
 
         ctx = dash.callback_context
         ctx_trigger = ctx.triggered[0]["prop_id"]
+        
         logger.debug({
             "event": "update_chat_start",
             "params": {
@@ -103,6 +107,7 @@ def register_chat_callbacks(app, compiled_workflow):
             # Update the node's state with selection_idx
             values = {"selection_idx": selection_idx}
             compiled_workflow.update_state(config=config, values=values)
+            buttons = []
         elif n_clicks is None and (not user_input or user_input.strip() == ""):
             # No meaningful user interaction
             raise PreventUpdate
@@ -126,8 +131,6 @@ def register_chat_callbacks(app, compiled_workflow):
 
         # Default return values
         buttons = dash.no_update
-        state_updates: Dict[str, Any] = {}
-        still_interrupting = False
 
         # Get current workflow state
         state = compiled_workflow.get_state(config)
@@ -135,6 +138,7 @@ def register_chat_callbacks(app, compiled_workflow):
             # Check for interrupts on the first pending task
             interrupt_task = state.tasks[0]
             if interrupt_task.interrupts or state.values.get("interrupt_state") == True:
+                new_history = None
                 logger.debug(
                     "First task has interrupts.")
 
@@ -144,27 +148,8 @@ def register_chat_callbacks(app, compiled_workflow):
                 logger.debug({"event": "processing_interrupt",
                             "interrupt_value": interrupt_value})
 
-                # Map selection example
-                if interrupt_value.get("message") == "map_selection":
-                    logger.debug("Map selection interrupt")
-                    state_updates["map_state"] = {
-                        "selected_polygons": [interrupt_value["g_unit"]],
-                        "unit_types": [interrupt_value["g_unit_type"]]
-                    }
-
-                    state_updates["app_state"] = {
-                        "button_options": [],
-                        "awaiting_user_selection": False,
-                        "retrigger_chat": True
-                    }
-                    compiled_workflow.update_state(
-                        config=config, values={"interrupt_state": False, "selection_idx": None, "selected_place_g_unit": interrupt_value["g_unit"], "selected_place_g_unit_type": interrupt_value["g_unit_type"]})
-                        
-                    buttons = []
-                    still_interrupting = True
-
                 # Multiple choice "options" interrupt
-                elif "options" in interrupt_value:
+                if "options" in interrupt_value:
                     logger.debug("Interrupt with multiple button options")
                     options = interrupt_value.get("options", [])
                     # The node wants the user to pick from a list of options
@@ -181,25 +166,54 @@ def register_chat_callbacks(app, compiled_workflow):
                         )
                         for opt in options
                     ]
-                    prompt_text = interrupt_value.get("message", "Please choose:")
+                    prompt_text = interrupt_value.get(
+                        "message", "Please choose:")
                     interrupt_message = html.Div(
                         f"AI: {prompt_text}", className="mb-2 text-primary")
 
                     # Mark that we are waiting for user selection
-                    state_updates["app_state"] = {
+                    app_state.update({
                         "button_options": options,
                         "awaiting_user_selection": True
-                    }
+                    })
                     new_history = chat_history[:] + [interrupt_message]
 
-                    still_interrupting = True
+
+                # Map selection
+                if interrupt_value.get("message") == "map_selection":
+                    logger.debug("Map selection interrupt")
+                    map_state.update({
+                        "selected_polygons": [interrupt_value["g_unit"]],
+                        "unit_types": [interrupt_value["g_unit_type"]]
+                    })
+
+                    app_state.update({
+                        "button_options": [],
+                        "awaiting_user_selection": False,
+                        "retrigger_chat": True
+                    })
+                    compiled_workflow.update_state(
+                        config=config, values={"interrupt_state": False, "selection_idx": None, "selected_place_g_unit": interrupt_value["g_unit"], "selected_place_g_unit_type": interrupt_value["g_unit_type"]})
+                        
+                    buttons = []
 
                 # Another example: "selected_polygons"
                 elif "selected_polygons" in interrupt_value.get("message", {}):
                     logger.debug("Polygon selection interrupt")
-                    state_updates["map_state"] = {
-                        "selected_polygons": interrupt_value["value"]}
-                    still_interrupting = False
+                    map_state.update({
+                        "selected_polygons": interrupt_value["value"]
+                        })
+
+                elif interrupt_value.get("cubes"):
+                    logger.debug("Cube selection interrupt")
+                    cubes = interrupt_value.get("cubes", [])
+                    place_state.update({"cubes": cubes})
+                    prompt_text = interrupt_value.get(
+                        "message")
+                    interrupt_message = html.Div(
+                        f"AI: {prompt_text}", className="mb-2 text-primary")
+                    new_history = chat_history[:] + [interrupt_message]
+                    app_state.update({"show_visualization": True})
 
                 # Otherwise it's a "text input" interrupt
                 else:
@@ -213,19 +227,12 @@ def register_chat_callbacks(app, compiled_workflow):
                         # We already have a user input, so we update the node
                         compiled_workflow.update_state(
                             config=config, values={"messages": [("user", user_input)]})
-                        still_interrupting = True
                     else:
                         # We need to prompt the user
                         new_history = chat_history[:] + [interrupt_message]
-                        still_interrupting = True
-
-        # If the node wants more input or a user choice, short‐circuit
-        # if still_interrupting:
-        # logger.debug("Interrupt active - returning intermediate state.")
-        # new_app_state = {**(app_state or {}), **
-        #                 state_updates.get("app_state", {})}
-        # new_map_state = {**(map_state or {}), **
-        #                 state_updates.get("map_state", {})}
+                        
+                if new_history:
+                    chat_history = new_history
 
         # 8) If no interrupt, we present the final AI output from db_res
         #    (only if there's an AI message in the updated state)
@@ -235,35 +242,24 @@ def register_chat_callbacks(app, compiled_workflow):
             chat_history.append(
                 html.Div(f"AI: {ai_text}", className="mb-2 text-primary"))
 
-        # Update states
-        new_app_state = (app_state or {}).copy()
-        new_app_state["messages"] = chat_history
-        if "app_state" in state_updates:
-            new_app_state.update(state_updates["app_state"])
-
-        new_map_state = (map_state or {}).copy()
-        if "map_state" in state_updates:
-            new_map_state.update(state_updates["map_state"])
-
         logger.debug({
             "event": "chat_update_complete",
             "new_chat_history_length": len(chat_history),
-            "new_app_state": new_app_state,
-            "new_map_state": new_map_state
+            "new_app_state": app_state,
+            "new_map_state": map_state
         })
 
         return (
             chat_history,
             "",
-            new_app_state,
-            new_map_state,
+            app_state,
+            map_state,
+            place_state,
             buttons,
-            # retrigger_chat
         )
     
     @app.callback(
         Output("retrigger-chat", "data", allow_duplicate=True),
-        # Output("app-state", "data"),
         Input("app-state", "data"),
         Input("map-state", "data"),
         State("retrigger-chat", "data"),

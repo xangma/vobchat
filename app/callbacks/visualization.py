@@ -1,5 +1,6 @@
 # app/callbacks/visualization.py
 import pandas as pd
+import json
 import plotly.graph_objects as go
 from dash import no_update
 from dash.dependencies import Input, Output, State
@@ -13,52 +14,52 @@ def register_visualization_callbacks(app, compiled_workflow):
     @app.callback(
         Output("visualization-area", "style"),
         Output("cube-selector", "options"),
-        Output("cube-data", "data"),
-        Input("chat-display", "children"),
+        Output("place-state", "data"),
+        Input("app-state", "data"),
         State("thread-id", "data"),
+        State("place-state", "data"),
         prevent_initial_call=True
     )
-    def handle_visualization_request(chat_history, thread_id):
-        if not chat_history:
+    def handle_visualization_request(app_state, thread_id, place_state):
+        if not app_state or app_state.get("show_visualization") is False:
             raise PreventUpdate
-        
-        # Get the latest AI message
-        latest_message = chat_history[-1] if chat_history else None
-        if not latest_message:
-            raise PreventUpdate
+
+        # messages = app_state["messages"]
+        # if not messages:
+        #     raise PreventUpdate
+
+        # # The last message is presumably the new AI message
+        # latest_message = messages[-1]
 
         try:
             # Extract message content from the HTML div
-            message_content = latest_message['props']['children']
+            # message_content = latest_message['props']['children']
             
-            # Try to get additional_kwargs from the message
-            if message_content.startswith("AI: Here are all the available data cubes"):
-                # Get the state to access additional data
-                config = {"configurable": {"thread_id": thread_id}}
-                state = compiled_workflow.get_state(config)
-                
-                # Get the last message's additional_kwargs
-                last_message = state["messages"][-1]
-                if hasattr(last_message, "additional_kwargs"):
-                    viz_data = last_message.additional_kwargs
-                    if viz_data.get("show_visualization"):
-                        cubes = viz_data.get("cubes", [])
-                        if not cubes:
-                            raise PreventUpdate
-                        
-                        # Get all cube data at once
-                        cube_ids = [cube['Cube_ID'] for cube in cubes]
-                        g_unit = state.get('selected_place_g_unit')
-                        all_data = get_all_cube_data({"g_unit": str(g_unit), "cube_ids": cube_ids})
-                        
-                        # Create dropdown options from all columns except year
-                        options = [
-                            {"label": col, "value": col} 
-                            for col in all_data.columns 
-                            if col != 'year'
-                        ]
-                        
-                        return {"display": "block"}, options, all_data.to_json(date_format='iso', orient='split')
+            # # Try to get additional_kwargs from the message
+            # if message_content.startswith("AI: Here are all the available data cubes"):
+            # Get the state to access additional data
+            config = {"configurable": {"thread_id": thread_id}}
+            state = compiled_workflow.get_state(config)
+            
+            # Get the last message's additional_kwargs
+            cubes = place_state.get("cubes", [])
+            if not cubes:
+                raise PreventUpdate
+            
+            # Get all cube data at once
+            cubes_df = pd.DataFrame(cubes)
+            
+            cube_ids = cubes_df['Cube_ID'].tolist()
+            g_unit = state.values.get('selected_place_g_unit')
+            all_data = get_all_cube_data({"g_unit": str(g_unit), "cube_ids": cube_ids})
+            
+            # Create dropdown options from all columns except year
+            options = [
+                {"label": row['Cube'], "value": row['Cube_ID']}
+                for idx, row in cubes_df.iterrows()
+            ]
+            place_state['cube_data'] = all_data.to_json(orient='split')
+            return {"display": "block"}, options, place_state
                         
         except Exception as e:
             print(f"Error handling visualization request: {e}")
@@ -68,28 +69,32 @@ def register_visualization_callbacks(app, compiled_workflow):
     @app.callback(
         Output("data-plot", "figure", allow_duplicate=True),
         Input("cube-selector", "value"),
-        State("cube-data", "data"),
+        State("place-state", "data"),
         prevent_initial_call=True
     )
-    def update_visualization(selected_columns, cube_data_json):
-        if not selected_columns or not cube_data_json:
+    def update_visualization(selected_cubes, place_state):
+        if not selected_cubes or not place_state.get("cube_data"):
             raise PreventUpdate
-            
-        df = pd.read_json(cube_data_json, orient='split')
+        
+        cube_data_dict = json.loads(place_state["cube_data"])
+        cubes_df = pd.DataFrame(cube_data_dict['data'], columns=cube_data_dict['columns'])
         
         # Allow multiple column selection for comparison
-        if not isinstance(selected_columns, list):
-            selected_columns = [selected_columns]
+        if not isinstance(selected_cubes, list):
+            selected_cubes = [selected_cubes]
         
         fig = go.Figure()
         
-        for col in selected_columns:
-            fig.add_trace(go.Scatter(
-                x=df['year'],
-                y=df[col],
-                name=col,
-                mode='lines+markers'
-            ))
+        for cube in selected_cubes:
+            tempdf = cubes_df.filter(regex=f"year|{cube[2:]}")
+            for col in tempdf.columns:
+                if col != 'year':
+                    fig.add_trace(go.Scatter(
+                        x=tempdf['year'].values,
+                        y=tempdf[col].values,
+                        name=col,
+                        mode='lines+markers'
+                    ))
         
         fig.update_layout(
             title="Historical Data Visualization",

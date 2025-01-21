@@ -54,7 +54,7 @@ app.layout = dbc.Container([
 # Register all callbacks
 register_chat_callbacks(app, compiled_workflow)
 register_map_leaflet_callbacks(app, date_ranges_df)
-# register_visualization_callbacks(app, compiled_workflow)
+register_visualization_callbacks(app, compiled_workflow)
 register_clientside_callbacks(app)
 
 if __name__ == '__main__':

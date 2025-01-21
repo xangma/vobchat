@@ -329,12 +329,6 @@ def handle_user_place_selection(state: lg_State) -> lg_State:
             state["messages"].append(response_message)
             return state
 
-        # Process the selection
-        response_message = AIMessage(
-            content=f"Place selected:\n{selected_place_df[['g_name', 'county_name']].to_string(index=False)}"
-        )
-        state["messages"].append(response_message)
-
         # Handle unit selection
         logger.info("Processing unit selection...")
         exploded_df = selected_place_df.explode(["g_unit", "g_unit_type"])
@@ -398,6 +392,12 @@ def handle_user_place_selection(state: lg_State) -> lg_State:
                     "options": button_options
                 })
 
+        # Process the selection
+        response_message = AIMessage(
+            content=f"Place selected:\n{selected_place_df[['g_name', 'county_name']].to_string(index=False)}"
+        )
+        state["messages"].append(response_message)
+    
     except NodeInterrupt:
         state['interrupt_state'] = True
 
@@ -425,6 +425,7 @@ def get_place_themes_node(state: lg_State) -> lg_State:
             logger.debug({"retrieved_themes": selected_place_themes})
 
             state["selected_place_themes"] = selected_place_themes.to_json(index=True)
+            
         except Exception as e:
             logger.error("Error retrieving themes", exc_info=True)
             response_message = AIMessage(content=f"Error retrieving themes: {str(e)}")
@@ -474,11 +475,11 @@ def get_place_themes_handler(state: lg_State) -> lg_State:
                 "options": button_options
             })
 
-    # except NodeInterrupt:
-    #     state['interrupt_state'] = True
+    except NodeInterrupt:
+        state['interrupt_state'] = True
 
-    #     logger.info("Raising NodeInterrupt for theme selection")
-    #     raise
+        logger.info("Raising NodeInterrupt for theme selection")
+        raise
     except Exception as e:
         logger.error("Error in theme handler", exc_info=True)
         state["messages"].append(AIMessage(content=f"Error processing themes: {str(e)}"))
@@ -518,18 +519,21 @@ def find_cubes_node(state: lg_State) -> lg_State:
 
         if not cubes_df.empty:
             state["selected_cubes"] = cubes_df.to_json(index=True)
-            response_message = AIMessage(
-                content="Here are the available data cubes. Opening visualization panel...",
-                additional_kwargs={
-                    "show_visualization": True,
-                    "cubes": cubes_df.to_dict("records")
-                }
-            )
+            raise NodeInterrupt(value={
+                "message": "Here are the available data cubes. Opening visualization panel...",
+                "cubes": cubes_df.to_dict("records")
+            })
         else:
             logger.warning("No cubes found for selected unit and theme")
             response_message = AIMessage(content="No cubes found for the selected unit and theme.")
 
         state["messages"].append(response_message)
+
+    except NodeInterrupt:
+        state['interrupt_state'] = True
+
+        logger.info("Raising NodeInterrupt for theme selection")
+        raise
 
     except Exception as e:
         logger.error("Error finding cubes", exc_info=True)
