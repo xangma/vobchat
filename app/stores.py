@@ -1,10 +1,11 @@
 # app/stores.py
 from dash import html, dcc
 
+
 def create_stores():
     """Create unified store components"""
     return html.Div([
-        # Map-related stores
+        # Map-related store
         dcc.Store(id="map-state", data={
             "unit_types": ["MOD_REG"],
             "active_unit_type": None,
@@ -13,8 +14,9 @@ def create_stores():
             "selected_polygons": [],
             "current_geojson": None
         }),
-        
-        # Place-related stores
+        dcc.Store(id='ctrl-pressed-store', data=False),
+
+        # Place-related store
         dcc.Store(id="place-state", data={
             "place_id": None,
             "unit_id": None,
@@ -23,15 +25,18 @@ def create_stores():
             "selected_theme_id": None,
             "cubes": None
         }),
-        
+
         # Global app state
         dcc.Store(id="app-state", data={
             "messages": [],
-            "selection_idx": None
+            "awaiting_user_selection": None,
+            "button_options": [],
+            "selection_idx": None,
+            "retrigger_chat": False
         }),
-        
-        # Thread management
+
+
+        # Chat related stores
         dcc.Store(id="thread-id", data=0),
-        # 
-        dcc.Store(id='ctrl-pressed-store', data=False),
+        dcc.Store(id="retrigger-chat", data=0),
     ])

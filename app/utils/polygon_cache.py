@@ -48,6 +48,7 @@ class PolygonCache:
         gdf.set_index('g_unit', inplace=True)
         gdf.set_crs(epsg=3034, inplace=True)
         gdf = gdf.to_crs(epsg=4326)
+        gdf['id'] = gdf.index
 
         return gdf
 
@@ -85,6 +86,7 @@ class PolygonCache:
         if unit_type in UNIT_TYPES_DISK:
             gdf_from_disk = self._load_from_disk(cache_key)
             if gdf_from_disk is not None:
+                gdf_from_disk.set_index('g_unit', inplace=True, drop=False)
                 return gdf_from_disk
 
         # 2) Otherwise, check the in-memory cache

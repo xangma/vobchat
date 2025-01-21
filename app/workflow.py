@@ -54,7 +54,7 @@ memory = MemorySaver()
 # Model
 logger.info("Initializing language model...")
 model = ChatOllama(
-    model="phi4tools.modelfile:latest", 
+    model="medragondot/Sky-T1-32B-Preview:latest",
     base_url="https://roni1.uni.ds.port.ac.uk/ollama/", 
     client_kwargs={"verify": False}
 )
@@ -93,6 +93,7 @@ class lg_State(TypedDict):
     extracted_postcode: Optional[str]
     extracted_place_name: Optional[str]
     selected_polygons: Optional[List[int]]
+    interrupt_state: bool
 
 # ----------------------------------------------------------------------------------------
 # NODES
@@ -284,6 +285,7 @@ def place_tool_handler(state: lg_State) -> lg_State:
                 for index, row in returned_places[["g_name", "county_name"]].iterrows()
             ]
             logger.debug({"button_options": button_options})
+            state['interrupt_state'] = True
             raise NodeInterrupt(value={
                 "message": "Multiple places found. Please select one.",
                 "options": button_options
@@ -293,6 +295,7 @@ def place_tool_handler(state: lg_State) -> lg_State:
             state["messages"].append(AIMessage(content="No results found for that place."))
 
     except NodeInterrupt:
+        state['interrupt_state'] = True
         logger.info("Raising NodeInterrupt for place selection")
         raise
     except Exception as e:
@@ -349,45 +352,55 @@ def handle_user_place_selection(state: lg_State) -> lg_State:
             state["selection_idx"] = None
 
             logger.info("Raising NodeInterrupt for map selection")
+            state['interrupt_state'] = True
+
+            # Raise interrupt for to show on map before continuing to next node
             raise NodeInterrupt(value={
                 "message": "map_selection",
                 "g_unit": str(state["selected_place_g_unit"]),
                 "g_unit_type": state["selected_place_g_unit_type"]
             })
+        
+        if not state.get("selected_place_g_unit"):
+            if len(exploded_df) == 0:
+                logger.warning("No valid g_units found")
+                state["messages"].append(AIMessage(content="No valid g_unit was found for the selected place."))
+                return state
+            elif len(exploded_df) == 1:
+                logger.info("Single unit found - processing automatically")
+                single_row = exploded_df.iloc[0]
+                state["selected_place_g_unit"] = int(single_row["g_unit"])
+                state["selected_place_g_unit_type"] = single_row["g_unit_type"] or "MOD_DIST"
 
-        if len(exploded_df) == 0:
-            logger.warning("No valid g_units found")
-            state["messages"].append(AIMessage(content="No valid g_unit was found for the selected place."))
-            return state
-        elif len(exploded_df) == 1:
-            logger.info("Single unit found - processing automatically")
-            single_row = exploded_df.iloc[0]
-            state["selected_place_g_unit"] = int(single_row["g_unit"])
-            state["selected_place_g_unit_type"] = single_row["g_unit_type"] or "MOD_DIST"
+                logger.info("Raising NodeInterrupt for map selection")
+                state['interrupt_state'] = True
 
-            logger.info("Raising NodeInterrupt for map selection")
-            raise NodeInterrupt(value={
-                "message": "map_selection",
-                "g_unit": str(state["selected_place_g_unit"]),
-                "g_unit_type": state["selected_place_g_unit_type"]
-            })
-        else:
-            logger.info("Multiple units found - preparing selection options")
-            button_options = []
-            for i, row in exploded_df.iterrows():
-                label = f"{row['g_unit_type']} (ID={row['g_unit']})"
-                button_options.append({
-                    "option_type": "unit_selection",
-                    "label": label,
-                    "value": i
+                raise NodeInterrupt(value={
+                    "message": "map_selection",
+                    "g_unit": str(state["selected_place_g_unit"]),
+                    "g_unit_type": state["selected_place_g_unit_type"]
                 })
-            logger.debug({"button_options": button_options})
-            raise NodeInterrupt(value={
-                "message": "Multiple (g_unit, g_unit_type) options found. Please select one.",
-                "options": button_options
-            })
+            elif len(exploded_df) > 1:
+                logger.info("Multiple units found - preparing selection options")
+                button_options = []
+                for i, row in exploded_df.iterrows():
+                    label = f"{row['g_unit_type']} (ID={row['g_unit']})"
+                    button_options.append({
+                        "option_type": "unit_selection",
+                        "label": label,
+                        "value": i
+                    })
+                logger.debug({"button_options": button_options})
+                state['interrupt_state'] = True
+
+                raise NodeInterrupt(value={
+                    "message": "Multiple (g_unit, g_unit_type) options found. Please select one.",
+                    "options": button_options
+                })
 
     except NodeInterrupt:
+        state['interrupt_state'] = True
+
         logger.info("Raising NodeInterrupt for selection")
         raise
     except Exception as e:
@@ -454,14 +467,18 @@ def get_place_themes_handler(state: lg_State) -> lg_State:
                 for index, row in selected_place_themes.iterrows()
             ]
             logger.debug({"button_options": button_options})
+            state['interrupt_state'] = True
+
             raise NodeInterrupt(value={
                 "message": "Select a theme for the selected place.",
                 "options": button_options
             })
 
-    except NodeInterrupt:
-        logger.info("Raising NodeInterrupt for theme selection")
-        raise
+    # except NodeInterrupt:
+    #     state['interrupt_state'] = True
+
+    #     logger.info("Raising NodeInterrupt for theme selection")
+    #     raise
     except Exception as e:
         logger.error("Error in theme handler", exc_info=True)
         state["messages"].append(AIMessage(content=f"Error processing themes: {str(e)}"))
