@@ -60,3 +60,4 @@ register_clientside_callbacks(app)
 if __name__ == '__main__':
     os.environ["HOST"] = "127.0.0.1"
     app.run(debug=True)
+    # app.run(debug=True, use_reloader=False, dev_tools_hot_reload=False)

@@ -10,3 +10,5 @@ polygons*
 .DS_Store
 langchain
 langgraph
+assets/
+analysedcode.json
