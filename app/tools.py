@@ -204,12 +204,6 @@ def find_places_by_name(
     res = dbtool.db._execute(query)
     df = pd.DataFrame(res)
     logger.debug(f"[find_places_by_name] Query returned: \n\n{df}")
-    # df = df.drop(columns=['g_unit_type'])
-    # columns_to_aggregate = ['g_unit', 'g_unit_type']
-    # group_columns = [col for col in df.columns if col not in columns_to_aggregate]
-
-    # df = df.groupby(group_columns, dropna=False, as_index=False).agg(
-    #     {i: list for i in columns_to_aggregate})
     return df
 
 @tool

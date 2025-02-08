@@ -96,6 +96,10 @@ def register_chat_callbacks(app, compiled_workflow):
 
         logger.debug({"event": "workflow_config", "config": config})
 
+        if map_state.get('selected_polygons'):
+            compiled_workflow.update_state(config=config, values={
+                                           'selected_polygons': map_state['selected_polygons'], 'selected_place_g_unit_type': map_state['unit_types']})
+
         # 2) Check triggers: button vs. send
         selection_idx = None
         if 'dynamic-button-user-choice' in ctx_trigger:
@@ -134,6 +138,7 @@ def register_chat_callbacks(app, compiled_workflow):
 
         # Get current workflow state
         state = compiled_workflow.get_state(config)
+        
         if state.tasks:
             # Check for interrupts on the first pending task
             interrupt_task = state.tasks[0]
