@@ -313,4 +313,31 @@ def get_all_cube_data(
     return pivot_df
 
 
+def get_all_themes():
+    """
+    Get all themes from the database.
+    
+    Returns:
+    "T_LAND"	"Agriculture & Land Use"
+    "T_HOUS"	"Housing"
+    "T_IND"	"Industry"
+    "T_LEARN"	"Learning & Language"
+    "T_VITAL"	"Life & Death"
+    "T_POL"	"Political Life"
+    "T_POP"	"Population"
+    "T_REL"	"Roots & Religion"
+    "T_SOC"	"Social Structure"
+    "T_WK"	"Work & Poverty"
+    """
+    query = f"""
+    SELECT ent_id, labl FROM hgis.g_data_ent where ent_type='T'
+    ORDER BY labl
+    """
+    dbtool = QuerySQLDataBaseTool(db=db)
+    res = dbtool.db._execute(query)
+    df = pd.DataFrame(res)
+    return df
+
+
+
 # tool to choose theme from sentence

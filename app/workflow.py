@@ -54,8 +54,8 @@ memory = MemorySaver()
 # Model
 logger.info("Initializing language model...")
 model = ChatOllama(
-    model="medragondot/Sky-T1-32B-Preview:latest",
-    base_url="https://roni1.uni.ds.port.ac.uk/ollama/", 
+    model="llama3.3:latest",
+    base_url="https://148.197.150.162/ollama/", 
     client_kwargs={"verify": False}
 )
 
