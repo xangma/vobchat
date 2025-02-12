@@ -58,9 +58,6 @@ logger.info("Loading configuration and initializing components...")
 config = load_config()
 db = get_db(config)
 
-# Get initial polygons for a given type (here using "MOD_REG" as an example).
-logger.debug("Getting initial polygons for MOD_REG...")
-initial_gdf = get_polygons_by_type('MOD_REG')
 
 # Initialize memory saver for checkpointing the workflow state.
 logger.debug("Initializing memory saver for checkpointing...")
@@ -274,8 +271,8 @@ def postcode_tool_call(state: lg_State) -> lg_State:
             logger.info("Units found for postcode")
             # Update the state with details from the database query.
             state["selected_place"] = response.to_json(index=True)
-            state["selected_place_g_unit"] = int(response["g_unit"].values[0])
-            state["selected_place_g_place"] = int(response["g_place"].values[0])
+            state["selected_place_g_units"].append(int(response["g_unit"].values[0]))
+            state["selected_place_g_places"].append(int(response["g_place"].values[0]))
         else:
             logger.warning(f"No units found for postcode: {extracted_postcode}")
             state["messages"].append(
@@ -728,7 +725,7 @@ def check_map_selection_node(state: lg_State) -> lg_State:
     selected_polygons = state.get("selected_polygons") or []
     if len(selected_polygons) > 0:
         logger.info({"map_selection": {"g_unit": selected_polygons[0]}})
-        state["selected_place_g_unit"] = selected_polygons[0]
+        state["selected_place_g_units"] = selected_polygons[0]
         msg = f"Map selection detected: using g_unit={selected_polygons[0]}"
         state["messages"].append(AIMessage(content=msg))
     else:
@@ -758,7 +755,7 @@ def decide_if_map_selected(state: lg_State) -> str:
 # WORKFLOW DEFINITION
 # ----------------------------------------------------------------------------------------
 
-def create_workflow(lg_state, gdf):
+def create_workflow(lg_state):
     """
     Create and compile the workflow graph.  
     This function adds all the nodes and edges to the LangGraph StateGraph,

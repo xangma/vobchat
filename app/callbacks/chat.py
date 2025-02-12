@@ -1,43 +1,22 @@
 import json
 import dash
 from dash import html
+from uuid import uuid4
+
+from stores import app_state_data, map_state_data, place_state_data
 
 from dash import Input, Output, State, ALL
-from dash.exceptions import PreventUpdate
-from langgraph.errors import NodeInterrupt
 
 import dash_bootstrap_components as dbc
 import logging
-from typing import Dict, Any
 
 from dash_extensions.enrich import CycleBreakerInput
+
 logger = logging.getLogger(__name__)
 
 
 def register_chat_callbacks(app, compiled_workflow):
-                
-    @app.callback(
-        Output("chat-display", "children", allow_duplicate=True),
-        Output("chat-input", "value"),
-        Output("app-state", "data", allow_duplicate=True),
-        Input("clear-button", "n_clicks"),
-        State("app-state", "data"),
-        prevent_initial_call=True
-    )
-    def clear_chat(n_clicks, app_state):
-        logger.debug(
-            {"event": "clear_chat", "n_clicks": n_clicks, "app_state": app_state})
-        if not n_clicks:
-            raise PreventUpdate
 
-        new_app_state = (app_state or {}).copy()
-        new_app_state["messages"] = []
-        new_app_state["thread_id"] = (
-            new_app_state.get("thread_id", 0) or 0) + 1
-        logger.debug({"event": "clearing_chat",
-                    "new_app_state": new_app_state})
-
-        return [], "", new_app_state
 
     @app.callback(
         Output("chat-display", "children", allow_duplicate=True),
@@ -46,9 +25,12 @@ def register_chat_callbacks(app, compiled_workflow):
         Output("map-state", "data", allow_duplicate=True),
         Output("place-state", "data", allow_duplicate=True),
         Output("options-container", "children"),
+        Output("thread-id", "data"),
         Input("send-button", "n_clicks"),
         Input({"option_type": ALL, "type": "dynamic-button-user-choice", "index": ALL}, "n_clicks"),
         CycleBreakerInput("retrigger-chat", "data"),
+        Input("thread-id", "data"),
+        Input("reset-button", "n_clicks"),
         State("app-state", "data"),
         State("map-state", "data"),
         State("place-state", "data"),
@@ -61,6 +43,8 @@ def register_chat_callbacks(app, compiled_workflow):
         n_clicks,
         button_clicks,
         retrigger_chat,
+        thread_id,
+        reset__n_clicks,
         app_state,
         map_state,
         place_state,
@@ -84,14 +68,34 @@ def register_chat_callbacks(app, compiled_workflow):
                 "retrigger_chat": retrigger_chat
             }
         })
-
+    
+        
+        # 0) Check if we need to reset the entire application
+        if "reset-button" in ctx_trigger:
+            app_state = app_state_data
+            map_state = map_state_data
+            place_state = place_state_data
+            chat_history = []
+            buttons = []
+            thread_id = None
+            return (
+                chat_history,
+                "",
+                app_state,
+                map_state,
+                place_state,
+                buttons,
+                thread_id
+            )
+            
         # 1) Initialize chat history
             
         if chat_history is None:
             chat_history = []
             
         # Prepare config, etc.
-        thread_id = (app_state or {}).get("thread_id", 0)
+        if not thread_id:
+            thread_id = str(uuid4())
         config = {"configurable": {"thread_id": thread_id}}
 
         logger.debug({"event": "workflow_config", "config": config})
@@ -282,6 +286,7 @@ def register_chat_callbacks(app, compiled_workflow):
             map_state,
             place_state,
             buttons,
+            thread_id
         )
     
     @app.callback(

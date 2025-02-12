@@ -1,9 +1,9 @@
 # app/main.py
+import os
 from dash_extensions.enrich import DashProxy, html, Output, Input, CycleBreakerTransform, CycleBreakerInput
 from configure_logging import configure_enhanced_logging
 configure_enhanced_logging()
-import os
-import dash
+
 import dash_bootstrap_components as dbc
 from dash import html
 import logging
@@ -33,7 +33,7 @@ app = DashProxy(transforms=[CycleBreakerTransform()], external_stylesheets=[dbc.
 # Create workflow
 initial_gdf = get_polygons_by_type('MOD_REG')
 date_ranges_df = get_date_ranges_by_type()
-compiled_workflow = create_workflow(lg_State, initial_gdf)
+compiled_workflow = create_workflow(lg_State)
 
 # Define the main layout
 app.layout = dbc.Container([
