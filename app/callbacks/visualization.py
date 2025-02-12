@@ -2,6 +2,7 @@
 import pandas as pd
 import json
 import plotly.graph_objects as go
+import plotly.express as px
 from dash import no_update
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
@@ -50,15 +51,19 @@ def register_visualization_callbacks(app, compiled_workflow):
             cubes_df = pd.DataFrame(cubes)
             
             cube_ids = cubes_df['Cube_ID'].tolist()
-            g_unit = state.values.get('selected_place_g_unit')
-            all_data = get_all_cube_data({"g_unit": str(g_unit), "cube_ids": cube_ids})
+            g_units = state.values.get('selected_place_g_units')
+            cube_list = []
+            for g_unit in g_units:
+                cube_data = get_all_cube_data({"g_unit": str(g_unit), "cube_ids": cube_ids})
+                cube_list.append(cube_data)
+            all_cube_data = pd.concat(cube_list).reset_index()
             
             # Create dropdown options from all columns except year
             options = [
                 {"label": row['Cube'], "value": row['Cube_ID']}
                 for idx, row in cubes_df.iterrows()
             ]
-            place_state['cube_data'] = all_data.to_json(orient='split')
+            place_state['cube_data'] = all_cube_data.to_json(orient='split')
             return {"display": "block"}, options, place_state
                         
         except Exception as e:
@@ -83,18 +88,29 @@ def register_visualization_callbacks(app, compiled_workflow):
         if not isinstance(selected_cubes, list):
             selected_cubes = [selected_cubes]
         
-        fig = go.Figure()
-        
+        # fig = go.Figure()
+        # g_names = cubes_df['g_name'].unique()
+        dflist = []
         for cube in selected_cubes:
-            tempdf = cubes_df.filter(regex=f"year|{cube[2:]}")
-            for col in tempdf.columns:
-                if col != 'year':
-                    fig.add_trace(go.Scatter(
-                        x=tempdf['year'].values,
-                        y=tempdf[col].values,
-                        name=col,
-                        mode='lines+markers'
-                    ))
+            tempdf = cubes_df.filter(regex=f"g_name|year|{cube[2:]}")
+            dflist.append(tempdf)
+        #     tempdf = cubes_df.filter(regex=f"g_name|year|{cube[2:]}")
+        #     for name in g_names:
+        #         tempdf = cubes_df[cubes_df['g_name'] == name]
+        #         for col in tempdf.columns:
+        #             if col not in ['index','g_name','year']:
+        #                 fig.add_trace(go.Scatter(
+        #                     x=tempdf['year'].values,
+        #                     y=tempdf[col].values,
+        #                     name=name,
+        #                     mode='lines+markers',
+        #                     showlegend=True,
+        #                 ))
+        dfs = pd.concat(dflist)
+        unpivoted_df = pd.melt(dfs, id_vars=['year', 'g_name'], value_vars=dfs.columns[2:])
+        unpivoted_df['merged_name'] = unpivoted_df['g_name'] + ' ' + unpivoted_df['variable']
+        fig = px.line(unpivoted_df, x='year', y='value',
+                         color='merged_name')
         
         fig.update_layout(
             title="Historical Data Visualization",

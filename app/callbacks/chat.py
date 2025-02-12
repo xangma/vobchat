@@ -187,9 +187,16 @@ def register_chat_callbacks(app, compiled_workflow):
                 # Map selection
                 if interrupt_value.get("message") == "map_selection":
                     logger.debug("Map selection interrupt")
+                    if map_state["selected_polygons"]:
+                        unit_types = map_state["unit_types"] + \
+                            interrupt_value["selected_place_g_unit_types"]
+                    else:
+                        unit_types = interrupt_value["selected_place_g_unit_types"]
+                    selected_polygons = map_state["selected_polygons"] + \
+                        interrupt_value["selected_place_g_units"]
                     map_state.update({
-                        "selected_polygons": [interrupt_value["g_unit"]],
-                        "unit_types": [interrupt_value["g_unit_type"]]
+                        "selected_polygons": selected_polygons,
+                        "unit_types": unit_types
                     })
 
                     app_state.update({
@@ -198,7 +205,7 @@ def register_chat_callbacks(app, compiled_workflow):
                         "retrigger_chat": True
                     })
                     compiled_workflow.update_state(
-                        config=config, values={"interrupt_state": False, "selection_idx": None, "selected_place_g_unit": interrupt_value["g_unit"], "selected_place_g_unit_type": interrupt_value["g_unit_type"]})
+                        config=config, values={"interrupt_state": False, "selection_idx": None, "selected_place_g_units": selected_polygons, "selected_place_g_unit_types": unit_types})
                         
                     buttons = []
 
@@ -235,10 +242,24 @@ def register_chat_callbacks(app, compiled_workflow):
                     else:
                         # We need to prompt the user
                         new_history = chat_history[:] + [interrupt_message]
+
+                if interrupt_value.get("current_place_index") or interrupt_value.get("current_unit_index"):
+                    app_state.update({
+                        "retrigger_chat": True
+                    })
+                    if "selected_place_g_places" in interrupt_value:
+                        compiled_workflow.update_state(
+                            config=config, values={"interrupt_state": False, "selection_idx": None, "current_place_index": interrupt_value["current_place_index"], "selected_place_g_places": interrupt_value["selected_place_g_places"]})
+                    if "selected_place_g_units" in interrupt_value:
+                        compiled_workflow.update_state(
+                            config=config, values={"interrupt_state": False, "selection_idx": None, "current_unit_index": interrupt_value["current_unit_index"], "selected_place_g_units": interrupt_value["selected_place_g_units"], "selected_place_g_unit_types": interrupt_value["selected_place_g_unit_types"]})
+                        
                         
                 if new_history:
                     chat_history = new_history
 
+
+                
         # 8) If no interrupt, we present the final AI output from db_res
         #    (only if there's an AI message in the updated state)
         messages = db_res["messages"] if "messages" in db_res else []

@@ -29,6 +29,22 @@ def create_map_layout(initial_gdf):
     """
     Creates the layout that uses Dash Leaflet instead of Plotly.
     """
+    
+    buttons = []
+    
+    for k,v in UNIT_TYPES.items():
+        buttons.append(
+            dbc.Button(
+                v,
+                id={'type': 'unit-filter', 'unit': k},
+                color='primary' if k == 'MOD_REG' else 'secondary',
+                outline=(k != 'MOD_REG'),
+                className="filter-button me-2 mb-2",
+                n_clicks=0,
+                value=k
+            )
+        )
+    
     return html.Div([
         html.H3("Map (Dash Leaflet)"),
 
@@ -36,16 +52,10 @@ def create_map_layout(initial_gdf):
         dbc.Card([
             dbc.CardBody([
                 html.H4("Filter by Unit Type", className="mb-2"),
-                html.Div([
-                    dbc.Button(
-                        unit_type,
-                        id={'type': 'unit-filter', 'unit': unit_type},
-                        color='primary' if unit_type == 'MOD_REG' else 'secondary',
-                        outline=(unit_type != 'MOD_REG'),
-                        className="filter-button me-2 mb-2",
-                        n_clicks=0
-                    ) for unit_type in UNIT_TYPES
-                ], className="d-flex flex-wrap"),
+                html.Div(
+                    buttons,
+                    className="d-flex flex-wrap"
+                ),
 
                 dbc.Button("Reset Filters", id="reset-filters",
                            color="secondary", className="mb-2"),

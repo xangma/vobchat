@@ -4,7 +4,7 @@ from langchain_core.runnables import RunnableLambda
 from langchain_core.messages import ToolMessage
 from pydantic import BaseModel, Field
 from langchain.tools import BaseTool, StructuredTool, tool
-from langchain_community.tools.sql_database.tool import QuerySQLDataBaseTool
+from langchain_community.tools import QuerySQLDataBaseTool
 import pandas as pd
 from typing import List, Annotated
 from config import load_config, get_db
@@ -158,7 +158,7 @@ def find_places_by_name(
     """
     Find place names by provided parameters.
     """
-    types_tuple = tuple(UNIT_TYPES)
+    types_tuple = tuple(UNIT_TYPES.keys())
     query = f"""
         SELECT 
             p.g_place, 
@@ -186,6 +186,7 @@ def find_places_by_name(
         AND ({nation}::integer = 0 OR p.g_nation = {nation}::integer)
         AND ({domain}::integer = 0 OR p.g_domain = {domain}::integer)
         AND ({state}::integer = 0 OR p.g_state = {state}::integer)
+        AND g.g_point_source = 'Own centroid'
         GROUP BY 
             p.g_place, 
             p.g_name, 
@@ -283,6 +284,7 @@ def get_all_cube_data(
     query = f"""
     SELECT 
         d.end_date_decimal as year,
+        u.g_name,
         d.g_unit,
         d.cellref,
         d.g_data as value,
@@ -292,6 +294,7 @@ def get_all_cube_data(
         hgis.g_data d
         JOIN hgis.g_data_map m ON d.cellref = m.cellref
         JOIN hgis.g_data_ent ncube ON m.ncuberef = ncube.ent_id
+        JOIN hgis.g_unit u ON d.g_unit = u.g_unit
     WHERE 
         d.g_unit = '{g_unit}'
         AND m.ncuberef IN ('{cube_ids_str}')
@@ -303,7 +306,7 @@ def get_all_cube_data(
     df = pd.DataFrame(res)
     
     # Pivot the data to create columns for each cube
-    pivot_df = df.pivot(index='year', columns='cellref', values='value').reset_index()
+    pivot_df = df.pivot(index=['g_name', 'year'], columns='cellref', values='value').reset_index()
     return pivot_df
 
 

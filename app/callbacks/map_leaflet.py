@@ -9,7 +9,7 @@ from dash import (
 )
 from dash.exceptions import PreventUpdate
 
-from utils.constants import UNIT_TYPES, TIMELESS_UNIT_TYPES
+from utils.constants import TIMELESS_UNIT_TYPES
 from mapinit import get_polygons_by_type
 
 logger = logging.getLogger(__name__)
