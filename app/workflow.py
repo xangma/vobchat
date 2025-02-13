@@ -8,7 +8,7 @@ import re
 import pandas as pd
 from typing_extensions import TypedDict
 import logging
-from utils.constants import UNIT_THEMES  # Constant definitions for themes
+from utils.constants import UNIT_TYPES, UNIT_THEMES  # Constant definitions for themes
 
 # -------------------------------
 # Import Pydantic for data validation and models
@@ -116,7 +116,7 @@ class lg_State(TypedDict):
     extracted_place_names: List[str]
     extracted_counties: List[str]
     current_place_index: int    # which place we are currently handling
-    current_unit_index: int     # which place's polygon we are handling
+    # current_unit_index: int     # which place's polygon we are handling
     min_year: Optional[int]                              # Start year (if provided)
     max_year: Optional[int]                              # End year (if provided)
     selected_polygons: Optional[List[int]]             # List of polygons (if map selection is used)
@@ -227,8 +227,10 @@ def validate_user_input(state: lg_State) -> lg_State:
     """
     logger.info("Starting user input validation...")
     logger.debug({"current_state": state})
-
-    user_input = state["messages"][-1].content
+    if state["messages"]:
+        user_input = state["messages"][-1].content
+    else:
+        user_input = ""
     logger.debug({"user_input": user_input})
 
     # Use regex to check for a valid UK postcode.
@@ -330,208 +332,123 @@ def multi_place_tool_call(state: lg_State) -> lg_State:
     return state
 
 
-def multi_place_tool_handler(state: lg_State) -> lg_State:
-    logger.info("Handling multi-place results...")
+def process_multi_place_selection(state: lg_State) -> lg_State:
+    logger.info(
+        "Processing multi-place selection and unit type determination...")
 
-    # Recover the big DataFrame
+    # Recover the multi-place search results and initialize place names & index.
     big_df = pd.read_json(state["multi_place_search_df"], orient="records")
-
-    # current_place_index says which place we’re handling right now
-    i = state.get("current_place_index", 0)
     place_names = state.get("extracted_place_names", [])
+    current_index = state.get("current_place_index", 0)
 
-    if i >= len(place_names):
-        # We've already handled all requested places
-        logger.info("All places handled; proceeding.")
+    # If no more places to process, reset the index and continue.
+    if current_index >= len(place_names):
+        logger.info("All places processed.")
+        state["current_place_index"] = 0
         return state
 
-    # Filter the big DF for rows belonging to place i
-    sub_df = big_df[big_df["requested_place_index"] == i].copy()
+    # Filter for the current place in the search results.
+    sub_df = big_df[big_df["requested_place_index"] == current_index].reset_index(drop=True).copy()
     if sub_df.empty:
-        # If no matches for this place, just let the user know
-        logger.warning(f"No DB matches for place index={i}")
-        place_name = place_names[i] if i < len(place_names) else "?"
+        logger.warning(
+            f"No DB matches for place '{place_names[current_index]}'")
         state["messages"].append(
-            AIMessage(content=f"No matches found for '{place_name}'.")
+            AIMessage(
+                content=f"No matches found for '{place_names[current_index]}'.")
         )
-        # Move on to the next place
-        state["current_place_index"] = i + 1
+        state["current_place_index"] = current_index + 1
         return state
 
-    selection_idx = state.get("selection_idx", None)
-
-    # If user has not made a selection yet, and sub_df has multiple rows, interrupt
+    # If multiple place matches exist and no selection has been made yet, prompt for one.
+    selection_idx = state.get("selection_idx")
     if selection_idx is None and len(sub_df) > 1:
-        logger.info(f"Multiple matches for place {i}, raising NodeInterrupt.")
-        button_options = []
-        for row_i, row in sub_df.iterrows():
-            label = f"{row['g_name']}, {row['county_name']} (ID={row['g_place']})"
-            button_options.append({
+        logger.info(
+            f"Multiple matches for place '{place_names[current_index]}'; prompting selection.")
+        button_options = [
+            {
                 "option_type": "place",
-                "label": label,
-                "value": row_i  # store the actual row index
-            })
-        # Raise an interrupt so that the UI can show multiple selection buttons
+                "label": f"{row['g_name']}, {row['county_name']}",
+                "value": row_i
+            }
+            for row_i, row in sub_df.iterrows()
+        ]
         state['interrupt_state'] = True
         raise NodeInterrupt(value={
-            "message": f"Multiple places found for '{place_names[i]}'. Please pick the correct one:",
-            "options": button_options
+            "message": f"Multiple places found for '{place_names[current_index]}'. Please pick the correct one:",
+            "options": button_options,
+            "selected_place_g_places": state.get("selected_place_g_places", []),
         })
-
-    # If there is exactly one match, or user has picked one
-    chosen_row = None
-    if len(sub_df) == 1 and selection_idx is None:
-        # Single row automatically chosen
-        chosen_row = sub_df.iloc[0]
-    elif selection_idx is not None:
-        # User has chosen from the multiple
+    # Choose the row if selection is made or only one result exists.
+    if selection_idx is not None and len(sub_df) > 1 and current_index == len(state["selected_place_g_places"]):
         if selection_idx in sub_df.index:
-            chosen_row = sub_df.loc[selection_idx]
+            chosen_row = pd.DataFrame([sub_df.loc[selection_idx]])
+            selection_idx = None
         else:
-            # Safety check
             raise ValueError(f"Invalid selection_idx={selection_idx}")
+    elif current_index + 1 == len(state.get("selected_place_g_places", [])):
+        chosen_row = pd.DataFrame(sub_df[sub_df['g_place'] == state["selected_place_g_places"][current_index]])
+    else:
+        chosen_row = pd.DataFrame([sub_df.iloc[0]])
+    state.setdefault("selected_place_g_places", []).append(
+        int(chosen_row["g_place"]))
+    state["selected_place_g_places"] = list(set(state["selected_place_g_places"]))
+    # Process unit (g_unit_type) selection:
+    # Explode unit information if multiple units are available.
+    df = chosen_row.explode(["g_unit", "g_unit_type"]).dropna(subset=["g_unit"]).reset_index(drop=True)
+    df["g_unit"] = df["g_unit"].astype(int)
 
-    if chosen_row is not None:
-        # Clear the selection so we don't re-use it next time
-        state["selection_idx"] = None
-
-        # Record that chosen place's g_place in our lists
-        if "selected_place_g_places" not in state:
-            state["selected_place_g_places"] = []
-        state["selected_place_g_places"].append(int(chosen_row["g_place"]))
-
-        # Also store the entire row if you want (as JSON), e.g. for debugging:
-        # if "selected_places" not in state:
-        #     state["selected_places"] = []
-        # state["selected_places"].append(chosen_row.to_json())
-
-        # Add a message about what was chosen
-        msg = f"Selected place: {chosen_row['g_name']} (ID={chosen_row['g_place']})"
-        state["messages"].append(AIMessage(content=msg))
-
-        # Done with place i -> move to next place
-        state["current_place_index"] = i + 1
-
-        # If we haven't handled all places, we can raise an interrupt
-        # just to “re-trigger” the same node until done
-        if state["current_place_index"] < len(place_names):
-            logger.info(
-                "Not all places handled yet; raising interrupt to pick the next place.")
-            state['interrupt_state'] = True
-            raise NodeInterrupt(value={
-                "message": f"Now let’s pick the next place: {place_names[state['current_place_index']]}",
-                "current_place_index": state["current_place_index"],
-                "selected_place_g_places": state["selected_place_g_places"]
-            })
-
-    # If we get here with no chosen_row, it means sub_df==1 but we do not get there logically.
-    # Or sub_df>1 but we skip the interrupt logic.
-    # Usually we either raise or pick a row. So we should be safe.
-
-    logger.info("All place selections completed or advanced.")
-    state["current_place_index"] = 0
-    return state
-
-
-def handle_user_place_selection(state: lg_State) -> lg_State:
-    logger.info("Handling polygon selection for each chosen place...")
-
-    # Suppose we already have a list of g_places in state["selected_place_g_places"]
-    selected_g_places = state.get("selected_place_g_places", [])
-    if not selected_g_places:
-        logger.warning("No places selected yet.")
-        state["messages"].append(AIMessage(content="No places selected yet."))
-        return state
-
-    selection_idx = state.get("selection_idx", None)
-    
-    # Track which place’s polygons we’re currently picking
-    current_unit_index = state.get("current_unit_index", 0)
-    if current_unit_index >= len(selected_g_places):
-        # We’ve already assigned polygons to all places
-        logger.info("All polygons assigned.")
-        return state
-
-    # For whichever place we’re on, get the unit_types:
-    big_df = pd.read_json(state["multi_place_search_df"], orient="records")
-    current_g_place = selected_g_places[current_unit_index]
-    selected_place_df = big_df[big_df["g_place"] == current_g_place]
-    
-    # explode the g_unit_types column
-    exploded_df = selected_place_df.explode(["g_unit", "g_unit_type"])
-    exploded_df = exploded_df.dropna(subset=["g_unit"]).reset_index(drop=True).copy()
-    exploded_df["g_unit"] = exploded_df["g_unit"].astype(int)
-    logger.debug({"exploded_unit_data": exploded_df})
-    
-    if "selected_place_g_units" not in state:
-        state["selected_place_g_units"] = []
-    if "selected_place_g_unit_types" not in state:
-        state["selected_place_g_unit_types"] = []
-    
-    if current_unit_index < len(selected_g_places) and selection_idx is None:
-        if len(exploded_df) == 0:
-            logger.warning("No valid g_units found")
-            state["messages"].append(
-                AIMessage(content="No valid g_unit was found for the selected place."))
-            return state
-        elif len(exploded_df) == 1:
-            logger.info("Single unit found - processing automatically")
-            single_row = exploded_df.iloc[0]
-            state["selected_place_g_units"].append(int(single_row["g_unit"]))
-            state["selected_place_g_unit_types"].append(single_row["g_unit_type"] or "MOD_DIST")
-
-            logger.info("Raising NodeInterrupt for map selection")
-            state['interrupt_state'] = True
-
-            raise NodeInterrupt(value={
-                "message": "map_selection",
-                "current_unit_index": state["current_unit_index"],
-                "selected_place_g_units": state["selected_place_g_units"],
-                "selected_place_g_unit_types": state["selected_place_g_unit_types"]
-            })
-        elif len(exploded_df) > 1:
-            logger.info(
-                "Multiple units found - preparing selection options")
-            button_options = []
-            for i, row in exploded_df.iterrows():
-                label = f"{row['g_unit_type']} (ID={row['g_unit']})"
-                button_options.append({
-                    "option_type": "unit_selection",
-                    "label": label,
-                    "value": i
-                })
-            logger.debug({"button_options": button_options})
-            state['interrupt_state'] = True
-
-            raise NodeInterrupt(value={
-                "message": "Multiple (g_unit, g_unit_type) options found. Please select one.",
-                "options": button_options
-            })
-
-    if selection_idx is not None:
-        selected_unit = exploded_df.iloc[selection_idx]
-        state["selected_place_g_units"].append(str(selected_unit["g_unit"]))
-        state["selected_place_g_unit_types"].append(selected_unit["g_unit_type"])
-
-        response_message = AIMessage(
-            content=f"Unit selected: {selected_unit['g_unit_type']} (ID={selected_unit['g_unit']})"
-        )
-        state["messages"].append(response_message)
-
-        state["current_unit_index"] = current_unit_index + 1
-
-        if state["current_unit_index"] < len(selected_g_places):
-            state['interrupt_state'] = True
+    # If there are multiple unit options and no unit selection has been made, prompt the user.
+    if selection_idx is None and len(df) > 1:
+        logger.info(
+            "Multiple unit options found; prompting user for selection.")
+        button_options = [
+            {
+                "option_type": "unit_selection",
+                "label": f"{UNIT_TYPES.get(row['g_unit_type'], row['g_unit_type'])}",
+                "value": i
+            }
+            for i, row in df.iterrows()
+        ]
+        state['interrupt_state'] = True
         raise NodeInterrupt(value={
-            "message": f"map_selection",
-            "current_unit_index": state["current_unit_index"],
-            "selected_place_g_units": state["selected_place_g_units"],
-            "selected_place_g_unit_types": state["selected_place_g_unit_types"]
+            "message": f"Multiple unit options found for {place_names[current_index]}. Please select one.",
+            "options": button_options,
+            "selected_place_g_places": state["selected_place_g_places"],
         })
-    
-    logger.debug({"updated_state": state})
-    state["current_unit_index"] = 0
+
+    # Determine the selected unit.
+    if selection_idx is not None and len(df) > 1:
+        selected_unit = df.iloc[int(selection_idx)]
+    else:
+        selected_unit = df.iloc[0]
+
+    # Save the unit selection.
+    state.setdefault("selected_place_g_units", []).append(
+        int(selected_unit["g_unit"]))
+    state.setdefault("selected_place_g_unit_types", []).append(
+        selected_unit["g_unit_type"] or "MOD_DIST")
+    state["selected_place_g_units"] = list(set(state["selected_place_g_units"]))
+    # Confirm the selection to the user.
+    msg = (f"You have selected '{place_names[current_index]}' in '{selected_unit['county_name']}' "
+           f"with unit type '{UNIT_TYPES.get(selected_unit['g_unit_type'], selected_unit['g_unit_type'])}'.")
+    state["messages"].append(AIMessage(content=msg))
+
+    # Reset the selection index for the next round.
     state["selection_idx"] = None
+    # Move on to the next place.
+    state["current_place_index"] = current_index + 1
+
+    if state["current_place_index"] < len(place_names):
+        # Optionally, raise an interrupt to notify the user about the next place.
+        state['interrupt_state'] = True
+    raise NodeInterrupt(value={
+        "message": "map_selection",
+        "current_place_index": state["current_place_index"],
+        "selected_place_g_places": state["selected_place_g_places"],
+        "selected_place_g_units": state["selected_place_g_units"],
+        "selected_place_g_unit_types": state["selected_place_g_unit_types"]
+    })
+
     return state
 
 
@@ -542,7 +459,7 @@ def get_place_themes_node(state: lg_State) -> lg_State:
     logger.info("Starting theme retrieval for selected place...")
     logger.debug({"current_state": state})
 
-    selected_place_g_units = state.get("selected_place_g_units")
+    selected_place_g_units = state.get("selected_place_g_units", [])
     themes_df_list = []
     for selected_place_g_unit in selected_place_g_units:
         try:
@@ -557,9 +474,10 @@ def get_place_themes_node(state: lg_State) -> lg_State:
                 content=f"Error retrieving themes: {str(e)}"
             )
             state["messages"].append(response_message)
-    common_themes = pd.concat(
+    if themes_df_list:
+        common_themes = pd.concat(
         themes_df_list, ignore_index=True, axis=0).drop_duplicates()
-    state["selected_place_themes"] = common_themes.to_json(index=True)
+        state["selected_place_themes"] = common_themes.to_json(index=True)
 
     logger.debug({"updated_state": state})
     return state
@@ -656,7 +574,7 @@ def get_place_themes_handler(state: lg_State) -> lg_State:
 def find_cubes_node(state: lg_State) -> lg_State:
     logger.info("Starting cube retrieval for multiple polygons...")
     logger.debug({"current_state": state})
-
+    
     g_units = state.get("selected_place_g_units", [])
     if not g_units:
         state["messages"].append(
@@ -724,9 +642,9 @@ def check_map_selection_node(state: lg_State) -> lg_State:
 
     selected_polygons = state.get("selected_polygons") or []
     if len(selected_polygons) > 0:
-        logger.info({"map_selection": {"g_unit": selected_polygons[0]}})
-        state["selected_place_g_units"] = selected_polygons[0]
-        msg = f"Map selection detected: using g_unit={selected_polygons[0]}"
+        logger.info({"map_selection": {"g_unit": selected_polygons}})
+        state["selected_place_g_units"] = selected_polygons
+        msg = f"Map selection detected: using g_unit={selected_polygons}"
         state["messages"].append(AIMessage(content=msg))
     else:
         logger.info("No map selection found")
@@ -784,9 +702,8 @@ def create_workflow(lg_state):
     workflow.add_node("validate_user_input", validate_user_input)
     workflow.add_node("postcode_tool_call", postcode_tool_call)
     workflow.add_node("multi_place_tool_call", multi_place_tool_call)
-    workflow.add_node("multi_place_tool_handler", multi_place_tool_handler)
-    workflow.add_node("handle_user_place_selection",
-                      handle_user_place_selection)
+    workflow.add_node("process_multi_place_selection",
+                      process_multi_place_selection)
     workflow.add_node("get_place_themes_node", get_place_themes_node)
     workflow.add_node("get_place_themes_handler", get_place_themes_handler)
     workflow.add_node("find_cubes_node", find_cubes_node)
@@ -816,10 +733,8 @@ def create_workflow(lg_state):
     )
 
     # Add the remaining edges to connect the nodes sequentially.
-    workflow.add_edge("multi_place_tool_call", "multi_place_tool_handler")
-    workflow.add_edge("multi_place_tool_handler",
-                      "handle_user_place_selection")
-    workflow.add_edge("handle_user_place_selection", "get_place_themes_node")
+    workflow.add_edge("multi_place_tool_call", "process_multi_place_selection")
+    workflow.add_edge("process_multi_place_selection", "get_place_themes_node")
     workflow.add_edge("get_place_themes_node", "get_place_themes_handler")
     workflow.add_edge("get_place_themes_handler", "find_cubes_node")
     workflow.add_edge("find_cubes_node", END)

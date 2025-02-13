@@ -102,10 +102,12 @@ def register_chat_callbacks(app, compiled_workflow):
 
         if map_state.get('selected_polygons'):
             compiled_workflow.update_state(config=config, values={
-                                           'selected_polygons': map_state['selected_polygons'], 'selected_place_g_unit_type': map_state['unit_types']})
+                                           'selected_polygons': map_state['selected_polygons'], 'selected_place_g_unit_types': map_state['unit_types']})
 
         # 2) Check triggers: button vs. send
         selection_idx = None
+        values = {"selection_idx": selection_idx}
+        compiled_workflow.update_state(config=config, values=values)
         if 'dynamic-button-user-choice' in ctx_trigger:
             # Identify which button was clicked
             selection_data = json.loads(ctx_trigger.split(".")[0])
@@ -185,6 +187,9 @@ def register_chat_callbacks(app, compiled_workflow):
                         "button_options": options,
                         "awaiting_user_selection": True
                     })
+                    selected_place_g_places = interrupt_value.get("selected_place_g_places", [])
+                    values = {"selected_place_g_places": selected_place_g_places}
+                    compiled_workflow.update_state(config=config, values=values)
                     new_history = chat_history[:] + [interrupt_message]
 
 
@@ -199,7 +204,7 @@ def register_chat_callbacks(app, compiled_workflow):
                     selected_polygons = map_state["selected_polygons"] + \
                         interrupt_value["selected_place_g_units"]
                     map_state.update({
-                        "selected_polygons": selected_polygons,
+                        "selected_polygons": [str(i) for i in selected_polygons],
                         "unit_types": unit_types
                     })
 
@@ -247,16 +252,16 @@ def register_chat_callbacks(app, compiled_workflow):
                         # We need to prompt the user
                         new_history = chat_history[:] + [interrupt_message]
 
-                if interrupt_value.get("current_place_index") or interrupt_value.get("current_unit_index"):
+                if interrupt_value.get("current_place_index"):
                     app_state.update({
                         "retrigger_chat": True
                     })
-                    if "selected_place_g_places" in interrupt_value:
-                        compiled_workflow.update_state(
-                            config=config, values={"interrupt_state": False, "selection_idx": None, "current_place_index": interrupt_value["current_place_index"], "selected_place_g_places": interrupt_value["selected_place_g_places"]})
                     if "selected_place_g_units" in interrupt_value:
                         compiled_workflow.update_state(
-                            config=config, values={"interrupt_state": False, "selection_idx": None, "current_unit_index": interrupt_value["current_unit_index"], "selected_place_g_units": interrupt_value["selected_place_g_units"], "selected_place_g_unit_types": interrupt_value["selected_place_g_unit_types"]})
+                            config=config, values={"interrupt_state": False, "selection_idx": None, "current_place_index": interrupt_value["current_place_index"], "selected_place_g_places": interrupt_value["selected_place_g_places"], "selected_place_g_unit_types": interrupt_value["selected_place_g_unit_types"]})
+                    # if "selected_place_g_units" in interrupt_value:
+                    #     compiled_workflow.update_state(
+                    #         config=config, values={"interrupt_state": False, "selection_idx": None, "current_unit_index": interrupt_value["current_unit_index"], "selected_place_g_units": interrupt_value["selected_place_g_units"], "selected_place_g_unit_types": interrupt_value["selected_place_g_unit_types"]})
                         
                         
                 if new_history:
