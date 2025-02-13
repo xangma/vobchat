@@ -161,6 +161,10 @@ def register_chat_callbacks(app, compiled_workflow):
                 interrupt_value = interrupt.value
                 logger.debug({"event": "processing_interrupt",
                             "interrupt_value": interrupt_value})
+                
+                # update the workflow state with the interrupt data
+                compiled_workflow.update_state(
+                    config=config, values={"interrupt_data": interrupt_value})
 
                 # Multiple choice "options" interrupt
                 if "options" in interrupt_value:
@@ -239,6 +243,14 @@ def register_chat_callbacks(app, compiled_workflow):
                     new_history = chat_history[:] + [interrupt_message]
                     app_state.update({"show_visualization": True})
 
+                elif interrupt_value.get("assistant_message"):
+                    logger.debug("Assistant message interrupt")
+                    assistant_message = interrupt_value.get(
+                        "message")
+                    interrupt_message = html.Div(
+                        f"AI: {assistant_message}", className="mb-2 text-primary")
+                    new_history = chat_history[:] + [interrupt_message]
+                
                 # Otherwise it's a "text input" interrupt
                 else:
                     logger.debug("Text input interrupt")
