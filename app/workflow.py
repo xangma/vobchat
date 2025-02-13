@@ -8,7 +8,8 @@ import re
 import pandas as pd
 from typing_extensions import TypedDict
 import logging
-from utils.constants import UNIT_TYPES, UNIT_THEMES  # Constant definitions for themes
+# Constant definitions for themes
+from utils.constants import UNIT_TYPES, UNIT_THEMES
 
 # -------------------------------
 # Import Pydantic for data validation and models
@@ -99,29 +100,45 @@ postcode_regex = (
 # ----------------------------------------------------------------------------------------
 
 # Define the state type (using TypedDict) that will be passed between nodes in the workflow.
+
+
 class lg_State(TypedDict):
-    messages: Annotated[List[AnyMessage], add_messages]  # List of messages in the conversation
-    selection_idx: Optional[int]                         # Index for any user selection (e.g., from buttons)
-    selected_place: Optional[str]                        # JSON representation of the selected place from DB
-    selected_place_g_places: List[Optional[int]]                # The g_place identifier for the selected place
+    # List of messages in the conversation
+    messages: Annotated[List[AnyMessage], add_messages]
+    # Index for any user selection (e.g., from buttons)
+    selection_idx: Optional[int]
+    # JSON representation of the selected place from DB
+    selected_place: Optional[str]
+    # The g_place identifier for the selected place
+    selected_place_g_places: List[Optional[int]]
     # The g_unit identifier for the selected place
     selected_place_g_units: List[Optional[int]]
     # The g_unit_type for the selected place
     selected_place_g_unit_types: List[Optional[str]]
-    selected_place_themes: Optional[str]                 # JSON representation of themes available for the selected place
-    selected_theme: Optional[str]                        # JSON representation of the selected theme
-    is_postcode: bool                                    # Flag indicating if a valid postcode was extracted
-    extracted_postcode: Optional[str]                    # Extracted postcode from the user's message
-    extracted_theme: Optional[str]                       # Extracted theme from the user's message
+    # JSON representation of themes available for the selected place
+    selected_place_themes: Optional[str]
+    # JSON representation of the selected theme
+    selected_theme: Optional[str]
+    # Flag indicating if a valid postcode was extracted
+    is_postcode: bool
+    # Extracted postcode from the user's message
+    extracted_postcode: Optional[str]
+    # Extracted theme from the user's message
+    extracted_theme: Optional[str]
     extracted_place_names: List[str]
     extracted_counties: List[str]
     current_place_index: int    # which place we are currently handling
     # current_unit_index: int     # which place's polygon we are handling
-    min_year: Optional[int]                              # Start year (if provided)
-    max_year: Optional[int]                              # End year (if provided)
-    selected_polygons: Optional[List[int]]             # List of polygons (if map selection is used)
-    interrupt_state: bool                                # Flag to indicate that the node has interrupted the workflow
-    multi_place_search_df: Optional[str]                 # JSON representation of the search results for multiple places
+    # Start year (if provided)
+    min_year: Optional[int]
+    # End year (if provided)
+    max_year: Optional[int]
+    # List of polygons (if map selection is used)
+    selected_polygons: Optional[List[int]]
+    # Flag to indicate that the node has interrupted the workflow
+    interrupt_state: bool
+    # JSON representation of the search results for multiple places
+    multi_place_search_df: Optional[str]
 
 # ----------------------------------------------------------------------------------------
 # CHAINS AND PYDANTIC MODELS FOR STRUCTURED OUTPUT
@@ -168,9 +185,12 @@ initial_query_chain = initial_query_prompt | model.with_structured_output(
 # -------------------------------
 # Define a Pydantic model for theme decision output
 # -------------------------------
+
+
 class ThemeDecision(BaseModel):
     theme_code: str = Field(...,
                             description="The selected theme code from UNIT_THEMES, e.g. T_POP")
+
 
 # Create a prompt template and chain for deciding the appropriate theme based on the user's question.
 choose_theme_prompt = ChatPromptTemplate.from_messages([
@@ -196,6 +216,7 @@ choose_theme_chain = choose_theme_prompt | model.with_structured_output(
 # ----------------------------------------------------------------------------------------
 # NODE DEFINITIONS
 # ----------------------------------------------------------------------------------------
+
 
 def extract_initial_query_node(state: lg_State) -> lg_State:
     """
@@ -273,10 +294,13 @@ def postcode_tool_call(state: lg_State) -> lg_State:
             logger.info("Units found for postcode")
             # Update the state with details from the database query.
             state["selected_place"] = response.to_json(index=True)
-            state["selected_place_g_units"].append(int(response["g_unit"].values[0]))
-            state["selected_place_g_places"].append(int(response["g_place"].values[0]))
+            state["selected_place_g_units"].append(
+                int(response["g_unit"].values[0]))
+            state["selected_place_g_places"].append(
+                int(response["g_place"].values[0]))
         else:
-            logger.warning(f"No units found for postcode: {extracted_postcode}")
+            logger.warning(
+                f"No units found for postcode: {extracted_postcode}")
             state["messages"].append(
                 AIMessage(content="No units found for that postcode.")
             )
@@ -348,7 +372,8 @@ def process_multi_place_selection(state: lg_State) -> lg_State:
         return state
 
     # Filter for the current place in the search results.
-    sub_df = big_df[big_df["requested_place_index"] == current_index].reset_index(drop=True).copy()
+    sub_df = big_df[big_df["requested_place_index"] ==
+                    current_index].reset_index(drop=True).copy()
     if sub_df.empty:
         logger.warning(
             f"No DB matches for place '{place_names[current_index]}'")
@@ -386,15 +411,18 @@ def process_multi_place_selection(state: lg_State) -> lg_State:
         else:
             raise ValueError(f"Invalid selection_idx={selection_idx}")
     elif current_index + 1 == len(state.get("selected_place_g_places", [])):
-        chosen_row = pd.DataFrame(sub_df[sub_df['g_place'] == state["selected_place_g_places"][current_index]])
+        chosen_row = pd.DataFrame(
+            sub_df[sub_df['g_place'] == state["selected_place_g_places"][current_index]])
     else:
         chosen_row = pd.DataFrame([sub_df.iloc[0]])
     state.setdefault("selected_place_g_places", []).append(
         int(chosen_row["g_place"]))
-    state["selected_place_g_places"] = list(set(state["selected_place_g_places"]))
+    state["selected_place_g_places"] = list(
+        set(state["selected_place_g_places"]))
     # Process unit (g_unit_type) selection:
     # Explode unit information if multiple units are available.
-    df = chosen_row.explode(["g_unit", "g_unit_type"]).dropna(subset=["g_unit"]).reset_index(drop=True)
+    df = chosen_row.explode(["g_unit", "g_unit_type"]).dropna(
+        subset=["g_unit"]).reset_index(drop=True)
     df["g_unit"] = df["g_unit"].astype(int)
 
     # If there are multiple unit options and no unit selection has been made, prompt the user.
@@ -427,7 +455,8 @@ def process_multi_place_selection(state: lg_State) -> lg_State:
         int(selected_unit["g_unit"]))
     state.setdefault("selected_place_g_unit_types", []).append(
         selected_unit["g_unit_type"] or "MOD_DIST")
-    state["selected_place_g_units"] = list(set(state["selected_place_g_units"]))
+    state["selected_place_g_units"] = list(
+        set(state["selected_place_g_units"]))
     # Confirm the selection to the user.
     msg = (f"You have selected '{place_names[current_index]}' in '{selected_unit['county_name']}' "
            f"with unit type '{UNIT_TYPES.get(selected_unit['g_unit_type'], selected_unit['g_unit_type'])}'.")
@@ -463,9 +492,11 @@ def get_place_themes_node(state: lg_State) -> lg_State:
     themes_df_list = []
     for selected_place_g_unit in selected_place_g_units:
         try:
-            logger.info(f"Retrieving themes for unit ID: {selected_place_g_unit}")
+            logger.info(
+                f"Retrieving themes for unit ID: {selected_place_g_unit}")
             # Call the database tool to get themes for the given unit.
-            selected_place_themes = find_themes_for_unit(str(selected_place_g_unit))
+            selected_place_themes = find_themes_for_unit(
+                str(selected_place_g_unit))
             logger.debug({"retrieved_themes": selected_place_themes})
             themes_df_list.append(selected_place_themes)
         except Exception as e:
@@ -476,7 +507,7 @@ def get_place_themes_node(state: lg_State) -> lg_State:
             state["messages"].append(response_message)
     if themes_df_list:
         common_themes = pd.concat(
-        themes_df_list, ignore_index=True, axis=0).drop_duplicates()
+            themes_df_list, ignore_index=True, axis=0).drop_duplicates()
         state["selected_place_themes"] = common_themes.to_json(index=True)
 
     logger.debug({"updated_state": state})
@@ -530,20 +561,26 @@ def get_place_themes_handler(state: lg_State) -> lg_State:
             logger.info(f"LLM decided theme code: {theme_code}")
 
             # Verify that the chosen theme is among those available.
-            available_theme_codes = selected_place_themes["ent_id"].unique().tolist()
+            available_theme_codes = selected_place_themes["ent_id"].unique(
+            ).tolist()
             if theme_code in available_theme_codes:
-                selected_theme = selected_place_themes[selected_place_themes["ent_id"] == theme_code].iloc[0:1]
+                selected_theme = selected_place_themes[selected_place_themes["ent_id"]
+                                                       == theme_code].iloc[0:1]
                 state["selected_theme"] = selected_theme.to_json(index=True)
-                logger.info(f"Automatically selected theme: {state['selected_theme']}")
+                logger.info(
+                    f"Automatically selected theme: {state['selected_theme']}")
                 return state
             else:
-                logger.info("LLM-selected theme is not available for the selected place; falling back to user selection.")
+                logger.info(
+                    "LLM-selected theme is not available for the selected place; falling back to user selection.")
 
         # If no theme is set, check if the user made a selection via interrupt.
         selection_idx = state.get("selection_idx")
         if selection_idx is not None:
-            logger.info(f"Processing theme selection with index: {selection_idx}")
-            selected_theme = selected_place_themes.iloc[int(selection_idx)].to_frame().T
+            logger.info(
+                f"Processing theme selection with index: {selection_idx}")
+            selected_theme = selected_place_themes.iloc[int(
+                selection_idx)].to_frame().T
             state["selected_theme"] = selected_theme.to_json(index=True)
         # If still no theme is set, prepare theme selection options for the user.
         if not state.get("selected_theme"):
@@ -574,7 +611,7 @@ def get_place_themes_handler(state: lg_State) -> lg_State:
 def find_cubes_node(state: lg_State) -> lg_State:
     logger.info("Starting cube retrieval for multiple polygons...")
     logger.debug({"current_state": state})
-    
+
     g_units = state.get("selected_place_g_units", [])
     if not g_units:
         state["messages"].append(
@@ -673,6 +710,7 @@ def decide_if_map_selected(state: lg_State) -> str:
 # WORKFLOW DEFINITION
 # ----------------------------------------------------------------------------------------
 
+
 def create_workflow(lg_state):
     """
     Create and compile the workflow graph.  
@@ -760,7 +798,8 @@ def create_workflow(lg_state):
         )
         with open("compiled_workflow.png", "wb") as png:
             png.write(compiled_workflow_image)
-        logger.info("Successfully saved workflow diagram to compiled_workflow.png")
+        logger.info(
+            "Successfully saved workflow diagram to compiled_workflow.png")
     except Exception as e:
         logger.error("Error generating workflow diagram", exc_info=True)
 

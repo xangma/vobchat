@@ -1,6 +1,7 @@
 import json
 import dash
 from dash import html
+from dash.exceptions import PreventUpdate
 from uuid import uuid4
 
 from stores import app_state_data, map_state_data, place_state_data
@@ -29,8 +30,8 @@ def register_chat_callbacks(app, compiled_workflow):
         Input("send-button", "n_clicks"),
         Input({"option_type": ALL, "type": "dynamic-button-user-choice", "index": ALL}, "n_clicks"),
         CycleBreakerInput("retrigger-chat", "data"),
-        Input("thread-id", "data"),
         Input("reset-button", "n_clicks"),
+        State("thread-id", "data"),
         State("app-state", "data"),
         State("map-state", "data"),
         State("place-state", "data"),
@@ -43,8 +44,8 @@ def register_chat_callbacks(app, compiled_workflow):
         n_clicks,
         button_clicks,
         retrigger_chat,
-        thread_id,
         reset__n_clicks,
+        thread_id,
         app_state,
         map_state,
         place_state,
@@ -52,7 +53,6 @@ def register_chat_callbacks(app, compiled_workflow):
         chat_history,
         buttons,
     ):
-        app_state['retrigger_chat'] = False
 
         ctx = dash.callback_context
         ctx_trigger = ctx.triggered[0]["prop_id"]
@@ -68,7 +68,12 @@ def register_chat_callbacks(app, compiled_workflow):
                 "retrigger_chat": retrigger_chat
             }
         })
-    
+        
+        if not app_state['retrigger_chat'] and "reset-button" not in ctx_trigger and "dynamic-button-user-choice" not in ctx_trigger and (not user_input or user_input.strip() == ""):
+            # No meaningful user interaction
+            raise PreventUpdate
+
+        app_state['retrigger_chat'] = False
         
         # 0) Check if we need to reset the entire application
         if "reset-button" in ctx_trigger:
@@ -118,9 +123,7 @@ def register_chat_callbacks(app, compiled_workflow):
             values = {"selection_idx": selection_idx}
             compiled_workflow.update_state(config=config, values=values)
             buttons = []
-        elif n_clicks is None and (not user_input or user_input.strip() == ""):
-            # No meaningful user interaction
-            raise PreventUpdate
+
 
         # 3) If user typed text, show it in the chat
         if user_input and user_input.strip():
