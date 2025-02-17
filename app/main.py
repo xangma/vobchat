@@ -40,11 +40,17 @@ app.layout = dbc.Container([
         # Add stores at the top level
         create_stores(),
         
-        html.H1("DDME Prototype"),
-        html.P("This is a prototype for a dashboard that combines a chat interface with a map."),
+
         dbc.Row([
-            dbc.Col(create_chat_layout(), md=6),
-            dbc.Col(create_map_layout(initial_gdf), md=6),
+            dbc.Col([
+                    html.H1("DDME Prototype"),
+                    html.P("This is a prototype for a dashboard that combines a chat interface with a map."),
+                    create_chat_layout()
+                    ], md=6),
+            dbc.Col([
+                    html.Br(),
+                    create_map_layout(initial_gdf)
+                    ], md=6),
         ]),
         dbc.Row([
             dbc.Col(create_visualization_layout(), md=12),

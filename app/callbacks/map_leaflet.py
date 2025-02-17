@@ -36,7 +36,6 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
             Input('year-range-slider', 'value'),   # read user’s chosen years
             Input('ctrl-pressed-store', 'data'),
             Input("geojson-layer", "n_clicks"),
-            Input("reset-btn", "n_clicks"),
         ],
         [
             State("map-state", "data"),
@@ -53,7 +52,6 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
         chosen_year_range,
         ctrl_pressed,
         geojson_n_clicks,
-        reset_btn_n_clicks,
         map_state,
         button_ids,
         geojson_clickData,
@@ -132,10 +130,7 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
             logger.debug("Filters updated => stored in map-state")
 
         # 3) Polygon selection logic
-        # A) If user clicked reset-btn
-        if "reset-btn.n_clicks" in triggered_prop_ids and reset_btn_n_clicks:
-            new_map_state["selected_polygons"] = []
-        # B) If geojson-layer clicked
+        # If geojson-layer clicked
         elif "geojson-layer.n_clicks" in triggered_prop_ids and geojson_n_clicks:
             if geojson_clickData:
                 fid = geojson_clickData.get("id")
@@ -223,20 +218,25 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
 
         # (E) Button styles:
         # Mapping from unit type to colour (matching the GeoJSON outline colours).
-        unit_colors = {k:v['color'] for k, v in UNIT_TYPES.items()}
+        unit_colors = {k: v['color'] for k, v in UNIT_TYPES.items()}
         active_set = set(unit_types)
         button_styles = []
         for b in button_ids:
             unit = b["unit"]
             if unit in active_set:
-                # Active buttons get the unit's specific colour.
+                # Active buttons get the unit's specific colour with a filled background.
                 style = {
                     'backgroundColor': unit_colors.get(unit, 'blue'),
                     'borderColor': unit_colors.get(unit, 'blue'),
                     'color': 'white'
                 }
             else:
-                style = {}
+                # Unselected buttons now have a white background, but their outline (border)
+                # is still the unit's specific color and the text is in that color.
+                style = {
+                    'backgroundColor': 'white',
+                    'borderColor': unit_colors.get(unit, 'blue'),
+                }
             button_styles.append(style)
 
         # (F) Update button labels to include a badge showing the count of selected polygons.

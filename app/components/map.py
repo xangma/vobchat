@@ -70,8 +70,7 @@ def create_map_layout(initial_gdf):
             dbc.CardBody([
                 html.H4("Filter by Unit Type", className="mb-2"),
                 html.Div(buttons, className="d-flex flex-wrap"),
-                dbc.Button("Reset Selections", id="reset-selections",
-                           color="secondary", className="mb-2"),
+                # (The reset-selections button has been moved to overlay the map)
                 html.Div([
                     html.H4("Filter by Year Range", className="mt-3 mb-2"),
                     dcc.RangeSlider(
@@ -79,31 +78,47 @@ def create_map_layout(initial_gdf):
                         min=1800,
                         max=datetime.now().year,
                         value=[datetime.now().year, datetime.now().year],
-                        marks={1800: '1800', datetime.now(
-                        ).year: str(datetime.now().year)},
+                        marks={
+                            1800: '1800',
+                            datetime.now().year: str(datetime.now().year)
+                        },
                     ),
                 ], id='year-range-container', style={'display': 'none'}),
             ]),
         ], className="mb-3"),
 
-        dl.Map(
-            [
-                dl.TileLayer(),
-                dl.GeoJSON(
-                    id="geojson-layer",
-                    data=json.loads(initial_gdf.to_json()),
-                    hideout=dict(selected=[]),
-                    zoomToBounds=True,
-                    options=dict(pane="overlayPane"),
-                    style=style_function,
-                ),
-            ],
-            center=[55.0, 10.0],
-            zoom=5,
-            style={'height': '70vh'},
-            id="leaflet-map",
-        ),
+        # Wrap the map in a container with relative positioning.
+        html.Div([
+            dl.Map(
+                [
+                    dl.TileLayer(),
+                    dl.GeoJSON(
+                        id="geojson-layer",
+                        data=json.loads(initial_gdf.to_json()),
+                        hideout=dict(selected=[]),
+                        zoomToBounds=True,
+                        options=dict(pane="overlayPane"),
+                        style=style_function,
+                    ),
+                ],
+                center=[55.0, 10.0],
+                zoom=5,
+                style={'height': '70vh'},
+                id="leaflet-map",
+            ),
+            # Reset button is absolutely positioned over the map.
+            dbc.Button(
+                "Reset Selections",
+                id="reset-selections",
+                color="secondary",
+                style={
+                    'position': 'absolute',
+                    'top': '10px',
+                    'right': '10px',
+                    'zIndex': '1000'
+                }
+            )
+        ], style={'position': 'relative'}),
 
         html.Div(id='debug-output', style={'whiteSpace': 'pre-line'}),
-        html.Button("Reset Selections", id="reset-btn", n_clicks=0),
     ])
