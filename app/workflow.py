@@ -543,7 +543,7 @@ def process_multi_place_selection(state: lg_State) -> lg_State:
         button_options = [
             {
                 "option_type": "unit_selection",
-                "label": f"{UNIT_TYPES.get(row['g_unit_type'], row['g_unit_type'])}",
+                "label": f"{UNIT_TYPES.get(row['g_unit_type'])}",
                 "value": row_i
             }
             for row_i, row in df.iterrows()
@@ -570,7 +570,7 @@ def process_multi_place_selection(state: lg_State) -> lg_State:
             selected_unit["g_unit_type"] or "MOD_DIST")
     # Confirm the selection to the user.
     msg = (f"You have selected '{place_names[current_index]}' in '{selected_unit['county_name']}' "
-           f"with unit type '{UNIT_TYPES.get(selected_unit['g_unit_type'], selected_unit['g_unit_type'])}'.")
+           f"with unit type '{UNIT_TYPES.get(selected_unit['g_unit_type'])}'.")
     state["messages"].append(AIMessage(content=msg))
 
     # Reset the selection index for the next round.

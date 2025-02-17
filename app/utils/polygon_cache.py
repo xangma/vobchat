@@ -4,7 +4,7 @@ import geopandas as gpd
 from datetime import datetime
 import hashlib
 import json
-from utils.constants import UNIT_TYPES, TIMELESS_UNIT_TYPES, UNIT_TYPES_DISK
+from utils.constants import UNIT_TYPES
 from config import load_config, get_db
 import shapely
 import pandas as pd
@@ -83,7 +83,9 @@ class PolygonCache:
         cache_key = self._generate_cache_key(unit_type, start_year, end_year)
 
         # 1) If this unit_type is designated for disk caching, try to load from disk first
-        if unit_type in UNIT_TYPES_DISK:
+        disk_unit_types = [
+            k for k, v in UNIT_TYPES.items() if v['cache_disk']]
+        if unit_type in disk_unit_types:
             gdf_from_disk = self._load_from_disk(cache_key)
             if gdf_from_disk is not None:
                 gdf_from_disk.set_index('g_unit', inplace=True, drop=False)
@@ -97,7 +99,9 @@ class PolygonCache:
 
         # Build the date filter if applicable
         date_filter = ""
-        if start_year is not None and end_year is not None and unit_type not in TIMELESS_UNIT_TYPES:
+        timeless_unit_types = [
+            k for k, v in UNIT_TYPES.items() if v['timeless']]
+        if start_year is not None and end_year is not None and unit_type not in timeless_unit_types:
             date_filter = f"""
             AND util.get_start_year(g_duration) <= {end_year}
             AND util.get_end_year(g_duration) >= {start_year}
@@ -130,7 +134,9 @@ class PolygonCache:
         gdf = self._convert_to_gdf(df)
 
         # If this is a disk-based unit type, save to disk
-        if unit_type in UNIT_TYPES_DISK and not gdf.empty:
+        disk_unit_types = [
+            k for k, v in UNIT_TYPES.items() if v['cache_disk']]
+        if unit_type in disk_unit_types and not gdf.empty:
             self._save_to_disk(gdf, cache_key)
 
         return gdf
@@ -151,7 +157,9 @@ class PolygonCache:
         self._cache.pop(cache_key, None)
 
         # If disk-based caching is used, remove the file too
-        if unit_type in UNIT_TYPES_DISK:
+        disk_unit_types = [
+            k for k, v in UNIT_TYPES.items() if v['cache_disk']]
+        if unit_type in disk_unit_types:
             file_path = self._disk_file_path(cache_key)
             if os.path.exists(file_path):
                 os.remove(file_path)

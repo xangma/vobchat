@@ -11,7 +11,7 @@ from dash import (
 from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 
-from utils.constants import TIMELESS_UNIT_TYPES, UNIT_TYPES
+from utils.constants import UNIT_TYPES
 from mapinit import get_polygons_by_type
 
 logger = logging.getLogger(__name__)
@@ -182,7 +182,8 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
 
         # (A) Show/hide slider based on whether any unit type requires a year filter.
         unit_types = map_state.get("unit_types", ["MOD_REG"])
-        if any(ut not in TIMELESS_UNIT_TYPES for ut in unit_types):
+        timeless_unit_types = [k for k,v in UNIT_TYPES.items() if v['timeless']]
+        if any(ut not in timeless_unit_types for ut in unit_types):
             container_style = {'display': 'block'}
         else:
             container_style = {'display': 'none'}
@@ -196,8 +197,10 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
         # (C) Build polygons for each active unit type.
         year_range = map_state.get("year_range")
         gdfs = []
+        timeless_unit_types = [
+            k for k, v in UNIT_TYPES.items() if v['timeless']]
         for ut in unit_types:
-            if ut not in TIMELESS_UNIT_TYPES and year_range:
+            if ut not in timeless_unit_types and year_range:
                 gdf = get_polygons_by_type(ut, year_range[0], year_range[1])
             else:
                 gdf = get_polygons_by_type(ut)
@@ -220,13 +223,7 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
 
         # (E) Button styles:
         # Mapping from unit type to colour (matching the GeoJSON outline colours).
-        unit_colors = {
-            'CONSTITUENCY': 'green',
-            'LG_DIST': 'orange',
-            'MOD_CNTY': 'purple',
-            'MOD_DIST': 'brown',
-            'MOD_REG': 'blue'
-        }
+        unit_colors = {k:v['color'] for k, v in UNIT_TYPES.items()}
         active_set = set(unit_types)
         button_styles = []
         for b in button_ids:
@@ -279,7 +276,7 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
         button_children = []
         for b in button_ids:
             unit = b["unit"]
-            label = UNIT_TYPES.get(unit, unit)
+            label = UNIT_TYPES.get(unit).get("long_name", unit)
             count = counts.get(unit, 0)
             if count > 0:
                 # Use dbc.Badge to display the count in a circle.

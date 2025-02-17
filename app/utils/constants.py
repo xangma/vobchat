@@ -1,11 +1,12 @@
 # app/utils/constants.py
-UNIT_TYPES = {'CONSTITUENCY': 'Constituency', 
-              'LG_DIST': 'Local Government District', 
-              'MOD_CNTY': 'Modern County', 
-              'MOD_DIST': 'Modern District', 
-              'MOD_REG': 'Modern Region'}
-TIMELESS_UNIT_TYPES = ['MOD_CNTY', 'MOD_DIST', 'MOD_REG']
-UNIT_TYPES_DISK = ['MOD_REG']
+UNIT_TYPES = {
+              'CONSTITUENCY': {'long_name': 'Constituency', 'color': 'green', 'timeless': False, 'cache_disk': False},
+              'LG_DIST': {'long_name': 'Local Government District', 'color': 'orange', 'timeless': False, 'cache_disk': False},
+              'MOD_CNTY': {'long_name': 'Modern County', 'color': 'purple', 'timeless': True, 'cache_disk': True},
+              'MOD_DIST': {'long_name': 'Modern District', 'color': 'brown', 'timeless': True, 'cache_disk': True},
+              'MOD_REG': {'long_name': 'Modern Region', 'color': 'blue', 'timeless': True, 'cache_disk': True},
+              }
+
 UNIT_THEMES = {"T_LAND": "Agriculture & Land Use", 
                "T_HOUS": "Housing", 
                "T_IND": "Industry", 

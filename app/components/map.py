@@ -7,39 +7,34 @@ from datetime import datetime
 import json
 from utils.constants import UNIT_TYPES
 
+color_dict = {k: v['color'] for k, v in UNIT_TYPES.items()}
 # The clientside style function for the GeoJSON layer remains unchanged.
-style_function = assign("""
-function(feature, context) {
+style_function = assign(f"""
+function(feature, context) {{
     const sel = context.hideout.selected || [];
     
     // Mapping unit types to outline colors:
-    const unitColors = {
-        'CONSTITUENCY': 'green',
-        'LG_DIST': 'orange',
-        'MOD_CNTY': 'purple',
-        'MOD_DIST': 'brown',
-        'MOD_REG': 'blue'
-    };
+    const unitColors = {color_dict};
     
     let unitType = feature.properties.g_unit_type || 'MOD_REG';
     let outlineColor = unitColors[unitType] || 'black';
 
-    if (sel.includes(feature.id)) {
-        return {
+    if (sel.includes(feature.id)) {{
+        return {{
             color: 'red',
             fillColor: 'red',
             fillOpacity: 0.5,
             weight: 2
-        };
-    } else {
-        return {
+        }};
+    }} else {{
+        return {{
             color: outlineColor,
             fillColor: 'transparent',
             fillOpacity: 0.0,
             weight: 2
-        };
-    }
-}
+        }};
+    }}
+}}
 """)
 
 
@@ -53,7 +48,7 @@ def create_map_layout(initial_gdf):
     for k, v in UNIT_TYPES.items():
         buttons.append(
             dbc.Button(
-                v,
+                v['long_name'],
                 id={'type': 'unit-filter', 'unit': k},
                 # Initial styling is minimal; the callback will update it.
                 color='secondary',
