@@ -10,5 +10,6 @@ polygons*
 .DS_Store
 langchain
 langgraph
-assets/
+./app/assets/dashExtensions_default.js
+/assets/
 analysedcode.json

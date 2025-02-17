@@ -221,22 +221,23 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
         unit_colors = {k: v['color'] for k, v in UNIT_TYPES.items()}
         active_set = set(unit_types)
         button_styles = []
+
         for b in button_ids:
             unit = b["unit"]
+            unit_color = unit_colors.get(unit, 'blue')
+            # Pass the unit color as a CSS variable (--unit-color) so the CSS can use it on hover.
+            style = {
+                '--unit-color': unit_color,
+                'borderColor': unit_color,
+                'backgroundColor': 'white',
+                'color': '#333',  # Use a dark/grey color for unselected text.
+                'transition': 'background-color 0.3s, color 0.3s'
+            }
             if unit in active_set:
-                # Active buttons get the unit's specific colour with a filled background.
-                style = {
-                    'backgroundColor': unit_colors.get(unit, 'blue'),
-                    'borderColor': unit_colors.get(unit, 'blue'),
+                style.update({
+                    'backgroundColor': unit_color,
                     'color': 'white'
-                }
-            else:
-                # Unselected buttons now have a white background, but their outline (border)
-                # is still the unit's specific color and the text is in that color.
-                style = {
-                    'backgroundColor': 'white',
-                    'borderColor': unit_colors.get(unit, 'blue'),
-                }
+                })
             button_styles.append(style)
 
         # (F) Update button labels to include a badge showing the count of selected polygons.

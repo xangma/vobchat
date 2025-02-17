@@ -170,6 +170,7 @@ def register_chat_callbacks(app, compiled_workflow):
                 if "options" in interrupt_value:
                     logger.debug("Interrupt with multiple button options")
                     options = interrupt_value.get("options", [])
+
                     # The node wants the user to pick from a list of options
                     buttons = [
                         dbc.Button(
@@ -180,10 +181,21 @@ def register_chat_callbacks(app, compiled_workflow):
                                 "index": opt["value"]
                             },
                             color="secondary",
-                            className="mb-2"
+                            className="unit-filter-button me-2 mb-2",
+                            outline=True,
+                            value=opt["value"],
+                            style={
+                                '--unit-color': opt["color"],
+                                'borderColor': opt["color"],
+                                'backgroundColor': 'white',
+                                # Use a dark/grey color for unselected text.
+                                'color': '#333',
+                                'transition': 'background-color 0.3s, color 0.3s'
+                            }
                         )
                         for opt in options
                     ]
+                    
                     prompt_text = interrupt_value.get(
                         "message", "Please choose:")
                     interrupt_message = html.Div(

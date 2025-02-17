@@ -53,7 +53,7 @@ def create_map_layout(initial_gdf):
                 # Initial styling is minimal; the callback will update it.
                 color='secondary',
                 outline=True,
-                className="filter-button me-2 mb-2",
+                className="unit-filter-button me-2 mb-2",
                 n_clicks=0,
                 value=k
             )

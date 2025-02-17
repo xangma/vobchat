@@ -1,0 +1,5 @@
+/* assets/custom.css */
+.unit-filter-button:hover {
+    background-color: var(--unit-color) !important;
+    color: white !important;
+}

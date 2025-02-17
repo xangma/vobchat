@@ -24,7 +24,7 @@ def register_clientside_callbacks(app: Dash):
     app.clientside_callback(
     """
     function() {
-        filterButtons = document.querySelectorAll('.filter-button');
+        filterButtons = document.querySelectorAll('.unit-filter-button');
         filterButtons.forEach(btn => {
             if (!btn) {
                 return window.dash_clientside.no_update;
@@ -37,7 +37,9 @@ def register_clientside_callbacks(app: Dash):
                     // This will change the 'data' property of the dcc.Store
                     dash_clientside.set_props("ctrl-pressed-store", {data: true});
                     // console.log("Ctrl pressed");
-                    
+                } else {
+                    dash_clientside.set_props("ctrl-pressed-store", {data: false});
+                    // console.log("Ctrl not pressed");
                 }
             });
         });

@@ -505,6 +505,7 @@ def process_multi_place_selection(state: lg_State) -> lg_State:
             {
                 "option_type": "place",
                 "label": f"{row['g_name']}, {row['county_name']}",
+                "color": '#333',
                 "value": row_i
             }
             for row_i, row in sub_df.iterrows()
@@ -542,8 +543,9 @@ def process_multi_place_selection(state: lg_State) -> lg_State:
             "Multiple unit options found; prompting user for selection.")
         button_options = [
             {
-                "option_type": "unit_selection",
-                "label": f"{UNIT_TYPES.get(row['g_unit_type'])}",
+                "option_type": "unit_type",
+                "label": f"{UNIT_TYPES.get(row['g_unit_type']).get('long_name')}",
+                "color": UNIT_TYPES.get(row['g_unit_type']).get('color'),
                 "value": row_i
             }
             for row_i, row in df.iterrows()
@@ -570,7 +572,7 @@ def process_multi_place_selection(state: lg_State) -> lg_State:
             selected_unit["g_unit_type"] or "MOD_DIST")
     # Confirm the selection to the user.
     msg = (f"You have selected '{place_names[current_index]}' in '{selected_unit['county_name']}' "
-           f"with unit type '{UNIT_TYPES.get(selected_unit['g_unit_type'])}'.")
+           f"with unit type '{UNIT_TYPES.get(selected_unit['g_unit_type']).get('long_name')}'.")
     state["messages"].append(AIMessage(content=msg))
 
     # Reset the selection index for the next round.
