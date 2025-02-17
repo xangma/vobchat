@@ -1,0 +1,63 @@
+## DDME Prototype: A Conversational AI Dashboard
+
+This project is a prototype for a Dynamic Data and Multimodal Engagement (DDME) system. It combines a chat interface with a map and visualizations to allow users to explore statistical data in a conversational manner.
+
+### Architecture
+
+The system architecture is illustrated in the diagram below:
+
+![High-level architecture diagram](diagram-1.png "High-level architecture diagram")
+
+**Key components:**
+
+* **Plotly Dash Web App:** Provides the user interface (UI) with a chat component, a map component, and a visualization component.
+* **LangChain & LangGraph:** Facilitate interaction with the language model (LLM) and manage the workflow logic.
+* **Ollama:** An interface to a local language model (LLM) such as Llama.
+* **PostgreSQL Database:** Stores the statistical data (in this case, Vision of Britain data).
+* **GeoPandas:** Used for handling geospatial data and polygon information.
+* **Workflow Logic & Tools:** Custom Python code that defines the workflow steps, database queries, and data processing.
+
+### Workflow
+
+The user interacts with the system through the chat interface. The workflow processes the user's input and responds with information and visualizations. The main steps include:
+
+1. **Query Extraction:** The LLM extracts key information from the user's query, such as place names, themes, and year ranges.
+2. **Data Retrieval:** Based on the extracted information, the system queries the database to retrieve relevant data.
+3. **Visualization:** The retrieved data is displayed on the map and/or as charts and graphs.
+4. **User Interaction:** The user can further refine their query or explore different aspects of the data through the chat interface.
+
+### Code Structure
+
+The code is organized into the following directories and files:
+
+* **app:** Contains the main application code.
+    * `main.py`: Initializes the Dash app, defines the layout, and registers callbacks.
+    * `workflow.py`: Defines the workflow logic and nodes using LangGraph.
+    * `callbacks`: Contains callback functions for handling user interactions.
+        * `chat.py`: Callbacks for the chat interface.
+        * `map_leaflet.py`: Callbacks for the map component.
+        * `visualization.py`: Callbacks for the visualization component.
+        * `clientside_callbacks.py`: Client-side callbacks for UI updates.
+    * `components`: Contains UI components.
+        * `chat.py`: Defines the chat layout.
+        * `map.py`: Defines the map layout.
+        * `visualization.py`: Defines the visualization layout.
+    * `config.py`: Loads configuration settings.
+    * `stores.py`: Manages data stores for the application state.
+    * `mapinit.py`: Initializes map-related data.
+    * `tools.py`: Provides helper functions for database queries.
+    * `utils`: Contains utility functions and constants.
+        * `constants.py`: Defines constants for unit types and themes.
+        * `polygon_cache.py`: Caches polygon data for faster retrieval.
+
+### Installation and Running
+
+(This section is a placeholder for the actual installation and running instructions.)
+1. Clone the repository.
+2. Install the required packages: `pip install -r requirements.txt`.
+3. Configure the database connection in `config.py`.
+4. Run the app: `python app/main.py`.
+
+### Future Work
+
+* So much to do!

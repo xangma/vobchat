@@ -93,3 +93,5 @@ flowchart TB
     class User external
     class LMC external
 ```
+[comment]: <> (To render the diagram, use the following command:)
+[comment]: <> (mmdc -i diagram.md -o diagram.png -s 3)
