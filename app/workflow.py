@@ -527,10 +527,9 @@ def process_multi_place_selection(state: lg_State) -> lg_State:
             sub_df[sub_df['g_place'] == state["selected_place_g_places"][current_index]])
     else:
         chosen_row = pd.DataFrame([sub_df.iloc[0]])
-    state.setdefault("selected_place_g_places", []).append(
-        int(chosen_row["g_place"]))
-    state["selected_place_g_places"] = list(
-        set(state["selected_place_g_places"]))
+    if int(chosen_row["g_place"]) not in state.get("selected_place_g_places", []):
+        state.setdefault("selected_place_g_places", []).append(
+            int(chosen_row["g_place"]))
     # Process unit (g_unit_type) selection:
     # Explode unit information if multiple units are available.
     df = chosen_row.explode(["g_unit", "g_unit_type"]).dropna(
@@ -545,9 +544,9 @@ def process_multi_place_selection(state: lg_State) -> lg_State:
             {
                 "option_type": "unit_selection",
                 "label": f"{UNIT_TYPES.get(row['g_unit_type'], row['g_unit_type'])}",
-                "value": i
+                "value": row_i
             }
-            for i, row in df.iterrows()
+            for row_i, row in df.iterrows()
         ]
         state['interrupt_state'] = True
         raise NodeInterrupt(value={
@@ -563,12 +562,12 @@ def process_multi_place_selection(state: lg_State) -> lg_State:
         selected_unit = df.iloc[0]
 
     # Save the unit selection.
-    state.setdefault("selected_place_g_units", []).append(
-        int(selected_unit["g_unit"]))
-    state.setdefault("selected_place_g_unit_types", []).append(
-        selected_unit["g_unit_type"] or "MOD_DIST")
-    state["selected_place_g_units"] = list(
-        set(state["selected_place_g_units"]))
+    if int(selected_unit["g_unit"]) not in state.get("selected_place_g_units", []):
+        state.setdefault("selected_place_g_units", []).append(
+            int(selected_unit["g_unit"]))
+    if selected_unit["g_unit_type"] not in state.get("selected_place_g_unit_types", []):
+        state.setdefault("selected_place_g_unit_types", []).append(
+            selected_unit["g_unit_type"] or "MOD_DIST")
     # Confirm the selection to the user.
     msg = (f"You have selected '{place_names[current_index]}' in '{selected_unit['county_name']}' "
            f"with unit type '{UNIT_TYPES.get(selected_unit['g_unit_type'], selected_unit['g_unit_type'])}'.")

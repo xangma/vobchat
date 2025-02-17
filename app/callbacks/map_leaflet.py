@@ -1,3 +1,4 @@
+# callbacks.py
 import json
 import logging
 import pandas as pd
@@ -8,8 +9,9 @@ from dash import (
     Input, Output, State, ALL
 )
 from dash.exceptions import PreventUpdate
+import dash_bootstrap_components as dbc
 
-from utils.constants import TIMELESS_UNIT_TYPES
+from utils.constants import TIMELESS_UNIT_TYPES, UNIT_TYPES
 from mapinit import get_polygons_by_type
 
 logger = logging.getLogger(__name__)
@@ -27,9 +29,10 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
     @app.callback(
         # Only ONE Output: the updated store
         Output("map-state", "data"),
+        Output("counts-store", "data", allow_duplicate=True),
         [
             Input({'type': 'unit-filter', 'unit': ALL}, 'n_clicks'),
-            Input('reset-filters', 'n_clicks'),
+            Input('reset-selections', 'n_clicks'),
             Input('year-range-slider', 'value'),   # read user’s chosen years
             Input('ctrl-pressed-store', 'data'),
             Input("geojson-layer", "n_clicks"),
@@ -40,12 +43,13 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
             State({'type': 'unit-filter', 'unit': ALL}, 'id'),
             State("geojson-layer", "clickData"),
             State("geojson-layer", "hideout"),
+            State("counts-store", "data"),
         ],
-        prevent_initial_call=True
+        prevent_initial_call=True,
     )
     def update_map_state(
         unit_filter_clicks,
-        reset_filters_clicks,
+        reset_selections_clicks,
         chosen_year_range,
         ctrl_pressed,
         geojson_n_clicks,
@@ -53,7 +57,8 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
         map_state,
         button_ids,
         geojson_clickData,
-        geojson_hideout
+        geojson_hideout,
+        counts,
     ):
         """
         This callback merges ALL user interactions into one updated map-state.
@@ -65,22 +70,27 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
 
         logger.info("update_map_state triggered by %s", triggered_prop_ids)
 
+        # If map_state is None or missing keys, initialize defaults.
         new_map_state = (map_state or {}).copy()
+        if "unit_types" not in new_map_state:
+            new_map_state["unit_types"] = ["MOD_REG"]
+        if "selected_polygons" not in new_map_state:
+            new_map_state["selected_polygons"] = []
 
         # 1) Handle Filter / Year-Range changes
         filter_triggered = False
 
         # A) Reset filters
-        if "reset-filters.n_clicks" in triggered_prop_ids and reset_filters_clicks:
-            logger.debug("reset-filters: clearing to ['MOD_REG']")
+        if "reset-selections.n_clicks" in triggered_prop_ids and reset_selections_clicks:
+            logger.debug("reset-selections: clearing to ['MOD_REG']")
             new_map_state["unit_types"] = ["MOD_REG"]
             new_map_state["selected_polygons"] = []
+            counts = {}
             filter_triggered = True
 
         # B) Check if we clicked or ctrl-clicked a unit-filter button
         unit_type_trigs = [t for t in triggered_prop_ids if "unit-filter" in t]
         for i, t in enumerate(unit_type_trigs):
-            # if unit_filter_clicks[i]:
             dict_part = t.split(".")[0]
             try:
                 dict_part = json.loads(dict_part)
@@ -89,12 +99,11 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
 
             if dict_part and dict_part.get("type") == "unit-filter":
                 clicked_type = dict_part["unit"]
-                prev_types = set(new_map_state.get(
-                    "unit_types", ["MOD_REG"]))
+                prev_types = set(new_map_state.get("unit_types", ["MOD_REG"]))
                 current_types = set(prev_types)
 
                 if ctrl_pressed:
-                    # toggle
+                    # Toggle the clicked unit type.
                     if clicked_type in current_types:
                         current_types.remove(clicked_type)
                         if not current_types:
@@ -103,13 +112,11 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
                         current_types.add(clicked_type)
                     ctrl_pressed = False  # we used ctrl
                 else:
-                    # single choice
+                    # Single choice: set to only the clicked type.
                     current_types = {clicked_type}
 
                 new_map_state["unit_types"] = list(current_types)
-                if current_types - prev_types:
-                    # if new type was added, clear selected polygons
-                    new_map_state["selected_polygons"] = []
+                # Removed the code that cleared "selected_polygons" so that selections are retained.
                 filter_triggered = True
 
         # C) If the user changed the year-range slider
@@ -121,7 +128,6 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
             )
             filter_triggered = True
 
-        # 2) If filter-triggered, we can store a “needs_refresh” or do nothing
         if filter_triggered:
             logger.debug("Filters updated => stored in map-state")
 
@@ -129,7 +135,6 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
         # A) If user clicked reset-btn
         if "reset-btn.n_clicks" in triggered_prop_ids and reset_btn_n_clicks:
             new_map_state["selected_polygons"] = []
-
         # B) If geojson-layer clicked
         elif "geojson-layer.n_clicks" in triggered_prop_ids and geojson_n_clicks:
             if geojson_clickData:
@@ -142,7 +147,7 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
                         selected_ids.append(fid)
                     new_map_state["selected_polygons"] = selected_ids
 
-        return new_map_state
+        return new_map_state, counts
 
     @app.callback(
         [
@@ -153,38 +158,42 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
             Output('geojson-layer', 'data'),
             Output('geojson-layer', 'hideout'),
             Output('debug-output', 'children'),
-            Output({'type': 'unit-filter', 'unit': ALL}, 'color'),
-            Output({'type': 'unit-filter', 'unit': ALL}, 'outline'),
-            # Output("retrigger-chat", "data"),
+            # Update the style property for each unit-filter button.
+            Output({'type': 'unit-filter', 'unit': ALL}, 'style'),
+            # Store the counts of selected polygons for each unit type.
+            Output("counts-store", "data", allow_duplicate=True),
         ],
         Input("map-state", "data"),
         State({'type': 'unit-filter', 'unit': ALL}, 'id'),
         State("app-state", "data"),
-        prevent_initial_call=True
+        State("counts-store", "data"),
+        # Removed prevent_initial_call=True so the callback runs on page load
     )
-    def render_map_display(map_state, button_ids, app_state):
+    def render_map_display(map_state, button_ids, app_state, counts):
         """
-        Fires once each time map-state.data changes.
+        Fires each time map_state.data changes.
         Builds final UI: slider bounds, geojson, debug text, button styling, etc.
+        Also updates each unit-filter button's label to include a badge with the count
+        of selected polygons (if > 0) shown as a circle.
         """
+        # Initialize default map_state if None.
         if not map_state:
-            raise PreventUpdate
+            map_state = {"unit_types": ["MOD_REG"], "selected_polygons": []}
 
-        # (A) Show/hide slider
+        # (A) Show/hide slider based on whether any unit type requires a year filter.
         unit_types = map_state.get("unit_types", ["MOD_REG"])
         if any(ut not in TIMELESS_UNIT_TYPES for ut in unit_types):
             container_style = {'display': 'block'}
         else:
             container_style = {'display': 'none'}
 
-        # (B) Figure out min/max (use date_ranges_df or fallback)
+        # (B) Determine slider min/max values (using defaults/fallback).
         min_year = DEFAULT_MIN_YEAR
         max_year = CURRENT_YEAR
-        step = max(1, (max_year - min_year)//10)
-        slider_marks = {str(y): str(y)
-                        for y in range(min_year, max_year+1, step)}
+        step = max(1, (max_year - min_year) // 10)
+        slider_marks = {str(y): str(y) for y in range(min_year, max_year+1, step)}
 
-        # (C) Build polygons
+        # (C) Build polygons for each active unit type.
         year_range = map_state.get("year_range")
         gdfs = []
         for ut in unit_types:
@@ -206,25 +215,45 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
             geojson_out = {"type": "FeatureCollection", "features": []}
             debug_msg = "No polygons loaded."
 
-        # (D) hideout with selected polygons
+        # (D) Set hideout with selected polygons.
         new_hideout = {"selected": map_state.get("selected_polygons", [])}
 
-        # (E) Button styles
+        # (E) Button styles:
+        # Mapping from unit type to colour (matching the GeoJSON outline colours).
+        unit_colors = {
+            'CONSTITUENCY': 'green',
+            'LG_DIST': 'orange',
+            'MOD_CNTY': 'purple',
+            'MOD_DIST': 'brown',
+            'MOD_REG': 'blue'
+        }
         active_set = set(unit_types)
-        out_colors = []
-        out_outlines = []
+        button_styles = []
         for b in button_ids:
-            if b["unit"] in active_set:
-                out_colors.append("primary")
-                out_outlines.append(False)
+            unit = b["unit"]
+            if unit in active_set:
+                # Active buttons get the unit's specific colour.
+                style = {
+                    'backgroundColor': unit_colors.get(unit, 'blue'),
+                    'borderColor': unit_colors.get(unit, 'blue'),
+                    'color': 'white'
+                }
             else:
-                out_colors.append("secondary")
-                out_outlines.append(True)
+                style = {}
+            button_styles.append(style)
 
-        # retrigger_chat = no_update
-        # if app_state.get("retrigger_chat"):
-        #     retrigger_chat = True
-            
+        # (F) Update button labels to include a badge showing the count of selected polygons.
+        # We'll derive the count by checking which features in geojson_out have been selected.
+        for feature in geojson_out.get("features", []):
+            # Determine the unit type from the feature properties.
+            feat_unit = feature["properties"].get("g_unit_type", "MOD_REG")
+            if feature["id"] in map_state.get("selected_polygons", []):
+                if not counts.get(feat_unit + '_g_units'):
+                    counts[feat_unit + '_g_units'] = []
+                if feature["id"] not in counts[feat_unit + '_g_units']:
+                    counts[feat_unit] = counts.get(feat_unit, 0) + 1
+                    counts[feat_unit + '_g_units'].append(feature["id"])
+
         return (
             container_style,
             min_year,
@@ -233,7 +262,39 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
             geojson_out,
             new_hideout,
             debug_msg,
-            out_colors,
-            out_outlines,
-            # retrigger_chat
+            button_styles,
+            counts,
         )
+
+    @app.callback(
+        Output({'type': 'unit-filter', 'unit': ALL},
+               'children'),
+        Input("counts-store", "data"),
+        State({'type': 'unit-filter', 'unit': ALL}, 'id'),
+    )
+    def update_buttons_w_counts(counts, button_ids):
+        """
+        Update the children (label) property for each unit-filter button.
+        """
+        button_children = []
+        for b in button_ids:
+            unit = b["unit"]
+            label = UNIT_TYPES.get(unit, unit)
+            count = counts.get(unit, 0)
+            if count > 0:
+                # Use dbc.Badge to display the count in a circle.
+                children = [
+                    label,
+                    dbc.Badge(
+                        str(count),
+                        color="light",
+                        text_color="dark",
+                        pill=True,
+                        className="ms-1",
+                        style={"fontSize": "0.8em", "verticalAlign": "middle"}
+                    )
+                ]
+            else:
+                children = label
+            button_children.append(children)
+        return button_children

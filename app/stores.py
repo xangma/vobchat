@@ -46,4 +46,5 @@ def create_stores():
         # Chat related stores
         dcc.Store(id="thread-id", data=None),
         dcc.Store(id="retrigger-chat", data=0),
+        dcc.Store(id="counts-store", data={}),
     ])
