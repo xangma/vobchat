@@ -481,6 +481,7 @@ def process_multi_place_selection(state: lg_State) -> lg_State:
     if current_index >= len(place_names):
         logger.info("All places processed.")
         state["current_place_index"] = 0
+        state["next_node"] = True
         return state
 
     # Filter for the current place in the search results.
@@ -580,17 +581,16 @@ def process_multi_place_selection(state: lg_State) -> lg_State:
     # Move on to the next place.
     state["current_place_index"] = current_index + 1
 
-    if state["current_place_index"] < len(place_names):
+    if state["current_place_index"] <= len(place_names):
         # Optionally, raise an interrupt to notify the user about the next place.
         state['interrupt_state'] = True
-    raise NodeInterrupt(value={
-        "message": "map_selection",
-        "current_place_index": state["current_place_index"],
-        "selected_place_g_places": state["selected_place_g_places"],
-        "selected_place_g_units": state["selected_place_g_units"],
-        "selected_place_g_unit_types": state["selected_place_g_unit_types"]
-    })
-
+        raise NodeInterrupt(value={
+            "message": "map_selection",
+            "current_place_index": state["current_place_index"],
+            "selected_place_g_places": state["selected_place_g_places"],
+            "selected_place_g_units": state["selected_place_g_units"],
+            "selected_place_g_unit_types": state["selected_place_g_unit_types"]
+        })
     return state
 
 
@@ -687,6 +687,8 @@ def get_place_themes_handler(state: lg_State) -> lg_State:
                 logger.info(
                     "LLM-selected theme is not available for the selected place; falling back to user selection.")
 
+        state["next_node"] = False
+
         # If no theme is set, check if the user made a selection via interrupt.
         selection_idx = state.get("selection_idx")
         if selection_idx is not None:
@@ -698,8 +700,12 @@ def get_place_themes_handler(state: lg_State) -> lg_State:
         # If still no theme is set, prepare theme selection options for the user.
         if not state.get("selected_theme"):
             logger.info("Preparing theme selection options for the user")
-            button_options = [
-                {"option_type": "theme", "label": row["labl"], "value": index}
+            button_options = [{
+                "option_type": "theme", 
+                "label": row["labl"], 
+                'color': '#333', 
+                "value": index
+                }
                 for index, row in selected_place_themes.iterrows()
             ]
             logger.debug({"button_options": button_options})
@@ -717,6 +723,7 @@ def get_place_themes_handler(state: lg_State) -> lg_State:
         state["messages"].append(
             AIMessage(content=f"Error processing themes: {str(e)}")
         )
+    state["next_node"] = True
     logger.debug({"updated_state": state})
     return state
 
@@ -774,7 +781,7 @@ def find_cubes_node(state: lg_State) -> lg_State:
     else:
         state["messages"].append(
             AIMessage(content="No cubes found for the selected polygons."))
-
+    state["next_node"] = False
     return state
 
 
