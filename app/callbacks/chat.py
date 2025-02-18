@@ -248,6 +248,9 @@ def register_chat_callbacks(app, compiled_workflow):
                     logger.debug("Cube selection interrupt")
                     cubes = interrupt_value.get("cubes", [])
                     place_state.update({"cubes": cubes})
+                    compiled_workflow.update_state(
+                        config=config, values={"selected_cubes": cubes})
+
                     prompt_text = interrupt_value.get(
                         "message")
                     interrupt_message = html.Div(

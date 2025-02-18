@@ -28,7 +28,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import SystemMessage, AIMessage, HumanMessage, ToolMessage, AnyMessage
 from langchain_core.prompts import ChatPromptTemplate
-from langgraph.errors import NodeInterrupt
+from langgraph.types import interrupt, Command
 from langchain_core.runnables.graph import MermaidDrawMethod
 
 # -------------------------------
@@ -127,8 +127,8 @@ class lg_State(TypedDict):
     extracted_theme: Optional[str]
     extracted_place_names: List[str]
     extracted_counties: List[str]
-    current_place_index: int    # which place we are currently handling
-    # current_unit_index: int     # which place's polygon we are handling
+    # which place we are currently handling
+    current_place_index: int  
     # Start year (if provided)
     min_year: Optional[int]
     # End year (if provided)
@@ -247,7 +247,7 @@ def assistant_node(state: lg_State) -> lg_State:
 
                         1. ** assistant_node **
                         - **Aim: ** Detect if the last user message is intended as a direct query for the assistant(e.g., starting with "Assistant:").
-                        - **Behavior: ** If detected, it invokes the assistant language model to generate an immediate response and interrupts the normal workflow using a `NodeInterrupt`.
+                        - **Behavior: ** If detected, it invokes the assistant language model to generate an immediate response and interrupts the normal workflow using an `interrupt`.
                         - **State Interaction: ** It checks the conversation history in `state["messages"]` and can override normal flow when needed.
 
                         2. ** extract_initial_query_node **
@@ -280,7 +280,7 @@ def assistant_node(state: lg_State) -> lg_State:
 
                         9. **find_cubes_node**  
                         - **Aim:** Retrieve and combine data cubes (datasets) for the selected place and theme, filtering results based on any provided year range.  
-                        - **Behavior:** Aggregates cube data, updates `state["selected_cubes"]`, and may raise a `NodeInterrupt` to display the results interactively.
+                        - **Behavior:** Aggregates cube data, updates `state["selected_cubes"]`, and may raise a `interrupt` to display the results interactively.
 
                         10. **check_map_selection_node**  
                             - **Aim:** Detect if the user has made a map selection (e.g., selecting polygons) and use that information to set the active units directly.  
@@ -292,7 +292,7 @@ def assistant_node(state: lg_State) -> lg_State:
 
                         **Important Points for Your Assistance:**
                         - **State Awareness:** The `state` variable is central to the application’s logic, tracking everything from user messages to selections and workflow progress. Pay close attention to `state['next_node']` to decide if the system should automatically continue processing or prompt the user for input.
-                        - **User Interruptions:** Several nodes can raise a `NodeInterrupt` to pause the automated flow and request user input. When advising on or debugging the system, consider how these interruptions are managed and how user responses update the `state`. The data relevant to the last interrupt (this could be button options presented to the user etc.) is stored in `state['interrupt_data']`.
+                        - **User Interruptions:** Several nodes can raise a `interrupt` to pause the automated flow and request user input. When advising on or debugging the system, consider how these interruptions are managed and how user responses update the `state`. The data relevant to the last interrupt (this could be button options presented to the user etc.) is stored in `state['interrupt_data']`.
                         - **Data Flow:** Each node builds on the previous ones—starting from query extraction to data retrieval and visualization. Understanding this flow is key to providing accurate recommendations.
 
                         Your role is to use this context and the current `state` to offer detailed, actionable insights that help maintain a smooth conversation flow, correctly process user queries, and enhance the overall user experience.
@@ -304,7 +304,7 @@ def assistant_node(state: lg_State) -> lg_State:
                 ]
             )
             # Append the assistant's reply.
-            raise NodeInterrupt(value={
+            interrupt(value={
                 "message": response.content,
                 "assistant_message": True
             })
@@ -512,7 +512,7 @@ def process_multi_place_selection(state: lg_State) -> lg_State:
             for row_i, row in sub_df.iterrows()
         ]
         state['interrupt_state'] = True
-        raise NodeInterrupt(value={
+        interrupt(value={
             "message": f"Multiple places found for '{place_names[current_index]}'. Please pick the correct one:",
             "options": button_options,
             "selected_place_g_places": state.get("selected_place_g_places", []),
@@ -552,7 +552,7 @@ def process_multi_place_selection(state: lg_State) -> lg_State:
             for row_i, row in df.iterrows()
         ]
         state['interrupt_state'] = True
-        raise NodeInterrupt(value={
+        interrupt(value={
             "message": f"Multiple unit options found for {place_names[current_index]}. Please select one.",
             "options": button_options,
             "selected_place_g_places": state["selected_place_g_places"],
@@ -584,7 +584,7 @@ def process_multi_place_selection(state: lg_State) -> lg_State:
     if state["current_place_index"] <= len(place_names):
         # Optionally, raise an interrupt to notify the user about the next place.
         state['interrupt_state'] = True
-        raise NodeInterrupt(value={
+        interrupt(value={
             "message": "map_selection",
             "current_place_index": state["current_place_index"],
             "selected_place_g_places": state["selected_place_g_places"],
@@ -710,14 +710,10 @@ def get_place_themes_handler(state: lg_State) -> lg_State:
             ]
             logger.debug({"button_options": button_options})
             state['interrupt_state'] = True
-            raise NodeInterrupt(value={
+            interrupt(value={
                 "message": "Select a theme for the selected place.",
                 "options": button_options
             })
-    except NodeInterrupt:
-        state['interrupt_state'] = True
-        logger.info("Raising NodeInterrupt for theme selection")
-        raise
     except Exception as e:
         logger.error("Error in theme handler", exc_info=True)
         state["messages"].append(
@@ -741,6 +737,11 @@ def find_cubes_node(state: lg_State) -> lg_State:
     selected_theme = state.get("selected_theme")
     if not selected_theme:
         state["messages"].append(AIMessage(content="No theme selected."))
+        return state
+
+    if state.get('selected_cubes'):
+        logger.info("Cubes already selected.")
+        state["next_node"] = False
         return state
 
     # Suppose we parse out the theme code from the selected_theme JSON:
@@ -772,16 +773,15 @@ def find_cubes_node(state: lg_State) -> lg_State:
     if all_cubes:
         big_cubes = pd.concat(all_cubes, ignore_index=True)
         # store them if you like
-        state["selected_cubes"] = big_cubes.to_json(orient="records")
+        # state["selected_cubes"] = big_cubes.to_json(orient="records")
         # Possibly raise interrupt to open a chart:
-        raise NodeInterrupt(value={
+        interrupt(value={
             "message": "Here are the combined cubes for all selected places.",
             "cubes": big_cubes.to_dict("records")
         })
     else:
         state["messages"].append(
             AIMessage(content="No cubes found for the selected polygons."))
-    state["next_node"] = False
     return state
 
 
@@ -871,6 +871,7 @@ def create_workflow(lg_state):
     workflow.add_node("get_place_themes_handler",
                       with_assistant(get_place_themes_handler))
     workflow.add_node("find_cubes_node", with_assistant(find_cubes_node))
+    workflow.add_node("assistant_node", assistant_node)
 
     # Define the edges between nodes. The workflow starts at the extraction node.
     workflow.add_edge(START, "extract_initial_query_node")
@@ -901,7 +902,8 @@ def create_workflow(lg_state):
     workflow.add_edge("process_multi_place_selection", "get_place_themes_node")
     workflow.add_edge("get_place_themes_node", "get_place_themes_handler")
     workflow.add_edge("get_place_themes_handler", "find_cubes_node")
-    workflow.add_edge("find_cubes_node", END)
+    workflow.add_edge("find_cubes_node", "assistant_node")
+    workflow.add_edge("assistant_node", "assistant_node")
 
     # Compile the workflow; this prepares it for execution.
     logger.info("Compiling workflow...")
