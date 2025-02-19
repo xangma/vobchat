@@ -141,7 +141,6 @@ class lg_State(TypedDict):
     # JSON representation of the search results for multiple places
     multi_place_search_df: Optional[str]
     current_node: Optional[str]
-    next_node: Optional[bool]
 
 # ----------------------------------------------------------------------------------------
 # CHAINS AND PYDANTIC MODELS FOR STRUCTURED OUTPUT
@@ -221,77 +220,27 @@ choose_theme_chain = choose_theme_prompt | model.with_structured_output(
 # ----------------------------------------------------------------------------------------
 
 
-def assistant_node(state: lg_State) -> lg_State:
+def agent_node(state: lg_State) -> lg_State:
     """
-    Checks whether the last HumanMessage is an assistant query (i.e. starts with "Assistant:").
-    If so, it invokes the assistant_model and appends the assistant's reply to the state's messages.
+    The central agent node. After each tool node, execution returns here.
+    The agent consults the assistant (LLM) to allow clarifying discussion.
+    If the last user message starts with "Assistant:", it invokes the assistant model.
     """
-    logger.info("Checking for assistant query...")
-    if state["messages"] and not state.get("next_node"):
+    logger.info("Agent node: consulting assistant...")
+    if state["messages"]:
         last_msg = state["messages"][-1]
-        # Check if the last message is from the user and starts with "Assistant:"
         if isinstance(last_msg, HumanMessage):
-            # Remove the prefix and extract the query.
             query = last_msg.content.strip()
             logger.info(f"Assistant query detected: {query}")
-            # Invoke the assistant language model.
-            response = model.invoke(
-                [
+            response = model.invoke([
                     SystemMessage(
                         content=f"""
                         You are an expert assistant integrated within the DDME prototype application—a dashboard that combines a chat interface, data retrieval, and dynamic visualization(maps and charts). The overall aim of the program is to engage users in conversation, extract relevant information from their queries(such as place names, postcodes, themes, and year ranges), retrieve corresponding data from a database, and then display this data interactively on maps and visualizations.
 
-                        The application is structured as a workflow graph with multiple nodes, each responsible for a specific part of the process. You have full access to the global state variable `state`, which tracks conversation history, user selections, and workflow progress. Notably, the key `state['next_node']` determines whether a user query should be forwarded to the model immediately or if the workflow should continue automatically without interruption.
-
-                        Below is a brief description of each key node in the workflow:
-
-                        1. ** assistant_node **
-                        - **Aim: ** Detect if the last user message is intended as a direct query for the assistant(e.g., starting with "Assistant:").
-                        - **Behavior: ** If detected, it invokes the assistant language model to generate an immediate response and interrupts the normal workflow using an `interrupt`.
-                        - **State Interaction: ** It checks the conversation history in `state["messages"]` and can override normal flow when needed.
-
-                        2. ** extract_initial_query_node **
-                        - **Aim: ** Parse the user's initial query to extract key details such as place names, counties, a requested theme, and optional start and end years.  
-                        - **Behavior:** Utilizes an LLM extraction chain and updates `state` with extracted variables. If sufficient data is available, it sets `state['next_node']` to signal readiness for the next step.
-
-                        3. **validate_user_input**  
-                        - **Aim:** Validate the user input to detect a valid UK postcode using a regular expression.  
-                        - **Behavior:** If a valid postcode is found, it sets flags in `state` (e.g., `is_postcode` and `extracted_postcode`) for further processing.
-
-                        4. **postcode_tool_call**  
-                        - **Aim:** When a valid postcode is detected, query the database to find corresponding units (places).  
-                        - **Behavior:** Calls the postcode tool and updates the state with details such as selected place and unit identifiers. If no units are found, it informs the user by appending an AI message.
-
-                        5. **multi_place_tool_call**  
-                        - **Aim:** Search for multiple places using the extracted place names when no valid postcode is provided.  
-                        - **Behavior:** Aggregates database search results into `state["multi_place_search_df"]` and resets the selection index to process each place in turn.
-
-                        6. **process_multi_place_selection**  
-                        - **Aim:** Handle cases where multiple matches for a place are returned by prompting the user to select the correct one.  
-                        - **Behavior:** Checks the number of matches, interrupts the workflow with a selection prompt (using `state['interrupt_state']`), and updates the state based on the user’s choice.
-
-                        7. **get_place_themes_node**  
-                        - **Aim:** Retrieve available statistical themes for the selected place (or unit) from the database.  
-                        - **Behavior:** Updates `state` with a JSON representation of the available themes.
-
-                        8. **get_place_themes_handler**  
-                        - **Aim:** Decide on the appropriate theme to use—either automatically via an LLM decision if a theme was extracted from the query, or by prompting the user for a selection.  
-                        - **Behavior:** Updates `state["selected_theme"]` accordingly and raises an interrupt if user selection is required.
-
-                        9. **find_cubes_node**  
-                        - **Aim:** Retrieve and combine data cubes (datasets) for the selected place and theme, filtering results based on any provided year range.  
-                        - **Behavior:** Aggregates cube data, updates `state["selected_cubes"]`, and may raise a `interrupt` to display the results interactively.
-
-                        10. **check_map_selection_node**  
-                            - **Aim:** Detect if the user has made a map selection (e.g., selecting polygons) and use that information to set the active units directly.  
-                            - **Behavior:** If a map selection is detected, updates `state["selected_place_g_units"]` accordingly and appends an informative message.
-
-                        11. **Conditional Decision Functions (decide_if_map_selected & decide_next_node)**  
-                            - **Aim:** Evaluate the current state to determine the next node in the workflow.  
-                            - **Behavior:** For example, if a map selection exists, the flow proceeds directly to theme retrieval; if a valid postcode is present, it directs to the postcode processing node; otherwise, it moves to the multi-place tool call.
+                        The application is structured as a workflow graph with multiple nodes, each responsible for a specific part of the process. You have full access to the global state variable `state`, which tracks conversation history, user selections, and workflow progress. 
 
                         **Important Points for Your Assistance:**
-                        - **State Awareness:** The `state` variable is central to the application’s logic, tracking everything from user messages to selections and workflow progress. Pay close attention to `state['next_node']` to decide if the system should automatically continue processing or prompt the user for input.
+                        - **State Awareness:** The `state` variable is central to the application’s logic, tracking everything from user messages to selections and workflow progress. 
                         - **User Interruptions:** Several nodes can raise a `interrupt` to pause the automated flow and request user input. When advising on or debugging the system, consider how these interruptions are managed and how user responses update the `state`. The data relevant to the last interrupt (this could be button options presented to the user etc.) is stored in `state['interrupt_data']`.
                         - **Data Flow:** Each node builds on the previous ones—starting from query extraction to data retrieval and visualization. Understanding this flow is key to providing accurate recommendations.
 
@@ -300,28 +249,22 @@ def assistant_node(state: lg_State) -> lg_State:
                         Here is the current state of the application:
                         {state}
                         """),
-                    HumanMessage(content=query)
-                ]
-            )
-            # Append the assistant's reply.
-            interrupt(value={
-                "message": response.content,
-                "assistant_message": True
-            })
+                HumanMessage(content=query)
+            ])
+            
+            if state.get("interrupt_data"):
+                state["interrupt_data"]['message'] = AIMessage(
+                    content=response.content)
+                state["interrupt_data"]['interrupt_state'] = True
+                state["interrupt_data"]['current_node'] = "agent_node"
+                interrupt(value=state["interrupt_data"])
+            else:
+                state["messages"].append(AIMessage(content=response.content))
+                interrupt(
+                    value={"message": AIMessage(content=response.content)})
 
+            state["messages"].append(AIMessage(content=response.content))
     return state
-
-
-def with_assistant(func):
-    """
-    A decorator that wraps a node function so that after it runs,
-    the assistant_node is also invoked.
-    """
-    def wrapper(state: lg_State) -> lg_State:
-        state = func(state)
-        state = assistant_node(state)
-        return state
-    return wrapper
 
 
 def extract_initial_query_node(state: lg_State) -> lg_State:
@@ -330,6 +273,7 @@ def extract_initial_query_node(state: lg_State) -> lg_State:
     This node extracts the place, county, theme, and year range from the last message in the conversation.
     """
     logger.info("Extracting variables from the initial user query...")
+    state["current_node"] = "extract_initial_query_node"
     # Get the last user message.
     user_message = state["messages"][-1].content if state["messages"] else ""
     try:
@@ -342,9 +286,6 @@ def extract_initial_query_node(state: lg_State) -> lg_State:
         state["extracted_theme"] = extraction.theme
         state["min_year"] = extraction.min_year
         state["max_year"] = extraction.max_year
-        state["current_node"] = "extract_initial_query_node"
-        if len(extraction.places) > 0 or len(extraction.counties) > 0 or extraction.theme:
-            state["next_node"] = True
     except Exception as e:
         logger.error("Error during initial query extraction", exc_info=True)
     return state
@@ -357,6 +298,7 @@ def validate_user_input(state: lg_State) -> lg_State:
     """
 
     logger.info("Starting user input validation...")
+    state["current_node"] = "validate_user_input"
     logger.debug({"current_state": state})
     if state["messages"]:
         user_input = state["messages"][-1].content
@@ -385,6 +327,7 @@ def postcode_tool_call(state: lg_State) -> lg_State:
     If a postcode was successfully extracted, use the postcode tool to find corresponding units in the database.
     """
     logger.info("Starting postcode tool call...")
+    state["current_node"] = "postcode_tool_call"
     logger.debug({"current_state": state})
 
     extracted_postcode = state.get("extracted_postcode")
@@ -432,6 +375,7 @@ def multi_place_tool_call(state: lg_State) -> lg_State:
     Store the combined DataFrame (all results for all places) in JSON form.
     """
     logger.info("Starting multi-place tool call...")
+    state["current_node"] = "multi_place_tool_call"
     place_names = state.get("extracted_place_names", [])
     counties = state.get("extracted_counties", [])
 
@@ -470,7 +414,6 @@ def multi_place_tool_call(state: lg_State) -> lg_State:
 def process_multi_place_selection(state: lg_State) -> lg_State:
     logger.info(
         "Processing multi-place selection and unit type determination...")
-    state["next_node"] = False
     state["current_node"] = "process_multi_place_selection"
     # Recover the multi-place search results and initialize place names & index.
     big_df = pd.read_json(state["multi_place_search_df"], orient="records")
@@ -481,7 +424,6 @@ def process_multi_place_selection(state: lg_State) -> lg_State:
     if current_index >= len(place_names):
         logger.info("All places processed.")
         state["current_place_index"] = 0
-        state["next_node"] = True
         return state
 
     # Filter for the current place in the search results.
@@ -499,24 +441,26 @@ def process_multi_place_selection(state: lg_State) -> lg_State:
 
     # If multiple place matches exist and no selection has been made yet, prompt for one.
     selection_idx = state.get("selection_idx")
-    if selection_idx is None and len(sub_df) > 1:
-        logger.info(
-            f"Multiple matches for place '{place_names[current_index]}'; prompting selection.")
-        button_options = [
-            {
-                "option_type": "place",
-                "label": f"{row['g_name']}, {row['county_name']}",
-                "color": '#333',
-                "value": row_i
-            }
-            for row_i, row in sub_df.iterrows()
-        ]
-        state['interrupt_state'] = True
-        interrupt(value={
-            "message": f"Multiple places found for '{place_names[current_index]}'. Please pick the correct one:",
-            "options": button_options,
-            "selected_place_g_places": state.get("selected_place_g_places", []),
-        })
+    if current_index + 1 != len(state.get("selected_place_g_places", [])):
+        if selection_idx is None and len(sub_df) > 1:
+            logger.info(
+                f"Multiple matches for place '{place_names[current_index]}'; prompting selection.")
+            button_options = [
+                {
+                    "option_type": "place",
+                    "label": f"{row['g_name']}, {row['county_name']}",
+                    "color": '#333',
+                    "value": row_i
+                }
+                for row_i, row in sub_df.iterrows()
+            ]
+            interrupt(value={
+                "message": f"Multiple places found for '{place_names[current_index]}'. Please pick the correct one:",
+                "options": button_options,
+                "selected_place_g_places": state.get("selected_place_g_places", []),
+                "interrupt_state": True,
+                "current_node": "process_multi_place_selection"
+            })
     # Choose the row if selection is made or only one result exists.
     if selection_idx is not None and len(sub_df) > 1 and current_index == len(state["selected_place_g_places"]):
         if selection_idx in sub_df.index:
@@ -551,11 +495,12 @@ def process_multi_place_selection(state: lg_State) -> lg_State:
             }
             for row_i, row in df.iterrows()
         ]
-        state['interrupt_state'] = True
         interrupt(value={
             "message": f"Multiple unit options found for {place_names[current_index]}. Please select one.",
             "options": button_options,
             "selected_place_g_places": state["selected_place_g_places"],
+            "interrupt_state": True,
+            "current_node": "process_multi_place_selection"
         })
 
     # Determine the selected unit.
@@ -583,14 +528,16 @@ def process_multi_place_selection(state: lg_State) -> lg_State:
 
     if state["current_place_index"] <= len(place_names):
         # Optionally, raise an interrupt to notify the user about the next place.
-        state['interrupt_state'] = True
         interrupt(value={
             "message": "map_selection",
             "current_place_index": state["current_place_index"],
             "selected_place_g_places": state["selected_place_g_places"],
             "selected_place_g_units": state["selected_place_g_units"],
-            "selected_place_g_unit_types": state["selected_place_g_unit_types"]
+            "selected_place_g_unit_types": state["selected_place_g_unit_types"],
+            "interrupt_state": True,
+            "current_node": "process_multi_place_selection"
         })
+    state['interrupt_state'] = False
     return state
 
 
@@ -627,23 +574,6 @@ def get_place_themes_node(state: lg_State) -> lg_State:
     return state
 
 
-def decide_next_node(state: lg_State) -> str:
-    """
-    Decide which node to move to next in the workflow based on the current state.
-    If a valid postcode was extracted, proceed with postcode processing;
-    otherwise, if a place name was extracted, proceed with the place lookup.
-    """
-    logger.info("Deciding next node based on current state...")
-    logger.debug({"current_state": state})
-    if state.get("is_postcode"):
-        logger.info("Decision: Processing as postcode")
-        return "postcode_tool_call"
-    elif state.get("extracted_place_name"):
-        logger.info("Decision: Processing as place name")
-        return "multi_place_tool_call"
-    else:
-        logger.info("Decision: Needs place name extraction")
-        return "multi_place_tool_call"
 
 
 def get_place_themes_handler(state: lg_State) -> lg_State:
@@ -653,6 +583,7 @@ def get_place_themes_handler(state: lg_State) -> lg_State:
     Otherwise, if multiple themes exist, interrupt the workflow to allow the user to select one.
     """
     logger.info("Starting theme handler...")
+    state["current_node"] = "get_place_themes_handler"
     logger.debug({"current_state": state})
     try:
         # Convert JSON themes to a DataFrame.
@@ -687,8 +618,6 @@ def get_place_themes_handler(state: lg_State) -> lg_State:
                 logger.info(
                     "LLM-selected theme is not available for the selected place; falling back to user selection.")
 
-        state["next_node"] = False
-
         # If no theme is set, check if the user made a selection via interrupt.
         selection_idx = state.get("selection_idx")
         if selection_idx is not None:
@@ -709,17 +638,19 @@ def get_place_themes_handler(state: lg_State) -> lg_State:
                 for index, row in selected_place_themes.iterrows()
             ]
             logger.debug({"button_options": button_options})
-            state['interrupt_state'] = True
             interrupt(value={
                 "message": "Select a theme for the selected place.",
-                "options": button_options
+                "options": button_options,
+                "interrupt_state": True,
+                "current_node": "get_place_themes_handler"
             })
     except Exception as e:
         logger.error("Error in theme handler", exc_info=True)
         state["messages"].append(
             AIMessage(content=f"Error processing themes: {str(e)}")
         )
-    state["next_node"] = True
+    state['interrupt_state'] = False
+
     logger.debug({"updated_state": state})
     return state
 
@@ -741,7 +672,6 @@ def find_cubes_node(state: lg_State) -> lg_State:
 
     if state.get('selected_cubes'):
         logger.info("Cubes already selected.")
-        state["next_node"] = False
         return state
 
     # Suppose we parse out the theme code from the selected_theme JSON:
@@ -775,19 +705,75 @@ def find_cubes_node(state: lg_State) -> lg_State:
         # store them if you like
         # state["selected_cubes"] = big_cubes.to_json(orient="records")
         # Possibly raise interrupt to open a chart:
+        state['interrupt_state'] = True
         interrupt(value={
             "message": "Here are the combined cubes for all selected places.",
-            "cubes": big_cubes.to_dict("records")
+            "cubes": big_cubes.to_dict("records"),
+            "interrupt_state": True,
+            "current_node": "find_cubes_node"
         })
     else:
         state["messages"].append(
             AIMessage(content="No cubes found for the selected polygons."))
+    state['interrupt_state'] = False
+
     return state
 
 
 # ----------------------------------------------------------------------------------------
 # MAP SELECTION NODES
 # ----------------------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# The central decision function that routes execution based on state.
+# ---------------------------------------------------------------------------
+def should_continue(state: lg_State) -> str:
+    """
+    Decide which node to move to next in the workflow based on the current state.
+    Priority:
+    1) If user has made a map selection, proceed to theme retrieval.
+    2) If a valid postcode was extracted, handle postcode logic.
+    3) If the user gave place names or a theme, move to multi-place logic.
+    4) Otherwise, default to the agent node.
+    """
+    logger.info("Deciding next node after initial extraction...")
+    selected_polygons = state.get("selected_polygons", [])
+    if selected_polygons:
+        logger.info(
+            "Map polygons were selected, going to get_place_themes_node.")
+        return "get_place_themes_node"
+
+    if state.get("is_postcode"):
+        logger.info("Valid postcode found, going to postcode_tool_call.")
+        return "postcode_tool_call"
+
+    if state.get("extracted_place_names") or state.get("extracted_theme"):
+        logger.info(
+            "Found place names or theme, going to multi_place_tool_call.")
+        return "multi_place_tool_call"
+
+    logger.info(
+        "No map selection, postcode, or place/theme found. Going to agent_node.")
+    return "agent_node"
+
+
+def decide_next_node(state: lg_State) -> str:
+    """
+    Decide which node to move to next in the workflow based on the current state.
+    If a valid postcode was extracted, proceed with postcode processing;
+    otherwise, if a place name was extracted, proceed with the place lookup.
+    """
+    logger.info("Deciding next node based on current state...")
+    logger.debug({"current_state": state})
+    if state.get("is_postcode"):
+        logger.info("Decision: Processing as postcode")
+        return "postcode_tool_call"
+    elif state.get("extracted_place_name"):
+        logger.info("Decision: Processing as place name")
+        return "multi_place_tool_call"
+    else:
+        logger.info("Decision: Needs place name extraction")
+        return "multi_place_tool_call"
 
 def check_map_selection_node(state: lg_State) -> lg_State:
     """
@@ -834,92 +820,77 @@ def decide_if_map_selected(state: lg_State) -> str:
 def create_workflow(lg_state):
     """
     Create and compile the workflow graph.  
-    This function adds all the nodes and edges to the LangGraph StateGraph,
-    compiles the workflow, and generates a Mermaid diagram for visualization.
+    Adds all the nodes and edges to the StateGraph,
+    compiles the workflow, and optionally outputs a diagram.
     """
     logger.info("Creating workflow graph...")
     workflow = StateGraph(lg_state)
 
-    # Log the nodes being added for debugging purposes.
-    logger.debug({"action": "adding_nodes", "nodes": [
-        "extract_initial_query_node",
-        "check_map_selection_node",
-        "validate_user_input",
-        "postcode_tool_call",
-        "place_tool_call",
-        "place_tool_handler",
-        "handle_user_place_selection",
-        "get_place_themes_node",
-        "get_place_themes_handler",
-        "find_cubes_node"
-    ]})
-
-    # Add each node with its corresponding function.
-    workflow.add_node("extract_initial_query_node",
-                      with_assistant(extract_initial_query_node))
-    workflow.add_node("check_map_selection_node",
-                      check_map_selection_node)
-    workflow.add_node("validate_user_input",
-                      validate_user_input)
+    # Add nodes.
+    workflow.add_node("extract_initial_query_node", extract_initial_query_node)
+    workflow.add_node("agent_node", agent_node)
+    workflow.add_node("validate_user_input", validate_user_input)
     workflow.add_node("postcode_tool_call", postcode_tool_call)
-    workflow.add_node("multi_place_tool_call",
-                      multi_place_tool_call)
+    workflow.add_node("multi_place_tool_call", multi_place_tool_call)
     workflow.add_node("process_multi_place_selection",
-                      with_assistant(process_multi_place_selection))
-    workflow.add_node("get_place_themes_node",
-                      get_place_themes_node)
-    workflow.add_node("get_place_themes_handler",
-                      with_assistant(get_place_themes_handler))
-    workflow.add_node("find_cubes_node", with_assistant(find_cubes_node))
-    workflow.add_node("assistant_node", assistant_node)
+                      process_multi_place_selection)
+    workflow.add_node("get_place_themes_node", get_place_themes_node)
+    workflow.add_node("get_place_themes_handler", get_place_themes_handler)
+    workflow.add_node("find_cubes_node", find_cubes_node)
+    # workflow.add_node("interrupt_or_chat_decision", interrupt_or_chat_decision)
 
-    # Define the edges between nodes. The workflow starts at the extraction node.
+    # -- Edges --
+    # 1) Start with extracting the user query
     workflow.add_edge(START, "extract_initial_query_node")
-    # Then, after extraction, check if there's a map selection.
-    workflow.add_edge("extract_initial_query_node", "check_map_selection_node")
 
-    # Conditional edges based on map selection:
+    # 2) From extract_initial_query_node, we call should_continue() to decide the next step
     workflow.add_conditional_edges(
-        "check_map_selection_node",
-        decide_if_map_selected,
+        "extract_initial_query_node",
+        should_continue,
         {
             "get_place_themes_node": "get_place_themes_node",
-            "validate_user_input": "validate_user_input",
-        }
-    )
-    # Conditional edges based on whether the user input contains a postcode or a place name.
-    workflow.add_conditional_edges(
-        "validate_user_input",
-        decide_next_node,
-        {
             "postcode_tool_call": "postcode_tool_call",
             "multi_place_tool_call": "multi_place_tool_call",
+            "agent_node": "agent_node",
         }
     )
+    
+    
+    # 3) From the postcode_tool_call, go to the agent node afterwards
+    workflow.add_edge("postcode_tool_call", "get_place_themes_node")
 
-    # Add the remaining edges to connect the nodes sequentially.
+    # 4) From multi_place_tool_call, proceed to process_multi_place_selection
     workflow.add_edge("multi_place_tool_call", "process_multi_place_selection")
-    workflow.add_edge("process_multi_place_selection", "get_place_themes_node")
-    workflow.add_edge("get_place_themes_node", "get_place_themes_handler")
-    workflow.add_edge("get_place_themes_handler", "find_cubes_node")
-    workflow.add_edge("find_cubes_node", "assistant_node")
-    workflow.add_edge("assistant_node", "assistant_node")
 
-    # Compile the workflow; this prepares it for execution.
+    # 5) After processing multi-place selection, go to get_place_themes_node
+    workflow.add_edge("process_multi_place_selection", "get_place_themes_node")
+
+    # 6) From get_place_themes_node → get_place_themes_handler
+    workflow.add_edge("get_place_themes_node", "get_place_themes_handler")
+
+    # 7) From get_place_themes_handler → find_cubes_node
+    workflow.add_edge("get_place_themes_handler", "find_cubes_node")
+
+    # 8) Finally, from find_cubes_node → agent_node
+    workflow.add_edge("find_cubes_node", "agent_node")
+
+    # --- Compile the workflow ---
     logger.info("Compiling workflow...")
     try:
         compiled_workflow = workflow.compile(checkpointer=memory)
-        logger.info("Workflow compilation successful")
+        logger.info("Workflow compilation successful.")
     except Exception as e:
         logger.error("Error compiling workflow", exc_info=True)
         raise
 
-    # Optional: Generate a Mermaid diagram for visualizing the workflow graph.
-    logger.info("Generating Mermaid diagram...")
+    # --- Optionally produce diagrams ---
+    logger.info("Generating ASCII diagram of the workflow:")
     try:
         logger.info(compiled_workflow.get_graph().draw_ascii())
     except Exception as e:
-        logger.error("Error generating ascii Mermaid diagram", exc_info=True)
+        logger.error("Error generating ASCII diagram", exc_info=True)
+
+    logger.info("Generating Mermaid diagram and saving as PNG:")
     try:
         compiled_workflow_image = compiled_workflow.get_graph().draw_mermaid_png(
             draw_method=MermaidDrawMethod.API,
@@ -931,5 +902,5 @@ def create_workflow(lg_state):
     except Exception as e:
         logger.error("Error generating workflow diagram", exc_info=True)
 
-    logger.info("Workflow creation completed successfully")
+    logger.info("Workflow creation completed.")
     return compiled_workflow

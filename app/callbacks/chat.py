@@ -13,6 +13,8 @@ import logging
 
 from dash_extensions.enrich import CycleBreakerInput
 
+from langgraph.types import interrupt, Command
+
 logger = logging.getLogger(__name__)
 
 
@@ -56,7 +58,7 @@ def register_chat_callbacks(app, compiled_workflow):
 
         ctx = dash.callback_context
         ctx_trigger = ctx.triggered[0]["prop_id"]
-        
+        workflow_res = None
         logger.debug({
             "event": "update_chat_start",
             "params": {
@@ -133,9 +135,23 @@ def register_chat_callbacks(app, compiled_workflow):
         inputs = None
         if user_input and user_input.strip():
             inputs = {"messages": [("user", user_input)]}
+        
+        before_state = compiled_workflow.get_state(config)
             
-        db_res = compiled_workflow.invoke(
-            inputs , config=config)
+        if 'dynamic-button-user-choice' in ctx_trigger and before_state.values.get('interrupt_state'):
+            workflow_res = compiled_workflow.invoke(
+                Command(goto=before_state.values.get('current_node')), config=config)
+            
+        elif before_state.values.get('interrupt_state') and 'send-button.n_clicks' in ctx_trigger:
+            messages_to_agent = before_state.values['messages']
+            messages_to_agent.append(("user", user_input))
+            values = {"messages": messages_to_agent}
+            compiled_workflow.update_state(config=config, values=values)
+            workflow_res = compiled_workflow.invoke(Command(goto="agent_node"), config=config)
+
+        else:
+            workflow_res = compiled_workflow.invoke(
+                inputs, config=config)
 
         # 7) Now handle any interrupts
 
@@ -157,14 +173,17 @@ def register_chat_callbacks(app, compiled_workflow):
                     "First task has interrupts.")
 
                 # We have at least one interrupt
-                interrupt = interrupt_task.interrupts[0]
-                interrupt_value = interrupt.value
+                if len(interrupt_task.interrupts) > 0:
+                    # interrupt = interrupt_task.interrupts[0].value
+                    interrupt_value = interrupt_task.interrupts[0].value
+                else:
+                    interrupt_value = state.values.get("interrupt_data")
                 logger.debug({"event": "processing_interrupt",
                             "interrupt_value": interrupt_value})
                 
                 # update the workflow state with the interrupt data
                 compiled_workflow.update_state(
-                    config=config, values={"interrupt_data": interrupt_value})
+                    config=config, values={"interrupt_data": interrupt_value, "interrupt_state": True})
 
                 # Multiple choice "options" interrupt
                 if "options" in interrupt_value:
@@ -210,6 +229,7 @@ def register_chat_callbacks(app, compiled_workflow):
                     values = {"selected_place_g_places": selected_place_g_places}
                     compiled_workflow.update_state(config=config, values=values)
                     new_history = chat_history[:] + [interrupt_message]
+                    
 
 
                 # Map selection
@@ -293,19 +313,22 @@ def register_chat_callbacks(app, compiled_workflow):
                     #     compiled_workflow.update_state(
                     #         config=config, values={"interrupt_state": False, "selection_idx": None, "current_unit_index": interrupt_value["current_unit_index"], "selected_place_g_units": interrupt_value["selected_place_g_units"], "selected_place_g_unit_types": interrupt_value["selected_place_g_unit_types"]})
                         
-                        
+            # if before_state.values.get('interrupt_state'):
+            #     workflow_res = compiled_workflow.invoke(Command(resume=inputs), config=config)
+            
                 if new_history:
                     chat_history = new_history
 
 
                 
-        # 8) If no interrupt, we present the final AI output from db_res
+        # 8) If no interrupt, we present the final AI output from workflow_res
         #    (only if there's an AI message in the updated state)
-        messages = db_res["messages"] if "messages" in db_res else []
-        if messages and messages[-1].type == "ai":
-            ai_text = messages[-1].content
-            chat_history.append(
-                html.Div(f"AI: {ai_text}", className="mb-2 text-primary"))
+        if workflow_res:
+            messages = workflow_res["messages"] if "messages" in workflow_res else []
+            if messages and messages[-1].type == "ai":
+                ai_text = messages[-1].content
+                chat_history.append(
+                    html.Div(f"AI: {ai_text}", className="mb-2 text-primary"))
 
         logger.debug({
             "event": "chat_update_complete",
