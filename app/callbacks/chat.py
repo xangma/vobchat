@@ -27,7 +27,9 @@ def register_chat_callbacks(app, compiled_workflow):
         Output("app-state", "data", allow_duplicate=True),
         Output("map-state", "data", allow_duplicate=True),
         Output("place-state", "data", allow_duplicate=True),
+        Output("retrigger-chat", "data", allow_duplicate=True),
         Output("options-container", "children"),
+        Output("counts-store", "data"),
         Output("thread-id", "data"),
         Input("send-button", "n_clicks"),
         Input({"option_type": ALL, "type": "dynamic-button-user-choice", "index": ALL}, "n_clicks"),
@@ -58,6 +60,8 @@ def register_chat_callbacks(app, compiled_workflow):
 
         ctx = dash.callback_context
         ctx_trigger = ctx.triggered[0]["prop_id"]
+        if "retrigger-chat_data_breaker.dst" in ctx_trigger:
+            logger.debug("retrigger-chat_data_breaker.dst triggered")
         workflow_res = None
         logger.debug({
             "event": "update_chat_start",
@@ -73,9 +77,12 @@ def register_chat_callbacks(app, compiled_workflow):
         
         if not app_state['retrigger_chat'] and "reset-button" not in ctx_trigger and "dynamic-button-user-choice" not in ctx_trigger and (not user_input or user_input.strip() == ""):
             # No meaningful user interaction
+            logger.debug("No meaningful user interaction detected")
             raise PreventUpdate
-
-        app_state['retrigger_chat'] = False
+        
+        if retrigger_chat:
+            retrigger_chat = None
+            app_state.update({"retrigger_chat": False})
         
         # 0) Check if we need to reset the entire application
         if "reset-button" in ctx_trigger:
@@ -85,13 +92,16 @@ def register_chat_callbacks(app, compiled_workflow):
             chat_history = []
             buttons = []
             thread_id = None
+            counts_store = {}
             return (
                 chat_history,
                 "",
                 app_state,
                 map_state,
                 place_state,
+                retrigger_chat,
                 buttons,
+                counts_store,
                 thread_id
             )
             
@@ -107,14 +117,16 @@ def register_chat_callbacks(app, compiled_workflow):
 
         logger.debug({"event": "workflow_config", "config": config})
 
+        before_state = compiled_workflow.get_state(config)
+
         if map_state.get('selected_polygons'):
-            compiled_workflow.update_state(config=config, values={
-                                           'selected_polygons': map_state['selected_polygons'], 'selected_place_g_unit_types': map_state['unit_types']})
+            before_state.values['selected_polygons'] = map_state['selected_polygons']
+            before_state.values['selected_polygons_unit_types'] = map_state['selected_polygons_unit_types']
+            compiled_workflow.update_state(config=config, values=before_state.values)
 
         # 2) Check triggers: button vs. send
         selection_idx = None
-        values = {"selection_idx": selection_idx}
-        compiled_workflow.update_state(config=config, values=values)
+        # compiled_workflow.update_state(config=config, values=values)
         if 'dynamic-button-user-choice' in ctx_trigger:
             # Identify which button was clicked
             selection_data = json.loads(ctx_trigger.split(".")[0])
@@ -122,8 +134,8 @@ def register_chat_callbacks(app, compiled_workflow):
             logger.debug({"event": "button_click",
                         "selection_idx": selection_idx})
             # Update the node's state with selection_idx
-            values = {"selection_idx": selection_idx}
-            compiled_workflow.update_state(config=config, values=values)
+            # values = {"selection_idx": selection_idx}
+            # compiled_workflow.update_state(config=config, values=values)
             buttons = []
 
 
@@ -136,19 +148,12 @@ def register_chat_callbacks(app, compiled_workflow):
         if user_input and user_input.strip():
             inputs = {"messages": [("user", user_input)]}
         
-        before_state = compiled_workflow.get_state(config)
+
             
         if 'dynamic-button-user-choice' in ctx_trigger and before_state.values.get('interrupt_state'):
+            before_state.values.update({"selection_idx": selection_idx})
             workflow_res = compiled_workflow.invoke(
-                Command(goto=before_state.values.get('current_node')), config=config)
-            
-        elif before_state.values.get('interrupt_state') and 'send-button.n_clicks' in ctx_trigger:
-            messages_to_agent = before_state.values['messages']
-            messages_to_agent.append(("user", user_input))
-            values = {"messages": messages_to_agent}
-            compiled_workflow.update_state(config=config, values=values)
-            workflow_res = compiled_workflow.invoke(Command(goto="agent_node"), config=config)
-
+                Command(goto=before_state.values['current_node'], update=before_state.values), config=config)
         else:
             workflow_res = compiled_workflow.invoke(
                 inputs, config=config)
@@ -167,7 +172,7 @@ def register_chat_callbacks(app, compiled_workflow):
         if state.tasks:
             # Check for interrupts on the first pending task
             interrupt_task = state.tasks[0]
-            if interrupt_task.interrupts or state.values.get("interrupt_state") == True:
+            if interrupt_task.interrupts or state.values.get("interrupt_state") == True or state.values.get("interrupt_data"):
                 new_history = None
                 logger.debug(
                     "First task has interrupts.")
@@ -183,10 +188,10 @@ def register_chat_callbacks(app, compiled_workflow):
                 
                 # update the workflow state with the interrupt data
                 compiled_workflow.update_state(
-                    config=config, values={"interrupt_data": interrupt_value, "interrupt_state": True})
+                    config=config, values=interrupt_value)
 
                 # Multiple choice "options" interrupt
-                if "options" in interrupt_value:
+                if interrupt_value.get("options", []):
                     logger.debug("Interrupt with multiple button options")
                     options = interrupt_value.get("options", [])
 
@@ -223,46 +228,27 @@ def register_chat_callbacks(app, compiled_workflow):
                     # Mark that we are waiting for user selection
                     app_state.update({
                         "button_options": options,
-                        "awaiting_user_selection": True
                     })
-                    selected_place_g_places = interrupt_value.get("selected_place_g_places", [])
-                    values = {"selected_place_g_places": selected_place_g_places}
-                    compiled_workflow.update_state(config=config, values=values)
                     new_history = chat_history[:] + [interrupt_message]
                     
 
 
                 # Map selection
-                if interrupt_value.get("message") == "map_selection":
+                if interrupt_value.get("current_node") == "select_unit_on_map":
                     logger.debug("Map selection interrupt")
-                    if map_state["selected_polygons"]:
-                        unit_types = map_state["unit_types"] + \
-                            interrupt_value["selected_place_g_unit_types"]
-                    else:
-                        unit_types = interrupt_value["selected_place_g_unit_types"]
-                    selected_polygons = map_state["selected_polygons"] + \
-                        interrupt_value["selected_place_g_units"]
-                    map_state.update({
-                        "selected_polygons": [str(i) for i in selected_polygons],
-                        "unit_types": unit_types
-                    })
+                    selected_place_g_units = interrupt_value["selected_place_g_units"]
+                    selected_place_g_unit_types = interrupt_value["selected_place_g_unit_types"]
+                    for i, g_unit in enumerate(selected_place_g_units):
+                        if g_unit not in map_state["selected_polygons"]:
+                            map_state["selected_polygons"].append(str(g_unit))
+                            map_state["selected_polygons_unit_types"].append(selected_place_g_unit_types[i])
 
                     app_state.update({
                         "button_options": [],
-                        "awaiting_user_selection": False,
                         "retrigger_chat": True
                     })
-                    compiled_workflow.update_state(
-                        config=config, values={"interrupt_state": False, "selection_idx": None, "selected_place_g_units": selected_polygons, "selected_place_g_unit_types": unit_types})
-                        
+                    retrigger_chat = None
                     buttons = []
-
-                # Another example: "selected_polygons"
-                elif "selected_polygons" in interrupt_value.get("message", {}):
-                    logger.debug("Polygon selection interrupt")
-                    map_state.update({
-                        "selected_polygons": interrupt_value["value"]
-                        })
 
                 elif interrupt_value.get("cubes"):
                     logger.debug("Cube selection interrupt")
@@ -302,19 +288,9 @@ def register_chat_callbacks(app, compiled_workflow):
                         # We need to prompt the user
                         new_history = chat_history[:] + [interrupt_message]
 
-                if interrupt_value.get("current_place_index"):
-                    app_state.update({
-                        "retrigger_chat": True
-                    })
-                    if "selected_place_g_units" in interrupt_value:
-                        compiled_workflow.update_state(
-                            config=config, values={"interrupt_state": False, "selection_idx": None, "current_place_index": interrupt_value["current_place_index"], "selected_place_g_places": interrupt_value["selected_place_g_places"], "selected_place_g_unit_types": interrupt_value["selected_place_g_unit_types"]})
-                    # if "selected_place_g_units" in interrupt_value:
-                    #     compiled_workflow.update_state(
-                    #         config=config, values={"interrupt_state": False, "selection_idx": None, "current_unit_index": interrupt_value["current_unit_index"], "selected_place_g_units": interrupt_value["selected_place_g_units"], "selected_place_g_unit_types": interrupt_value["selected_place_g_unit_types"]})
-                        
-            # if before_state.values.get('interrupt_state'):
-            #     workflow_res = compiled_workflow.invoke(Command(resume=inputs), config=config)
+                if interrupt_value.get("current_place_index") is not None:
+                    compiled_workflow.update_state(
+                        config=config, values={"current_node": interrupt_value['current_node'], "selection_idx": None, "current_place_index": interrupt_value["current_place_index"], "selected_place_g_places": interrupt_value.get("selected_place_g_places"), "selected_place_g_units": interrupt_value.get("selected_place_g_units"), "selected_place_g_unit_types": interrupt_value.get("selected_place_g_unit_types")})
             
                 if new_history:
                     chat_history = new_history
@@ -343,6 +319,7 @@ def register_chat_callbacks(app, compiled_workflow):
             app_state,
             map_state,
             place_state,
+            retrigger_chat,
             buttons,
             thread_id
         )
@@ -356,6 +333,7 @@ def register_chat_callbacks(app, compiled_workflow):
     )
     def retrigger_chat_callback(app_state, map_state, retrigger_chat):
         if app_state.get("retrigger_chat"):
-            return retrigger_chat + 1
+            logger.debug("Retriggering chat")
+            return True
         else:
             return dash.no_update

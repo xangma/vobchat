@@ -7,6 +7,7 @@ map_state_data = {
     "year_range": None,
     "year_bounds": None,
     "selected_polygons": [],
+    "selected_polygons_unit_types": [],
     "current_geojson": None
 }
 
@@ -45,6 +46,6 @@ def create_stores():
 
         # Chat related stores
         dcc.Store(id="thread-id", data=None),
-        dcc.Store(id="retrigger-chat", data=0),
+        dcc.Store(id="retrigger-chat", data=None),
         dcc.Store(id="counts-store", data={}),
     ])

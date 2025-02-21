@@ -134,13 +134,19 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
         elif "geojson-layer.n_clicks" in triggered_prop_ids and geojson_n_clicks:
             if geojson_clickData:
                 fid = geojson_clickData.get("id")
+                unit_type = geojson_clickData['properties']['g_unit_type']
                 if fid is not None:
                     selected_ids = new_map_state.get("selected_polygons", [])
+                    selected_units = new_map_state.get("selected_polygons_unit_types", [])
                     if fid in selected_ids:
-                        selected_ids.remove(fid)
+                        fid_index = selected_ids.index(fid)
+                        selected_ids.pop(fid_index)
+                        selected_units.pop(fid_index)
                     else:
                         selected_ids.append(fid)
+                        selected_units.append(unit_type)
                     new_map_state["selected_polygons"] = selected_ids
+                    new_map_state["selected_polygons_unit_types"] = selected_units
 
         return new_map_state, counts
 
@@ -203,6 +209,7 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
 
         if gdfs:
             combined = pd.concat(gdfs)
+            combined = combined.drop_duplicates()
             if combined.empty:
                 geojson_out = {"type": "FeatureCollection", "features": []}
                 debug_msg = "No polygons found."

@@ -135,6 +135,8 @@ class lg_State(TypedDict):
     max_year: Optional[int]
     # List of polygons (if map selection is used)
     selected_polygons: Optional[List[int]]
+    #
+    selected_polygons_unit_types: Optional[List[str]]
     # Flag to indicate that the node has interrupted the workflow
     interrupt_state: bool
     interrupt_data: Optional[dict]
@@ -251,23 +253,12 @@ def agent_node(state: lg_State) -> lg_State:
                         """),
                 HumanMessage(content=query)
             ])
-            
-            if state.get("interrupt_data"):
-                state["interrupt_data"]['message'] = AIMessage(
-                    content=response.content)
-                state["interrupt_data"]['interrupt_state'] = True
-                state["interrupt_data"]['current_node'] = "agent_node"
-                interrupt(value=state["interrupt_data"])
-            else:
-                state["messages"].append(AIMessage(content=response.content))
-                interrupt(
-                    value={"message": AIMessage(content=response.content)})
 
             state["messages"].append(AIMessage(content=response.content))
     return state
 
 
-def extract_initial_query_node(state: lg_State) -> lg_State:
+def extract_initial_query_node(state: lg_State):
     """
     Extract the initial query from the user's message.  
     This node extracts the place, county, theme, and year range from the last message in the conversation.
@@ -288,7 +279,10 @@ def extract_initial_query_node(state: lg_State) -> lg_State:
         state["max_year"] = extraction.max_year
     except Exception as e:
         logger.error("Error during initial query extraction", exc_info=True)
-    return state
+    if state.get("extracted_place_names"):
+        return Command(goto="multi_place_tool_call", update={"extracted_place_names": state["extracted_place_names"], "extracted_counties": state["extracted_counties"], "extracted_theme": state["extracted_theme"], "min_year": state["min_year"], "max_year": state["max_year"]})
+    else:
+        return Command(goto="agent_node", update={"messages": state["messages"]})
 
 
 def validate_user_input(state: lg_State) -> lg_State:
@@ -411,24 +405,32 @@ def multi_place_tool_call(state: lg_State) -> lg_State:
     return state
 
 
-def process_multi_place_selection(state: lg_State) -> lg_State:
-    logger.info(
-        "Processing multi-place selection and unit type determination...")
-    state["current_node"] = "process_multi_place_selection"
-    # Recover the multi-place search results and initialize place names & index.
+def process_place_selection(state: lg_State) -> lg_State:
+    """
+    Node 1: Process place selection.
+    For the current extracted place (using state["current_place_index"]),
+    this node filters the multi-place search results.
+    If multiple matches exist, it interrupts the workflow to allow
+    the user to select the correct place. Once selected, it stores
+    the g_place identifier.
+    """
+    logger.info("Processing place selection...")
+    state["current_node"] = "process_place_selection"
+
+    # Load the combined search results
     big_df = pd.read_json(state["multi_place_search_df"], orient="records")
     place_names = state.get("extracted_place_names", [])
     current_index = state.get("current_place_index", 0)
 
-    # If no more places to process, reset the index and continue.
     if current_index >= len(place_names):
         logger.info("All places processed.")
         state["current_place_index"] = 0
         return state
 
-    # Filter for the current place in the search results.
-    sub_df = big_df[big_df["requested_place_index"] ==
-                    current_index].reset_index(drop=True).copy()
+    # Filter for rows corresponding to the current place index
+    sub_df = big_df[big_df["requested_place_index"]
+                    == current_index].reset_index(drop=True)
+
     if sub_df.empty:
         logger.warning(
             f"No DB matches for place '{place_names[current_index]}'")
@@ -439,107 +441,169 @@ def process_multi_place_selection(state: lg_State) -> lg_State:
         state["current_place_index"] = current_index + 1
         return state
 
-    # If multiple place matches exist and no selection has been made yet, prompt for one.
     selection_idx = state.get("selection_idx")
-    if current_index + 1 != len(state.get("selected_place_g_places", [])):
-        if selection_idx is None and len(sub_df) > 1:
-            logger.info(
-                f"Multiple matches for place '{place_names[current_index]}'; prompting selection.")
-            button_options = [
-                {
-                    "option_type": "place",
-                    "label": f"{row['g_name']}, {row['county_name']}",
-                    "color": '#333',
-                    "value": row_i
-                }
-                for row_i, row in sub_df.iterrows()
-            ]
-            interrupt(value={
-                "message": f"Multiple places found for '{place_names[current_index]}'. Please pick the correct one:",
-                "options": button_options,
-                "selected_place_g_places": state.get("selected_place_g_places", []),
-                "interrupt_state": True,
-                "current_node": "process_multi_place_selection"
-            })
-    # Choose the row if selection is made or only one result exists.
-    if selection_idx is not None and len(sub_df) > 1 and current_index == len(state["selected_place_g_places"]):
-        if selection_idx in sub_df.index:
-            chosen_row = pd.DataFrame([sub_df.loc[selection_idx]])
-            selection_idx = None
-        else:
-            raise ValueError(f"Invalid selection_idx={selection_idx}")
-    elif current_index + 1 == len(state.get("selected_place_g_places", [])):
-        chosen_row = pd.DataFrame(
-            sub_df[sub_df['g_place'] == state["selected_place_g_places"][current_index]])
-    else:
-        chosen_row = pd.DataFrame([sub_df.iloc[0]])
-    if int(chosen_row["g_place"]) not in state.get("selected_place_g_places", []):
-        state.setdefault("selected_place_g_places", []).append(
-            int(chosen_row["g_place"]))
-    # Process unit (g_unit_type) selection:
-    # Explode unit information if multiple units are available.
-    df = chosen_row.explode(["g_unit", "g_unit_type"]).dropna(
-        subset=["g_unit"]).reset_index(drop=True)
-    df["g_unit"] = df["g_unit"].astype(int)
-
-    # If there are multiple unit options and no unit selection has been made, prompt the user.
-    if selection_idx is None and len(df) > 1:
+    if selection_idx is None and len(sub_df) > 1:
         logger.info(
-            "Multiple unit options found; prompting user for selection.")
+            f"Multiple matches for '{place_names[current_index]}'; prompting selection.")
         button_options = [
             {
-                "option_type": "unit_type",
-                "label": f"{UNIT_TYPES.get(row['g_unit_type']).get('long_name')}",
-                "color": UNIT_TYPES.get(row['g_unit_type']).get('color'),
-                "value": row_i
+                "option_type": "place",
+                "label": f"{row['g_name']}, {row['county_name']}",
+                "color": "#333",
+                "value": i
             }
-            for row_i, row in df.iterrows()
+            for i, row in sub_df.iterrows()
         ]
         interrupt(value={
-            "message": f"Multiple unit options found for {place_names[current_index]}. Please select one.",
+            "message": f"Multiple places found for '{place_names[current_index]}'. Please pick the correct one:",
             "options": button_options,
-            "selected_place_g_places": state["selected_place_g_places"],
             "interrupt_state": True,
-            "current_node": "process_multi_place_selection"
+            "current_place_index": current_index,
+            "selected_place_g_places": state.get("selected_place_g_places", []),
+            "selected_place_g_units": state.get("selected_place_g_units", []),
+            "selected_place_g_unit_types": state.get("selected_place_g_unit_types", []),
+            "current_node": "process_place_selection"
         })
 
-    # Determine the selected unit.
-    if selection_idx is not None and len(df) > 1:
-        selected_unit = df.iloc[int(selection_idx)]
+    # Choose the row: either the user made a selection or there was only one match.
+    if selection_idx is not None and len(sub_df) > 1:
+        if selection_idx in sub_df.index:
+            chosen_row = pd.DataFrame([sub_df.loc[selection_idx]])
+        else:
+            raise ValueError(f"Invalid selection_idx={selection_idx}")
     else:
-        selected_unit = df.iloc[0]
+        chosen_row = pd.DataFrame([sub_df.iloc[0]])
 
-    # Save the unit selection.
-    if int(selected_unit["g_unit"]) not in state.get("selected_place_g_units", []):
-        state.setdefault("selected_place_g_units", []).append(
-            int(selected_unit["g_unit"]))
-    if selected_unit["g_unit_type"] not in state.get("selected_place_g_unit_types", []):
-        state.setdefault("selected_place_g_unit_types", []).append(
-            selected_unit["g_unit_type"] or "MOD_DIST")
-    # Confirm the selection to the user.
-    msg = (f"You have selected '{place_names[current_index]}' in '{selected_unit['county_name']}' "
-           f"with unit type '{UNIT_TYPES.get(selected_unit['g_unit_type']).get('long_name')}'.")
+    # Save the selected g_place
+    g_place = int(chosen_row["g_place"].values[0])
+    state.setdefault("selected_place_g_places", [])
+    if g_place not in state["selected_place_g_places"]:
+        state["selected_place_g_places"].append(g_place)
+
+    # Inform the user about the chosen place
+    msg = (f"Selected place: {chosen_row['g_name'].values[0]} "
+           f"in {chosen_row['county_name'].values[0]}.")
     state["messages"].append(AIMessage(content=msg))
 
-    # Reset the selection index for the next round.
+    # Clear the selection index before proceeding
     state["selection_idx"] = None
-    # Move on to the next place.
-    state["current_place_index"] = current_index + 1
-
-    if state["current_place_index"] <= len(place_names):
-        # Optionally, raise an interrupt to notify the user about the next place.
-        interrupt(value={
-            "message": "map_selection",
-            "current_place_index": state["current_place_index"],
-            "selected_place_g_places": state["selected_place_g_places"],
-            "selected_place_g_units": state["selected_place_g_units"],
-            "selected_place_g_unit_types": state["selected_place_g_unit_types"],
-            "interrupt_state": True,
-            "current_node": "process_multi_place_selection"
-        })
-    state['interrupt_state'] = False
     return state
 
+
+def process_unit_selection(state: lg_State) -> lg_State:
+    """
+    Node 2: Process unit selection for the chosen place.
+    Using the same current_index, this node extracts the unit information
+    (and unit types) from the search results. If multiple unit options exist,
+    it interrupts for a user selection; otherwise, it records the unit details.
+    """
+    logger.info("Processing unit selection...")
+    state["current_node"] = "process_unit_selection"
+
+    big_df = pd.read_json(state["multi_place_search_df"], orient="records")
+    place_names = state.get("extracted_place_names", [])
+    current_index = state.get("current_place_index", 0)
+
+    # Filter for the current place results
+    sub_df = big_df[big_df["requested_place_index"]
+                    == current_index].reset_index(drop=True)
+
+    # Narrow down to the row matching the previously selected place.
+    selected_places = state.get("selected_place_g_places", [])
+    if current_index >= len(selected_places):
+        logger.error("No selected place available for unit selection.")
+        return state
+
+    chosen_g_place = selected_places[current_index]
+    chosen_rows = sub_df[sub_df["g_place"] ==
+                         chosen_g_place].reset_index(drop=True)
+    if chosen_rows.empty:
+        logger.error(
+            f"No matching rows for selected place id {chosen_g_place}.")
+        return state
+
+    # Explode unit and unit type columns if necessary.
+    unit_df = chosen_rows.explode(["g_unit", "g_unit_type"]).dropna(
+        subset=["g_unit"]).reset_index(drop=True)
+    unit_df["g_unit"] = unit_df["g_unit"].astype(int)
+
+    selection_idx = state.get("selection_idx")
+    if selection_idx is None and len(unit_df) > 1:
+        logger.info("Multiple unit options found; prompting user selection.")
+        button_options = [
+            {
+                "option_type": "unit",
+                "label": f"{UNIT_TYPES.get(row['g_unit_type'], {}).get('long_name', row['g_unit_type'])}",
+                "color": UNIT_TYPES.get(row['g_unit_type'], {}).get('color', "#333"),
+                "value": i
+            }
+            for i, row in unit_df.iterrows()
+        ]
+        interrupt(value={
+            "message": f"Multiple unit options found for '{place_names[current_index]}'. Please select one:",
+            "options": button_options,
+            "selected_place_g_places": state.get("selected_place_g_places", []),
+            "selected_place_g_units": state.get("selected_place_g_units", []),
+            "selected_place_g_unit_types": state.get("selected_place_g_unit_types", []),
+            "interrupt_state": True,
+            "current_place_index": current_index,
+            "current_node": "process_unit_selection"
+        })
+
+    # Select the unit row (either by user selection or default to the first row)
+    if selection_idx is not None and len(unit_df) > 1:
+        selected_unit = unit_df.iloc[int(selection_idx)]
+    else:
+        selected_unit = unit_df.iloc[0]
+
+    # Save the selected unit details.
+    selected_unit_id = int(selected_unit["g_unit"])
+    state.setdefault("selected_place_g_units", [])
+    if selected_unit_id not in state["selected_place_g_units"]:
+        state["selected_place_g_units"].append(selected_unit_id)
+
+        unit_type = selected_unit["g_unit_type"] or "MOD_DIST"
+        state.setdefault("selected_place_g_unit_types", [])
+        state["selected_place_g_unit_types"].append(unit_type)
+
+    msg = (f"Selected unit type: {UNIT_TYPES.get(unit_type, {}).get('long_name', unit_type)} "
+           f"for '{place_names[current_index]}'.")
+    state["messages"].append(AIMessage(content=msg))
+
+    state["current_place_index"] = state.get("current_place_index") + 1
+    
+    # Clear the selection index for future use.
+    state["selection_idx"] = None
+
+    return state
+
+
+def select_unit_on_map(state: lg_State) -> lg_State:
+    """
+    Node 3: Select unit on map.
+    This node retrieves the polygons for the selected unit type and displays them on the map.
+    It also updates the state with the selected polygons.
+
+    Args:
+        state (lg_State): _description_
+
+    Returns:
+        lg_State: _description_
+    """
+    if state.get("selected_place_g_units", []):
+        if str(state["selected_place_g_units"][state.get("current_place_index") - 1]) not in state.get("selected_polygons", []):
+            logger.info("Retrieving polygons for selected unit type...")
+            interrupt(value={
+                "message": f"Select a unit on the map for '{state['extracted_place_names'][state['current_place_index'] - 1]}'",
+                "selected_place_g_places": state.get("selected_place_g_places", []),
+                "selected_place_g_units": state.get("selected_place_g_units", []),
+                "selected_place_g_unit_types": state.get("selected_place_g_unit_types", []),
+                "interrupt_state": True,
+                "current_place_index": state.get("current_place_index"),
+                "current_node": "select_unit_on_map"
+            })
+    return state
+    
 
 def get_place_themes_node(state: lg_State) -> lg_State:
     """
@@ -549,6 +613,9 @@ def get_place_themes_node(state: lg_State) -> lg_State:
     logger.debug({"current_state": state})
 
     selected_place_g_units = state.get("selected_place_g_units", [])
+    selected_polygons = state.get("selected_polygons", [])
+    selected_place_g_units += selected_polygons
+    
     themes_df_list = []
     for selected_place_g_unit in selected_place_g_units:
         try:
@@ -572,8 +639,6 @@ def get_place_themes_node(state: lg_State) -> lg_State:
 
     logger.debug({"updated_state": state})
     return state
-
-
 
 
 def get_place_themes_handler(state: lg_State) -> lg_State:
@@ -642,6 +707,7 @@ def get_place_themes_handler(state: lg_State) -> lg_State:
                 "message": "Select a theme for the selected place.",
                 "options": button_options,
                 "interrupt_state": True,
+                "current_place_index": state.get("current_place_index"),
                 "current_node": "get_place_themes_handler"
             })
     except Exception as e:
@@ -721,13 +787,13 @@ def find_cubes_node(state: lg_State) -> lg_State:
 
 
 # ----------------------------------------------------------------------------------------
-# MAP SELECTION NODES
+# ROUTING NODES
 # ----------------------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # The central decision function that routes execution based on state.
 # ---------------------------------------------------------------------------
-def should_continue(state: lg_State) -> str:
+def node_router(state: lg_State) -> str:
     """
     Decide which node to move to next in the workflow based on the current state.
     Priority:
@@ -736,64 +802,48 @@ def should_continue(state: lg_State) -> str:
     3) If the user gave place names or a theme, move to multi-place logic.
     4) Otherwise, default to the agent node.
     """
-    logger.info("Deciding next node after initial extraction...")
-    selected_polygons = state.get("selected_polygons", [])
-    if selected_polygons:
-        logger.info(
-            "Map polygons were selected, going to get_place_themes_node.")
-        return "get_place_themes_node"
+    logger.info("Deciding next node...")
 
     if state.get("is_postcode"):
         logger.info("Valid postcode found, going to postcode_tool_call.")
         return "postcode_tool_call"
-
-    if state.get("extracted_place_names") or state.get("extracted_theme"):
+    
+    if not state.get("extracted_place_names") or not state.get("extracted_theme"):
         logger.info(
-            "Found place names or theme, going to multi_place_tool_call.")
+            "node_router: No place names or theme found, going to extraction.")
+        return "extract_initial_query_node"
+    
+    if state.get("extracted_place_names") and not state.get("multi_place_search_df"):
+        logger.info(
+            "node_router: Found place names, going to multi_place_tool_call.")
         return "multi_place_tool_call"
-
+    
+    if state.get("extracted_place_names") and state.get("selected_place_g_units"):
+        if len(state.get("selected_place_g_units")) == len(state.get("extracted_place_names")) and not state.get("selected_place_themes"):
+            logger.info(
+                "node_router: Found selected polygons, going to get_place_themes_node.")
+            return "get_place_themes_node"
+    
     logger.info(
         "No map selection, postcode, or place/theme found. Going to agent_node.")
     return "agent_node"
 
 
-def decide_next_node(state: lg_State) -> str:
+def should_continue_to_themes(state: lg_State) -> str:
     """
-    Decide which node to move to next in the workflow based on the current state.
-    If a valid postcode was extracted, proceed with postcode processing;
-    otherwise, if a place name was extracted, proceed with the place lookup.
+    Router function to decide the next node after unit selection.
+    If there are still places to process, return "process_place_selection";
+    otherwise, return "get_place_themes_node" to proceed.
     """
-    logger.info("Deciding next node based on current state...")
-    logger.debug({"current_state": state})
-    if state.get("is_postcode"):
-        logger.info("Decision: Processing as postcode")
-        return "postcode_tool_call"
-    elif state.get("extracted_place_name"):
-        logger.info("Decision: Processing as place name")
-        return "multi_place_tool_call"
-    else:
-        logger.info("Decision: Needs place name extraction")
-        return "multi_place_tool_call"
-
-def check_map_selection_node(state: lg_State) -> lg_State:
-    """
-    Check if the user has made a map selection (i.e. selected polygons).
-    If so, use that selection to set the unit (g_unit) directly, bypassing other inputs.
-    """
-    logger.info("Checking for map selection...")
-    logger.debug({"current_state": state})
-
-    selected_polygons = state.get("selected_polygons") or []
-    if len(selected_polygons) > 0:
-        logger.info({"map_selection": {"g_unit": selected_polygons}})
-        state["selected_place_g_units"] = selected_polygons
-        msg = f"Map selection detected: using g_unit={selected_polygons}"
-        state["messages"].append(AIMessage(content=msg))
-    else:
-        logger.info("No map selection found")
-
-    logger.debug({"updated_state": state})
-    return state
+    selected_places = state.get("selected_place_g_places", [])
+    place_names = state.get("extracted_place_names", [])
+    if selected_places and place_names:
+        if len(selected_places) < len(place_names):
+            logger.info(
+                "should_continue_to_themes: More places to process; going to process_place_selection.")
+            return "process_place_selection"
+        else:
+            return "get_place_themes_node"
 
 
 def decide_if_map_selected(state: lg_State) -> str:
@@ -832,8 +882,9 @@ def create_workflow(lg_state):
     workflow.add_node("validate_user_input", validate_user_input)
     workflow.add_node("postcode_tool_call", postcode_tool_call)
     workflow.add_node("multi_place_tool_call", multi_place_tool_call)
-    workflow.add_node("process_multi_place_selection",
-                      process_multi_place_selection)
+    workflow.add_node("process_place_selection", process_place_selection)
+    workflow.add_node("process_unit_selection", process_unit_selection)
+    workflow.add_node("select_unit_on_map", select_unit_on_map)
     workflow.add_node("get_place_themes_node", get_place_themes_node)
     workflow.add_node("get_place_themes_handler", get_place_themes_handler)
     workflow.add_node("find_cubes_node", find_cubes_node)
@@ -841,29 +892,38 @@ def create_workflow(lg_state):
 
     # -- Edges --
     # 1) Start with extracting the user query
-    workflow.add_edge(START, "extract_initial_query_node")
+    workflow.add_edge(START, "validate_user_input")
 
     # 2) From extract_initial_query_node, we call should_continue() to decide the next step
     workflow.add_conditional_edges(
-        "extract_initial_query_node",
-        should_continue,
-        {
-            "get_place_themes_node": "get_place_themes_node",
+        "validate_user_input",
+        node_router,
+        {   
             "postcode_tool_call": "postcode_tool_call",
+            "extract_initial_query_node": "extract_initial_query_node",
             "multi_place_tool_call": "multi_place_tool_call",
+            "get_place_themes_node": "get_place_themes_node",
             "agent_node": "agent_node",
         }
     )
+
+    workflow.add_edge("multi_place_tool_call", "process_place_selection")
+    workflow.add_edge("process_place_selection", "process_unit_selection")
+    workflow.add_edge("process_unit_selection", "select_unit_on_map")
     
+    workflow.add_conditional_edges(
+        "select_unit_on_map",
+        should_continue_to_themes,
+        {
+            "get_place_themes_node": "get_place_themes_node",
+            "process_place_selection": "process_place_selection"
+        }
+    )
+    
+
     
     # 3) From the postcode_tool_call, go to the agent node afterwards
     workflow.add_edge("postcode_tool_call", "get_place_themes_node")
-
-    # 4) From multi_place_tool_call, proceed to process_multi_place_selection
-    workflow.add_edge("multi_place_tool_call", "process_multi_place_selection")
-
-    # 5) After processing multi-place selection, go to get_place_themes_node
-    workflow.add_edge("process_multi_place_selection", "get_place_themes_node")
 
     # 6) From get_place_themes_node → get_place_themes_handler
     workflow.add_edge("get_place_themes_node", "get_place_themes_handler")
