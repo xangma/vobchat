@@ -4,6 +4,7 @@ import logging
 import pandas as pd
 import geopandas as gpd
 from datetime import datetime
+import dash
 from dash import (
     no_update, callback_context as ctx,
     Input, Output, State, ALL
@@ -30,19 +31,26 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
         # Only ONE Output: the updated store
         Output("map-state", "data"),
         Output("counts-store", "data", allow_duplicate=True),
+        # Update the toggle-unselected button
+        Output("toggle-unselected", "children"),
+        Output('geojson-layer', 'data', allow_duplicate=True),
         [
             Input({'type': 'unit-filter', 'unit': ALL}, 'n_clicks'),
             Input('reset-selections', 'n_clicks'),
             Input('year-range-slider', 'value'),   # read user’s chosen years
             Input('ctrl-pressed-store', 'data'),
             Input("geojson-layer", "n_clicks"),
+            Input("toggle-unselected", "n_clicks"),
         ],
         [
             State("map-state", "data"),
             State({'type': 'unit-filter', 'unit': ALL}, 'id'),
             State("geojson-layer", "clickData"),
             State("geojson-layer", "hideout"),
+            State('geojson-layer', 'data'),
             State("counts-store", "data"),
+            # update the toggle-unselected button
+            State("toggle-unselected", "children"),
         ],
         prevent_initial_call=True,
     )
@@ -52,16 +60,21 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
         chosen_year_range,
         ctrl_pressed,
         geojson_n_clicks,
+        toggle_unselected_clicks,
         map_state,
         button_ids,
         geojson_clickData,
         geojson_hideout,
+        geojson_data,
         counts,
+        toggle_unselected_children
     ):
         """
         This callback merges ALL user interactions into one updated map-state.
         Dash sees only 1 property ("map-state.data") changed => single callback invocation.
         """
+        ctx = dash.callback_context
+        ctx_trigger = ctx.triggered[0]["prop_id"]
         triggered_prop_ids = [t["prop_id"] for t in ctx.triggered]
         if not triggered_prop_ids:
             raise PreventUpdate
@@ -148,7 +161,23 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
                     new_map_state["selected_polygons"] = selected_ids
                     new_map_state["selected_polygons_unit_types"] = selected_units
 
-        return new_map_state, counts
+        # (D) Apply toggle: hide unselected polygons if the toggle is off.
+        # The toggle returns ['show'] when on, otherwise an empty list.
+        elif "toggle-unselected.n_clicks" in triggered_prop_ids:
+            if map_state["show_unselected"]:
+                new_map_state["show_unselected"] = False
+                toggle_unselected_children = "Show unselected polygons"
+                # debug_msg += " | Unselected polygons hidden."
+            else:
+                new_map_state["show_unselected"] = True
+                toggle_unselected_children = "Hide unselected polygons"
+                # debug_msg += " | Unselected polygons shown."
+
+        # (E) If the toggle is off, filter out unselected polygons.
+
+            # debug_msg += " | Unselected polygons hidden."
+
+        return new_map_state, counts, toggle_unselected_children, geojson_data
 
     @app.callback(
         [
@@ -156,18 +185,19 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
             Output('year-range-slider', 'min'),
             Output('year-range-slider', 'max'),
             Output('year-range-slider', 'marks'),
-            Output('geojson-layer', 'data'),
+            Output('geojson-layer', 'data', allow_duplicate=True),
             Output('geojson-layer', 'hideout'),
             Output('debug-output', 'children'),
             # Update the style property for each unit-filter button.
             Output({'type': 'unit-filter', 'unit': ALL}, 'style'),
-            # Store the counts of selected polygons for each unit type.
+            # Store the counts of selected polygons for each unit type
             Output("counts-store", "data", allow_duplicate=True),
         ],
         Input("map-state", "data"),
         State({'type': 'unit-filter', 'unit': ALL}, 'id'),
         State("app-state", "data"),
         State("counts-store", "data"),
+
         # Removed prevent_initial_call=True so the callback runs on page load
     )
     def render_map_display(map_state, button_ids, app_state, counts):
@@ -177,6 +207,8 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
         Also updates each unit-filter button's label to include a badge with the count
         of selected polygons (if > 0) shown as a circle.
         """
+        ctx = dash.callback_context
+        ctx_trigger = ctx.triggered[0]["prop_id"]
         # Initialize default map_state if None.
         if not map_state:
             map_state = {"unit_types": ["MOD_REG"], "selected_polygons": []}
@@ -258,6 +290,13 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
                 if feature["id"] not in counts[feat_unit + '_g_units']:
                     counts[feat_unit] = counts.get(feat_unit, 0) + 1
                     counts[feat_unit + '_g_units'].append(feature["id"])
+
+        if not map_state["show_unselected"]:
+            selected_ids = set(map_state.get("selected_polygons", []))
+            geojson_out["features"] = [
+                feature for feature in geojson_out.get("features", [])
+                if feature["id"] in selected_ids
+            ]
 
         return (
             container_style,

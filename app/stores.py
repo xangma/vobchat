@@ -8,7 +8,8 @@ map_state_data = {
     "year_bounds": None,
     "selected_polygons": [],
     "selected_polygons_unit_types": [],
-    "current_geojson": None
+    "current_geojson": None,
+    "show_unselected": True,
 }
 
 place_state_data = {

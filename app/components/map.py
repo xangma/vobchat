@@ -62,9 +62,9 @@ def create_map_layout(initial_gdf):
     return html.Div([
         html.H3("Map (Dash Leaflet)"),
 
-        # Include an initial map-state store so the default is set.
-        dcc.Store(id="map-state",
-                  data={"unit_types": ["MOD_REG"], "selected_polygons": []}),
+        # # Include an initial map-state store so the default is set.
+        # dcc.Store(id="map-state",
+        #           data={"unit_types": ["MOD_REG"], "selected_polygons": []}),
 
         dbc.Card([
             dbc.CardBody([
@@ -86,6 +86,7 @@ def create_map_layout(initial_gdf):
                 ], id='year-range-container', style={'display': 'none'}),
             ]),
         ], className="mb-3"),
+        
 
         # Wrap the map in a container with relative positioning.
         html.Div([
@@ -107,13 +108,29 @@ def create_map_layout(initial_gdf):
                 id="leaflet-map",
             ),
             # Reset button is absolutely positioned over the map.
+            # New toggle switch: checked means unselected polygons are shown.
+            dbc.Button(
+                'Hide Unselected Polygons',
+                id='toggle-unselected',
+                color="secondary",
+                active=True,
+                style={
+                    'position': 'absolute',
+                    'top': '10px',
+                    'right': '10px',
+                    'zIndex': '1000',
+                },
+                
+            ),
+            
             dbc.Button(
                 "Reset Selections",
                 id="reset-selections",
                 color="secondary",
+                active=True,
                 style={
                     'position': 'absolute',
-                    'top': '10px',
+                    'top': '55px',
                     'right': '10px',
                     'zIndex': '1000'
                 }
