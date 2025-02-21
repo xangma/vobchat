@@ -7,9 +7,9 @@ from langchain.tools import BaseTool, StructuredTool, tool
 from langchain_community.tools import QuerySQLDataBaseTool
 import pandas as pd
 from typing import List, Annotated
-from config import load_config, get_db
+from .config import load_config, get_db
 import io
-from utils.constants import UNIT_TYPES
+from .utils.constants import UNIT_TYPES
 import logging
 logger = logging.getLogger(__name__)
 

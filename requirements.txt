@@ -1,0 +1,15 @@
+dash
+dash-bootstrap-components
+dash-extensions
+pandas
+geopandas
+shapely
+pyproj
+plotly
+langchain
+langgraph
+langchain_community
+langchain_openai
+langchain_ollama
+configparser
+gunicorn

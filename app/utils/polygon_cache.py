@@ -4,8 +4,8 @@ import geopandas as gpd
 from datetime import datetime
 import hashlib
 import json
-from utils.constants import UNIT_TYPES
-from config import load_config, get_db
+from .constants import UNIT_TYPES
+from ..config import load_config, get_db
 import shapely
 import pandas as pd
 import os

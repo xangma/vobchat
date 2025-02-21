@@ -12,8 +12,8 @@ from dash import (
 from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 
-from utils.constants import UNIT_TYPES
-from mapinit import get_polygons_by_type
+from ..utils.constants import UNIT_TYPES
+from ..mapinit import get_polygons_by_type
 
 logger = logging.getLogger(__name__)
 

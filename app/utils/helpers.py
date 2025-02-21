@@ -1,6 +1,4 @@
 # app/utils/helpers.py
-import geopandas as gpd
-from typing import Dict, Optional, Union, Tuple
 
 def calculate_center_and_zoom(gdf_filtered):
     """Helper function to calculate map center and zoom level."""

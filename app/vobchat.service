@@ -1,0 +1,15 @@
+[Unit]
+Description=Gunicorn instance for vobchat Dash App
+After=network.target
+
+[Service]
+User=youruser
+Group=yourgroup
+WorkingDirectory=~/repos/vobchat
+# activate a conda environment
+Environment="PATH=/home/youruser/miniconda3/envs/vobchat/bin"
+ExecStart=gunicorn -c gunicorn.conf.py app:server
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

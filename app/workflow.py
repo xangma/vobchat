@@ -9,7 +9,7 @@ import pandas as pd
 from typing_extensions import TypedDict
 import logging
 # Constant definitions for themes
-from utils.constants import UNIT_TYPES, UNIT_THEMES
+from .utils.constants import UNIT_TYPES, UNIT_THEMES
 
 # -------------------------------
 # Import Pydantic for data validation and models
@@ -34,15 +34,15 @@ from langchain_core.runnables.graph import MermaidDrawMethod
 # -------------------------------
 # Import local modules (configuration, DB setup, tools, etc.)
 # -------------------------------
-from config import load_config, get_db
-from tools import (
+from .config import load_config, get_db
+from .tools import (
     find_cubes_for_unit_theme,
     find_units_by_postcode,
     find_themes_for_unit,
     find_places_by_name
 )
-from mapinit import get_polygons_by_type
-from utils.polygon_cache import polygon_cache
+from .mapinit import get_polygons_by_type
+from .utils.polygon_cache import polygon_cache
 
 # -------------------------------
 # Set up logging for debugging and informational messages

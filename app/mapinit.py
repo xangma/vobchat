@@ -1,13 +1,13 @@
 
 # app/mapinit.py
-from config import load_config, get_db
+from .config import load_config, get_db
 import os
 import pandas as pd
 import geopandas as gpd
 import json
 import shapely
 from pyproj import CRS
-from utils.polygon_cache import polygon_cache
+from .utils.polygon_cache import polygon_cache
 from typing import Optional, Tuple
 
 config = load_config()

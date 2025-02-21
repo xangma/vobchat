@@ -4,7 +4,7 @@ from dash import html
 from dash.exceptions import PreventUpdate
 from uuid import uuid4
 
-from stores import app_state_data, map_state_data, place_state_data
+from ..stores import app_state_data, map_state_data, place_state_data
 
 from dash import Input, Output, State, ALL
 
@@ -42,6 +42,7 @@ def register_chat_callbacks(app, compiled_workflow):
         State("chat-input", "value"),
         State("chat-display", "children"),
         State("options-container", "children"),
+        State("counts-store", "data"),
         prevent_initial_call=True
     )
     def update_chat(
@@ -56,6 +57,7 @@ def register_chat_callbacks(app, compiled_workflow):
         user_input,
         chat_history,
         buttons,
+        counts_store
     ):
 
         ctx = dash.callback_context
@@ -321,7 +323,8 @@ def register_chat_callbacks(app, compiled_workflow):
             place_state,
             retrigger_chat,
             buttons,
-            thread_id
+            counts_store,
+            thread_id,
         )
     
     @app.callback(

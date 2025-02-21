@@ -5,7 +5,10 @@ from langchain_community.utilities import SQLDatabase
 
 localdb = False
 
-def load_config(filename='database.ini', section='postgresql'):
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def load_config(filename=os.path.join(BASE_DIR, "database.ini"), section='postgresql'):
     parser = ConfigParser()
     parser.read(filename)
 
