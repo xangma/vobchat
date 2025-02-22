@@ -25,6 +25,9 @@ setup(
         "langchain_ollama",
         "configparser",
         "gunicorn",
+        "psycopg2-binary",
+        "dash-leaflet",
+        "grandalf"
     ],
     include_package_data=True,
     classifiers=[

@@ -13,3 +13,6 @@ langchain_openai
 langchain_ollama
 configparser
 gunicorn
+psycopg2-binary
+dash-leaflet
+grandalf
