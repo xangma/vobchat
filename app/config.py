@@ -3,7 +3,7 @@ from configparser import ConfigParser
 import os
 from langchain_community.utilities import SQLDatabase
 
-localdb = False
+localdb = True
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 

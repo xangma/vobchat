@@ -20,7 +20,8 @@ def create_app():
     config = load_config()
     db = get_db(config)
 
-    app = DashProxy(transforms=[CycleBreakerTransform()], external_stylesheets=[dbc.themes.BOOTSTRAP])
+    app = DashProxy(transforms=[CycleBreakerTransform()], external_stylesheets=[
+                    dbc.themes.BOOTSTRAP], url_base_pathname='/vobchat/')
 
     initial_gdf = get_polygons_by_type('MOD_REG')
     date_ranges_df = get_date_ranges_by_type()

@@ -11,5 +11,6 @@ polygons*
 langchain
 langgraph
 ./app/assets/dashExtensions_default.js
-/assets/
+/assets
+vobchat.egg-info/
 analysedcode.json
