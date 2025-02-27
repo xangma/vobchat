@@ -4,23 +4,7 @@ from dash import Dash, html, Input, Output, State
 from dash.dependencies import ALL
 
 def register_clientside_callbacks(app: Dash):
-    # app.clientside_callback(
-    #     """
-    #     function (n_clicks, oldValue) {
-    #         // We'll read from the DOM ourselves:
-    #         const storeEl = document.querySelector('#ctrl-pressed-store');
-    #         if (!storeEl || !storeEl.dataset) {
-    #             return false;
-    #         }
-    #         return storeEl.dataset.ctrlpressed === 'true';
-    #     }
-    #     """,
-    #     Input({'type': 'unit-filter', 'unit': ALL}, 'n_clicks'),
-    #     State('ctrl-pressed-store', 'data'),
-    #     Output('ctrl-pressed-store', 'data'),
-    #     prevent_initial_call=True
-    # )
-
+    # Original callback
     app.clientside_callback(
     """
     function() {
@@ -48,3 +32,20 @@ def register_clientside_callbacks(app: Dash):
     """,
     Output('document', 'id'),
     Input('document', 'id'))
+
+    # Add callback to handle map resize
+    app.clientside_callback(
+    """
+    function() {
+        // This callback will be triggered on window resize
+        if (document.getElementById('leaflet-map')) {
+            setTimeout(function() {
+                // Invalidate the map size to make it adjust to its container
+                window.dispatchEvent(new Event('resize'));
+            }, 100);
+        }
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output('leaflet-map', 'id'),
+    Input('map-panel', 'style'))

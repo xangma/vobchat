@@ -23,21 +23,10 @@ def register_visualization_callbacks(app, compiled_workflow):
     )
     def handle_visualization_request(app_state, thread_id, place_state):
         if not app_state or app_state.get("show_visualization") is False:
-            raise PreventUpdate
-
-        # messages = app_state["messages"]
-        # if not messages:
-        #     raise PreventUpdate
-
-        # # The last message is presumably the new AI message
-        # latest_message = messages[-1]
+            # Keep visualization hidden when not requested
+            return {"height": "100%", "display": "none", "flexDirection": "column"}, [], place_state
 
         try:
-            # Extract message content from the HTML div
-            # message_content = latest_message['props']['children']
-            
-            # # Try to get additional_kwargs from the message
-            # if message_content.startswith("AI: Here are all the available data cubes"):
             # Get the state to access additional data
             config = {"configurable": {"thread_id": thread_id}}
             state = compiled_workflow.get_state(config)
@@ -45,7 +34,8 @@ def register_visualization_callbacks(app, compiled_workflow):
             # Get the last message's additional_kwargs
             cubes = place_state.get("cubes", [])
             if not cubes:
-                raise PreventUpdate
+                # Also keep hidden if no cubes are available
+                return {"height": "100%", "display": "none", "flexDirection": "column"}, [], place_state
             
             # Get all cube data at once
             cubes_df = pd.DataFrame(cubes)
@@ -64,12 +54,14 @@ def register_visualization_callbacks(app, compiled_workflow):
                 for idx, row in cubes_df.iterrows()
             ]
             place_state['cube_data'] = all_cube_data.to_json(orient='split')
-            return {"display": "block"}, options, place_state
+            # Show the visualization with full opacity when data is available
+            return {"height": "100%", "display": "flex", "flexDirection": "column"}, options, place_state
                         
         except Exception as e:
             print(f"Error handling visualization request: {e}")
             
-        raise PreventUpdate
+        # Also hide on error
+        return {"height": "100%", "display": "none", "flexDirection": "column"}, [], place_state
 
     @app.callback(
         Output("data-plot", "figure", allow_duplicate=True),
@@ -88,24 +80,11 @@ def register_visualization_callbacks(app, compiled_workflow):
         if not isinstance(selected_cubes, list):
             selected_cubes = [selected_cubes]
         
-        # fig = go.Figure()
-        # g_names = cubes_df['g_name'].unique()
         dflist = []
         for cube in selected_cubes:
             tempdf = cubes_df.filter(regex=f"g_name|year|{cube[2:]}")
             dflist.append(tempdf)
-        #     tempdf = cubes_df.filter(regex=f"g_name|year|{cube[2:]}")
-        #     for name in g_names:
-        #         tempdf = cubes_df[cubes_df['g_name'] == name]
-        #         for col in tempdf.columns:
-        #             if col not in ['index','g_name','year']:
-        #                 fig.add_trace(go.Scatter(
-        #                     x=tempdf['year'].values,
-        #                     y=tempdf[col].values,
-        #                     name=name,
-        #                     mode='lines+markers',
-        #                     showlegend=True,
-        #                 ))
+
         dfs = pd.concat(dflist)
         unpivoted_df = pd.melt(dfs, id_vars=['year', 'g_name'], value_vars=dfs.columns[2:])
         unpivoted_df['merged_name'] = unpivoted_df['g_name'] + ' ' + unpivoted_df['variable']
@@ -116,10 +95,25 @@ def register_visualization_callbacks(app, compiled_workflow):
             title="Historical Data Visualization",
             xaxis_title="Year",
             yaxis_title="Value",
-            hovermode='x unified'
+            hovermode='x unified',
+            margin={"l": 50, "r": 50, "t": 50, "b": 50},  # Reduce margins to maximize chart area
+            height=None,  # Let the height be determined by the container
+            autosize=True  # Ensures the chart resizes with its container
         )
         
         return fig
+
+    # Add callback to show/hide the vertical resize handle
+    @app.callback(
+        Output("vertical-resize-handle", "style"),
+        Input("visualization-area", "style"),
+        prevent_initial_call=True
+    )
+    def update_resize_handle_visibility(visualization_style):
+        if visualization_style.get("display") == "none":
+            return {"display": "none"}
+        else:
+            return {"display": "flex"}  # Use flex to maintain the resize handle styling# app/callbacks/visualization.py
 
     @app.callback(
         Output("visualization-area", "style", allow_duplicate=True),
@@ -130,5 +124,6 @@ def register_visualization_callbacks(app, compiled_workflow):
     )
     def clear_visualization(n_clicks):
         if n_clicks:
-            return {"display": "none"}, None, {}
+            # Hide the visualization panel completely
+            return {"height": "100%", "display": "none", "flexDirection": "column"}, None, {}
         raise PreventUpdate

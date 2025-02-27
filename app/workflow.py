@@ -44,6 +44,13 @@ from .tools import (
 from .mapinit import get_polygons_by_type
 from .utils.polygon_cache import polygon_cache
 
+from langgraph.checkpoint.postgres import PostgresSaver
+ 
+from psycopg_pool import ConnectionPool
+from psycopg import Connection
+import os
+
+
 # -------------------------------
 # Set up logging for debugging and informational messages
 # -------------------------------
@@ -937,7 +944,24 @@ def create_workflow(lg_state):
     # --- Compile the workflow ---
     logger.info("Compiling workflow...")
     try:
-        compiled_workflow = workflow.compile(checkpointer=memory)
+
+        DB_URI = f"postgresql://postgres:{os.environ.get('POSTGRES_PASS')}@localhost:5432/postgres?sslmode=disable"
+        connection_kwargs = {
+            "autocommit": True,
+            "prepare_threshold": 0,
+        }
+        conn = Connection.connect(DB_URI, **connection_kwargs)
+        # conn = ConnectionPool(
+        #     # Example configuration
+        #     conninfo=DB_URI,
+        #     max_size=20,
+        #     kwargs=connection_kwargs,
+        # )
+        checkpointer = PostgresSaver(conn)
+
+        # NOTE: you need to call .setup() the first time you're using your checkpointer
+        checkpointer.setup()
+        compiled_workflow = workflow.compile(checkpointer=checkpointer)
         logger.info("Workflow compilation successful.")
     except Exception as e:
         logger.error("Error compiling workflow", exc_info=True)

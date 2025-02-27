@@ -27,7 +27,7 @@ setup(
         "gunicorn",
         "psycopg2-binary",
         "dash-leaflet",
-        "grandalf"
+        "grandalf",
     ],
     include_package_data=True,
     classifiers=[

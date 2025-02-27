@@ -244,6 +244,7 @@ def register_chat_callbacks(app, compiled_workflow):
                         if g_unit not in map_state["selected_polygons"]:
                             map_state["selected_polygons"].append(str(g_unit))
                             map_state["selected_polygons_unit_types"].append(selected_place_g_unit_types[i])
+                            map_state["unit_types"] = interrupt_value["selected_place_g_unit_types"]
 
                     app_state.update({
                         "button_options": [],

@@ -42,7 +42,6 @@ def create_map_layout(initial_gdf):
     """
     Creates the layout that uses Dash Leaflet instead of Plotly.
     """
-
     buttons = []
 
     for k, v in UNIT_TYPES.items():
@@ -60,82 +59,103 @@ def create_map_layout(initial_gdf):
         )
 
     return html.Div([
-        html.H3("Map (Dash Leaflet)"),
-
-        # # Include an initial map-state store so the default is set.
-        # dcc.Store(id="map-state",
-        #           data={"unit_types": ["MOD_REG"], "selected_polygons": []}),
-
-        dbc.Card([
-            dbc.CardBody([
-                html.H4("Filter by Unit Type", className="mb-2"),
-                html.Div(buttons, className="d-flex flex-wrap"),
-                # (The reset-selections button has been moved to overlay the map)
-                html.Div([
-                    html.H4("Filter by Year Range", className="mt-3 mb-2"),
-                    dcc.RangeSlider(
-                        id='year-range-slider',
-                        min=1800,
-                        max=datetime.now().year,
-                        value=[datetime.now().year, datetime.now().year],
-                        marks={
-                            1800: '1800',
-                            datetime.now().year: str(datetime.now().year)
-                        },
-                    ),
-                ], id='year-range-container', style={'display': 'none'}),
-            ]),
-        ], className="mb-3"),
+        html.H3("Map (Dash Leaflet)", className="mb-3"),
         
-
-        # Wrap the map in a container with relative positioning.
-        html.Div([
-            dl.Map(
-                [
-                    dl.TileLayer(),
-                    dl.GeoJSON(
-                        id="geojson-layer",
-                        data=json.loads(initial_gdf.to_json()),
-                        hideout=dict(selected=[]),
-                        zoomToBounds=True,
-                        options=dict(pane="overlayPane"),
-                        style=style_function,
-                    ),
-                ],
-                center=[55.0, 10.0],
-                zoom=5,
-                style={'height': '70vh'},
-                id="leaflet-map",
-            ),
-            # Reset button is absolutely positioned over the map.
-            # New toggle switch: checked means unselected polygons are shown.
-            dbc.Button(
-                'Hide Unselected Polygons',
-                id='toggle-unselected',
-                color="secondary",
-                active=True,
-                style={
-                    'position': 'absolute',
-                    'top': '10px',
-                    'right': '10px',
-                    'zIndex': '1000',
-                },
+        # Main content container with proper flex layout
+        html.Div(
+            style={"display": "flex", "flexDirection": "column", "height": "calc(100% - 40px)"},
+            children=[
+                # Filter controls (fixed height, non-scrollable)
+                html.Div(
+                    style={"flexShrink": "0", "marginBottom": "10px"},
+                    children=[
+                        html.H4("Filter by Unit Type", className="mb-2"),
+                        html.Div(buttons, className="d-flex flex-wrap"),
+                        
+                        # Year range slider
+                        html.Div([
+                            html.H4("Filter by Year Range", className="mt-2 mb-2"),
+                            dcc.RangeSlider(
+                                id='year-range-slider',
+                                min=1800,
+                                max=datetime.now().year,
+                                value=[datetime.now().year, datetime.now().year],
+                                marks={
+                                    1800: '1800',
+                                    datetime.now().year: str(datetime.now().year)
+                                },
+                            ),
+                        ], id='year-range-container', style={'display': 'none'}),
+                    ]
+                ),
                 
-            ),
-            
-            dbc.Button(
-                "Reset Selections",
-                id="reset-selections",
-                color="secondary",
-                active=True,
-                style={
-                    'position': 'absolute',
-                    'top': '55px',
-                    'right': '10px',
-                    'zIndex': '1000'
-                }
-            )
-        ], style={'position': 'relative'}),
-
-        html.Div(id='debug-output', style={'whiteSpace': 'pre-line'}),
-    ])
+                # Map container (flexible, takes remaining space)
+                html.Div(
+                    style={
+                        "position": "relative",
+                        "flex": "1 1 auto",
+                        "minHeight": "300px",
+                        "border": "1px solid #dee2e6",
+                        "borderRadius": "5px",
+                        "overflow": "hidden" # Keeps the map contained
+                    },
+                    children=[
+                        dl.Map(
+                            [
+                                dl.TileLayer(),
+                                dl.GeoJSON(
+                                    id="geojson-layer",
+                                    data=json.loads(initial_gdf.to_json()),
+                                    hideout=dict(selected=[]),
+                                    zoomToBounds=True,
+                                    options=dict(pane="overlayPane"),
+                                    style=style_function,
+                                ),
+                            ],
+                            center=[55.0, 10.0],
+                            zoom=5,
+                            style={'height': '100%', 'width': '100%'},
+                            id="leaflet-map",
+                        ),
+                        # Controls positioned absolutely over the map
+                        dbc.Button(
+                            'Hide Unselected Polygons',
+                            id='toggle-unselected',
+                            color="secondary",
+                            active=True,
+                            style={
+                                'position': 'absolute',
+                                'top': '10px',
+                                'right': '10px',
+                                'zIndex': '1000',
+                            },
+                        ),
+                        dbc.Button(
+                            "Reset Selections",
+                            id="reset-selections",
+                            color="secondary",
+                            active=True,
+                            style={
+                                'position': 'absolute',
+                                'top': '55px',
+                                'right': '10px',
+                                'zIndex': '1000'
+                            }
+                        )
+                    ]
+                ),
+                
+                # Debug output (fixed height, always visible)
+                html.Div(
+                    id='debug-output',
+                    style={
+                        'whiteSpace': 'pre-line',
+                        'marginTop': '10px',
+                        'height': '40px',
+                        'overflowY': 'auto',
+                        'flexShrink': '0'
+                    }
+                ),
+            ]
+        )
+    ], style={"height": "100%", "display": "flex", "flexDirection": "column"})

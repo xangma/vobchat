@@ -29,7 +29,7 @@ def load_config(filename=os.path.join(BASE_DIR, "database.ini"), section='postgr
 
 
 def get_db(config):
-    dburi = f"postgresql+psycopg2://{config['user']}:{config['password']}@{config['host']}:5432/{config['dbname']}"
+    dburi = f"postgresql://{config['user']}:{config['password']}@{config['host']}:5432/{config['dbname']}"
     db = SQLDatabase.from_uri(dburi, schema=config['schema'])
     return db
 

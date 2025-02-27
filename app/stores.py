@@ -28,7 +28,7 @@ app_state_data = {
     "button_options": [],
     "selection_idx": None,
     "retrigger_chat": False,
-    "show_visualization": False,
+    "show_visualization": False,  # Ensure this is False by default
 }
 
 def create_stores():
@@ -43,7 +43,6 @@ def create_stores():
 
         # Global app state
         dcc.Store(id="app-state", data=app_state_data),
-
 
         # Chat related stores
         dcc.Store(id="thread-id", data=None),

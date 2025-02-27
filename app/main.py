@@ -1,6 +1,7 @@
-import logging
+import logging, os
 from dash_extensions.enrich import DashProxy, CycleBreakerTransform
 import dash_bootstrap_components as dbc
+from dash import html
 from .config import load_config, get_db
 from .workflow import create_workflow, lg_State
 from .mapinit import get_polygons_by_type, get_date_ranges_by_type
@@ -21,26 +22,39 @@ def create_app():
     db = get_db(config)
 
     app = DashProxy(transforms=[CycleBreakerTransform()], external_stylesheets=[
-                    dbc.themes.BOOTSTRAP], url_base_pathname='/vobchat/')
+                    dbc.themes.BOOTSTRAP], url_base_pathname=os.getenv("DASH_URL_BASE", None), suppress_callback_exceptions=True)
 
     initial_gdf = get_polygons_by_type('MOD_REG')
     date_ranges_df = get_date_ranges_by_type()
     compiled_workflow = create_workflow(lg_State)
 
-    app.layout = dbc.Container([
+    # Create a resizable layout
+    app.layout = html.Div([
         create_stores(),
-        dbc.Row([
-            dbc.Col([
-                create_chat_layout()
-            ], md=6),
-            dbc.Col([
-                create_map_layout(initial_gdf)
-            ], md=6),
+        html.Div(className="resizable-container", children=[
+            html.Div(className="resizable-vertical", children=[
+                # Top row with chat and map side by side (horizontal split)
+                html.Div(className="resizable-horizontal", style={"flex": "1"}, children=[
+                    # Chat panel
+                    html.Div(className="resizable-panel", id="chat-panel", children=[
+                        create_chat_layout()
+                    ]),
+                    # Horizontal resize handle
+                    html.Div(className="resize-handle-horizontal"),
+                    # Map panel
+                    html.Div(className="resizable-panel", id="map-panel", children=[
+                        create_map_layout(initial_gdf)
+                    ]),
+                ]),
+                # Vertical resize handle (hidden by default, shown when visualization appears)
+                html.Div(className="resize-handle-vertical", id="vertical-resize-handle", style={"display": "none"}),
+                # Bottom row with visualization
+                html.Div(className="resizable-panel", id="visualization-panel", children=[
+                    create_visualization_layout()
+                ], style={"minHeight": "200px"}),
+            ]),
         ]),
-        dbc.Row([
-            dbc.Col(create_visualization_layout(), md=12),
-        ])
-    ], fluid=True)
+    ])
 
     register_chat_callbacks(app, compiled_workflow)
     register_map_leaflet_callbacks(app, date_ranges_df)
