@@ -33,11 +33,10 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
         Output("counts-store", "data", allow_duplicate=True),
         # Update the toggle-unselected button
         Output("toggle-unselected", "children"),
-        Output('geojson-layer', 'data', allow_duplicate=True),
         [
             Input({'type': 'unit-filter', 'unit': ALL}, 'n_clicks'),
             Input('reset-selections', 'n_clicks'),
-            Input('year-range-slider', 'value'),   # read user’s chosen years
+            Input('year-range-slider', 'value'),
             Input('ctrl-pressed-store', 'data'),
             Input("geojson-layer", "n_clicks"),
             Input("toggle-unselected", "n_clicks"),
@@ -87,6 +86,8 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
             new_map_state["unit_types"] = ["MOD_REG"]
         if "selected_polygons" not in new_map_state:
             new_map_state["selected_polygons"] = []
+        if "selected_polygons_unit_types" not in new_map_state:
+            new_map_state["selected_polygons_unit_types"] = []
 
         # 1) Handle Filter / Year-Range changes
         filter_triggered = False
@@ -96,6 +97,7 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
             logger.debug("reset-selections: clearing to ['MOD_REG']")
             new_map_state["unit_types"] = ["MOD_REG"]
             new_map_state["selected_polygons"] = []
+            new_map_state["selected_polygons_unit_types"] = []
             counts = {}
             filter_triggered = True
 
@@ -173,11 +175,9 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
                 toggle_unselected_children = "Hide unselected polygons"
                 # debug_msg += " | Unselected polygons shown."
 
-        # (E) If the toggle is off, filter out unselected polygons.
-
-            # debug_msg += " | Unselected polygons hidden."
-
-        return new_map_state, counts, toggle_unselected_children, geojson_data
+        # Return the updated map state but NOT the geojson data
+        # Let the render_map_display callback handle updating the geojson
+        return new_map_state, counts, toggle_unselected_children
 
     @app.callback(
         [
@@ -185,7 +185,7 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
             Output('year-range-slider', 'min'),
             Output('year-range-slider', 'max'),
             Output('year-range-slider', 'marks'),
-            Output('geojson-layer', 'data', allow_duplicate=True),
+            Output('geojson-layer', 'data'),
             Output('geojson-layer', 'hideout'),
             Output('debug-output', 'children'),
             # Update the style property for each unit-filter button.
@@ -211,7 +211,7 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
         ctx_trigger = ctx.triggered[0]["prop_id"]
         # Initialize default map_state if None.
         if not map_state:
-            map_state = {"unit_types": ["MOD_REG"], "selected_polygons": []}
+            map_state = {"unit_types": ["MOD_REG"], "selected_polygons": [], "selected_polygons_unit_types": []}
 
         # (A) Show/hide slider based on whether any unit type requires a year filter.
         unit_types = map_state.get("unit_types", ["MOD_REG"])
@@ -281,17 +281,21 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
 
         # (F) Update button labels to include a badge showing the count of selected polygons.
         # We'll derive the count by checking which features in geojson_out have been selected.
+        counts = counts or {}
+        for unit_type in UNIT_TYPES.keys():
+            counts[unit_type + '_g_units'] = counts.get(unit_type + '_g_units', [])
+            counts[unit_type] = 0
+            
         for feature in geojson_out.get("features", []):
             # Determine the unit type from the feature properties.
             feat_unit = feature["properties"].get("g_unit_type", "MOD_REG")
             if feature["id"] in map_state.get("selected_polygons", []):
-                if not counts.get(feat_unit + '_g_units'):
-                    counts[feat_unit + '_g_units'] = []
                 if feature["id"] not in counts[feat_unit + '_g_units']:
                     counts[feat_unit] = counts.get(feat_unit, 0) + 1
                     counts[feat_unit + '_g_units'].append(feature["id"])
 
-        if not map_state["show_unselected"]:
+        # (G) Filter visible polygons if show_unselected is False
+        if map_state.get("show_unselected") is False:
             selected_ids = set(map_state.get("selected_polygons", []))
             geojson_out["features"] = [
                 feature for feature in geojson_out.get("features", [])
