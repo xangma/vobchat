@@ -1,5 +1,5 @@
 import logging, os
-from dash_extensions.enrich import DashProxy, CycleBreakerTransform
+from dash_extensions.enrich import DashProxy, CycleBreakerTransform, ServersideOutputTransform
 import dash_bootstrap_components as dbc
 from dash import html
 from .config import load_config, get_db
@@ -54,7 +54,8 @@ def create_app():
                 ], style={"minHeight": "200px"}),
             ]),
         ]),
-    ])
+    ],
+    id="document")
 
     register_chat_callbacks(app, compiled_workflow)
     register_map_leaflet_callbacks(app, date_ranges_df)

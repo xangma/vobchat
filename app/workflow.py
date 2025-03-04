@@ -299,7 +299,7 @@ def validate_user_input(state: lg_State) -> lg_State:
     """
 
     logger.info("Starting user input validation...")
-    state["current_node"] = "validate_user_input"
+    # state["current_node"] = "validate_user_input"
     logger.debug({"current_state": state})
     if state["messages"]:
         user_input = state["messages"][-1].content

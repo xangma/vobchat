@@ -8,7 +8,7 @@ import json
 from ..utils.constants import UNIT_TYPES
 
 color_dict = {k: v['color'] for k, v in UNIT_TYPES.items()}
-# The clientside style function for the GeoJSON layer remains unchanged.
+
 style_function = assign(f"""
 function(feature, context) {{
     const sel = context.hideout.selected || [];
@@ -110,6 +110,8 @@ def create_map_layout(initial_gdf):
                                     zoomToBounds=True,
                                     options=dict(pane="overlayPane"),
                                     style=style_function,
+                                    format="geojson",
+                                    
                                 ),
                             ],
                             center=[55.0, 10.0],

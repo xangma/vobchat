@@ -197,10 +197,11 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
         State({'type': 'unit-filter', 'unit': ALL}, 'id'),
         State("app-state", "data"),
         State("counts-store", "data"),
+        State('geojson-layer', 'data'),
 
         # Removed prevent_initial_call=True so the callback runs on page load
     )
-    def render_map_display(map_state, button_ids, app_state, counts):
+    def render_map_display(map_state, button_ids, app_state, counts, current_geojson):
         """
         Fires each time map_state.data changes.
         Builds final UI: slider bounds, geojson, debug text, button styling, etc.
@@ -211,7 +212,7 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
         ctx_trigger = ctx.triggered[0]["prop_id"]
         # Initialize default map_state if None.
         if not map_state:
-            map_state = {"unit_types": ["MOD_REG"], "selected_polygons": [], "selected_polygons_unit_types": []}
+            map_state = {"unit_types": ["MOD_REG"], "selected_polygons": []}
 
         # (A) Show/hide slider based on whether any unit type requires a year filter.
         unit_types = map_state.get("unit_types", ["MOD_REG"])
@@ -229,29 +230,53 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
 
         # (C) Build polygons for each active unit type.
         year_range = map_state.get("year_range")
-        gdfs = []
-        timeless_unit_types = [
-            k for k, v in UNIT_TYPES.items() if v['timeless']]
-        for ut in unit_types:
-            if ut not in timeless_unit_types and year_range:
-                gdf = get_polygons_by_type(ut, year_range[0], year_range[1])
-            else:
-                gdf = get_polygons_by_type(ut)
-            gdfs.append(gdf)
+        
+        # Check if we need to fetch polygons or if we can reuse existing ones
+        need_to_fetch = True
+        current_features = []
+        
+        if current_geojson and 'features' in current_geojson:
+            current_features = current_geojson['features']
+            
+            # Get all feature IDs in the current geojson
+            current_ids = set()
+            current_unit_types = set()
+            for feature in current_features:
+                if 'id' in feature and 'properties' in feature and 'g_unit_type' in feature['properties']:
+                    current_ids.add(feature['id'])
+                    current_unit_types.add(feature['properties']['g_unit_type'])
+            
+            # If all requested unit types are already in the current geojson,
+            # and we're not changing the year range for non-timeless types, we can skip fetching
+            if set(unit_types).issubset(current_unit_types):
+                non_timeless_requested = [ut for ut in unit_types if ut not in timeless_unit_types]
+                if not non_timeless_requested or not year_range:
+                    need_to_fetch = False
+                    geojson_out = current_geojson
+                    debug_msg = f"Reusing {len(current_features)} polygons for {unit_types}"
+        
+        if need_to_fetch:
+            gdfs = []
+            for ut in unit_types:
+                if ut not in timeless_unit_types and year_range:
+                    gdf = get_polygons_by_type(ut, year_range[0], year_range[1])
+                else:
+                    gdf = get_polygons_by_type(ut)
+                gdfs.append(gdf)
 
-        if gdfs:
-            combined = pd.concat(gdfs)
-            combined = combined.drop_duplicates()
-            if combined.empty:
+            if gdfs:
+                combined = pd.concat(gdfs)
+                combined = combined.drop_duplicates()
+                if combined.empty:
+                    geojson_out = {"type": "FeatureCollection", "features": []}
+                    debug_msg = "No polygons found."
+                else:
+                    geojson_out = json.loads(combined.to_json())
+                    debug_msg = f"Showing {len(combined)} polygons for {unit_types}"
+            else:
                 geojson_out = {"type": "FeatureCollection", "features": []}
-                debug_msg = "No polygons found."
-            else:
-                geojson_out = json.loads(combined.to_json())
-                debug_msg = f"Showing {len(combined)} polygons for {unit_types}"
-        else:
-            geojson_out = {"type": "FeatureCollection", "features": []}
-            debug_msg = "No polygons loaded."
-
+                debug_msg = "No polygons loaded."
+        
         # (D) Set hideout with selected polygons.
         new_hideout = {"selected": map_state.get("selected_polygons", [])}
 
@@ -290,17 +315,21 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
             # Determine the unit type from the feature properties.
             feat_unit = feature["properties"].get("g_unit_type", "MOD_REG")
             if feature["id"] in map_state.get("selected_polygons", []):
+                # if not counts.get(feat_unit + '_g_units'):
+                #     counts[feat_unit + '_g_units'] = []
                 if feature["id"] not in counts[feat_unit + '_g_units']:
                     counts[feat_unit] = counts.get(feat_unit, 0) + 1
                     counts[feat_unit + '_g_units'].append(feature["id"])
 
-        # (G) Filter visible polygons if show_unselected is False
-        if map_state.get("show_unselected") is False:
+        if not map_state.get("show_unselected", True):
             selected_ids = set(map_state.get("selected_polygons", []))
             geojson_out["features"] = [
                 feature for feature in geojson_out.get("features", [])
                 if feature["id"] in selected_ids
             ]
+        
+        if not need_to_fetch:
+            geojson_out = no_update
 
         return (
             container_style,
