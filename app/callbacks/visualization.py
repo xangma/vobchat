@@ -12,19 +12,23 @@ from ..tools import get_all_cube_data
 def register_visualization_callbacks(app, compiled_workflow):
     # Add new callbacks for data visualization
 
+# Update the callback in app/callbacks/visualization.py
+
     @app.callback(
         Output("visualization-area", "style"),
         Output("cube-selector", "options"),
         Output("place-state", "data"),
+        Output("visualization-area", "data-was-hidden"),  # Add this output to track visibility state
         Input("app-state", "data"),
         State("thread-id", "data"),
         State("place-state", "data"),
+        State("visualization-area", "data-was-hidden"),  # Add this state
         prevent_initial_call=True
     )
-    def handle_visualization_request(app_state, thread_id, place_state):
+    def handle_visualization_request(app_state, thread_id, place_state, current_visibility):
         if not app_state or app_state.get("show_visualization") is False:
             # Keep visualization hidden when not requested
-            return {"height": "100%", "display": "none", "flexDirection": "column"}, [], place_state
+            return {"height": "100%", "display": "none", "flexDirection": "column"}, [], place_state, "true"
 
         try:
             # Get the state to access additional data
@@ -35,7 +39,7 @@ def register_visualization_callbacks(app, compiled_workflow):
             cubes = place_state.get("cubes", [])
             if not cubes:
                 # Also keep hidden if no cubes are available
-                return {"height": "100%", "display": "none", "flexDirection": "column"}, [], place_state
+                return {"height": "100%", "display": "none", "flexDirection": "column"}, [], place_state, "true"
             
             # Get all cube data at once
             cubes_df = pd.DataFrame(cubes)
@@ -55,13 +59,14 @@ def register_visualization_callbacks(app, compiled_workflow):
             ]
             place_state['cube_data'] = all_cube_data.to_json(orient='split')
             # Show the visualization with full opacity when data is available
-            return {"height": "100%", "display": "flex", "flexDirection": "column"}, options, place_state
+            # Return "false" to indicate visualization is visible
+            return {"height": "100%", "display": "flex", "flexDirection": "column"}, options, place_state, "false"
                         
         except Exception as e:
             print(f"Error handling visualization request: {e}")
             
         # Also hide on error
-        return {"height": "100%", "display": "none", "flexDirection": "column"}, [], place_state
+        return {"height": "100%", "display": "none", "flexDirection": "column"}, [], place_state, "true"
 
     @app.callback(
         Output("data-plot", "figure", allow_duplicate=True),

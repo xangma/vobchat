@@ -49,3 +49,18 @@ def register_clientside_callbacks(app: Dash):
     """,
     Output('leaflet-map', 'id'),
     Input('map-panel', 'style'))
+    
+    # Add data-was-hidden attribute to visualization-area after the layout is defined
+    app.clientside_callback(
+        """
+        function(n_clicks) {
+            const visualizationArea = document.getElementById('visualization-area');
+            if (visualizationArea) {
+                visualizationArea.setAttribute('data-was-hidden', 'true');
+            }
+            return window.dash_clientside.no_update;
+        }
+        """,
+        Output('document', 'className'),
+        Input('document', 'id'),
+    )

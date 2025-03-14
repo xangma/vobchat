@@ -1,26 +1,15 @@
-// Add a mutation observer to watch for changes in visualization visibility
-function setupVisibilityObserver() {
-    const visualizationArea = document.getElementById('visualization-area');
-    if (!visualizationArea) return;
+// app/assets/resizable.js
 
-    // Create a new observer
-    const observer = new MutationObserver(function (mutations) {
-        mutations.forEach(function (mutation) {
-            if (mutation.attributeName === 'style') {
-                // When visualization style changes, update the layout
-                setInitialPanelSizes();
-            }
-        });
-    });
-
-    // Start observing
-    observer.observe(visualizationArea, { attributes: true });
-}// app/assets/resizable.js
+// Global flag to track if panels have been manually resized
+let userHasResized = false;
 
 // Wait for the DOM to be fully loaded
 document.addEventListener('DOMContentLoaded', function () {
     initResizable();
-    setInitialPanelSizes();
+    // Only set initial sizes if the user hasn't resized yet
+    if (!userHasResized) {
+        setInitialPanelSizes();
+    }
     setupVisibilityObserver();
 });
 
@@ -58,6 +47,9 @@ function initHorizontalDrag(e) {
     document.addEventListener('mouseup', stopDragHorizontal);
 
     function doDragHorizontal(e) {
+        // Mark that the user has manually resized panels
+        userHasResized = true;
+
         // Calculate the distance moved
         const deltaX = e.clientX - startX;
 
@@ -130,6 +122,9 @@ function initVerticalDrag(e) {
     document.addEventListener('mouseup', stopDragVertical);
 
     function doDragVertical(e) {
+        // Mark that the user has manually resized panels
+        userHasResized = true;
+
         // Calculate the distance moved
         const deltaY = e.clientY - startY;
 
@@ -194,6 +189,11 @@ const observer = new MutationObserver(function (mutations) {
 
 // Set initial panel sizes for better default appearance
 function setInitialPanelSizes() {
+    // Only set initial sizes if the user hasn't manually resized
+    if (userHasResized) {
+        return;
+    }
+
     // Set initial horizontal split (50% for chat, 50% for map)
     const horizontalContainer = document.querySelector('.resizable-horizontal');
     if (horizontalContainer) {
@@ -232,14 +232,66 @@ function setInitialPanelSizes() {
     window.dispatchEvent(new Event('resize'));
 }
 
+// Add a mutation observer to watch for changes in visualization visibility
+function setupVisibilityObserver() {
+    const visualizationArea = document.getElementById('visualization-area');
+    if (!visualizationArea) return;
+
+    // Create a new observer
+    const observer = new MutationObserver(function (mutations) {
+        mutations.forEach(function (mutation) {
+            if (mutation.attributeName === 'style') {
+                const newDisplayValue = window.getComputedStyle(visualizationArea).display;
+                const wasHidden = visualizationArea.dataset.wasHidden === 'true';
+                const isNowHidden = newDisplayValue === 'none';
+
+                // Only adjust layout when visibility actually changes
+                if (wasHidden !== isNowHidden) {
+                    visualizationArea.dataset.wasHidden = isNowHidden;
+
+                    // Reset userHasResized flag when visualization appears/disappears
+                    if (!isNowHidden) {
+                        userHasResized = false;
+                        setInitialPanelSizes();
+                    }
+                }
+            }
+        });
+    });
+
+    // Start observing
+    observer.observe(visualizationArea, { attributes: true });
+
+    // Set initial state
+    visualizationArea.dataset.wasHidden = (window.getComputedStyle(visualizationArea).display === 'none');
+}
+
 // Start observing the document body for DOM changes
 observer.observe(document.body, { childList: true, subtree: true });
 
-// Also set initial sizes when window is resized
+// Update window resize handler
 window.addEventListener('resize', function () {
     // Use a debounce to avoid calling this too frequently
     if (this.resizeTimeout) clearTimeout(this.resizeTimeout);
     this.resizeTimeout = setTimeout(function () {
-        setInitialPanelSizes();
+        // Don't reset the layout on window resize if user has manually adjusted it
+        if (!userHasResized) {
+            setInitialPanelSizes();
+        }
     }, 200);
 });
+
+// When visibility changes for the visualization area, we may need to readjust
+function updateOnVisibilityChange() {
+    const visualizationArea = document.getElementById('visualization-area');
+    if (visualizationArea) {
+        const isHidden = window.getComputedStyle(visualizationArea).display === 'none';
+
+        // Reset the flag to allow repositioning when visualization appears/disappears
+        if (visualizationArea.dataset.wasHidden !== String(isHidden)) {
+            userHasResized = false;
+            setInitialPanelSizes();
+            visualizationArea.dataset.wasHidden = isHidden;
+        }
+    }
+}

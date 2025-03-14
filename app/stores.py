@@ -8,7 +8,6 @@ map_state_data = {
     "year_bounds": None,
     "selected_polygons": [],
     "selected_polygons_unit_types": [],
-    "current_geojson": None,
     "show_unselected": True,
 }
 
@@ -37,6 +36,7 @@ def create_stores():
         # Map-related store
         dcc.Store(id="map-state", data=map_state_data),
         dcc.Store(id='ctrl-pressed-store', data=False),
+        dcc.Store(id="current_geojson", data={"type": "FeatureCollection", "features": []}),
 
         # Place-related store
         dcc.Store(id="place-state", data=place_state_data),

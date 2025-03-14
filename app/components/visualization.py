@@ -7,6 +7,8 @@ def create_visualization_layout():
         html.Div(
             id="visualization-area",
             style={"height": "100%", "display": "none", "flexDirection": "column"},
+            # Add data attribute to track visibility state
+            **{'data-was-hidden': 'true'},
             children=[
                 html.H3("Data Visualization", className="mb-3"),
                 

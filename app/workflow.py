@@ -74,7 +74,7 @@ memory = MemorySaver()
 # Initialize the language model (ChatOllama in this case) with specific model and API URL.
 logger.info("Initializing language model...")
 model = ChatOllama(
-    model="llama3.3:latest",
+    model="qwq:32b",
     base_url="https://148.197.150.162/ollama_api/",
     client_kwargs={"verify": False}
 )
