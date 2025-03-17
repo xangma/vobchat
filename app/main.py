@@ -21,6 +21,8 @@ def create_app():
     config = load_config()
     db = get_db(config)
 
+    assets_folder = os.path.join(os.path.dirname(__file__), 'assets')
+    
     app = DashProxy(transforms=[CycleBreakerTransform()], external_stylesheets=[
                     dbc.themes.BOOTSTRAP], url_base_pathname=os.getenv("DASH_URL_BASE", None), suppress_callback_exceptions=True)
 
@@ -43,7 +45,7 @@ def create_app():
                     html.Div(className="resize-handle-horizontal"),
                     # Map panel
                     html.Div(className="resizable-panel", id="map-panel", children=[
-                        create_map_layout(initial_gdf)
+                        create_map_layout(initial_gdf, assets_folder)
                     ]),
                 ]),
                 # Vertical resize handle (hidden by default, shown when visualization appears)

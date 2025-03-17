@@ -2,14 +2,14 @@
 import dash_bootstrap_components as dbc
 import dash_leaflet as dl
 from dash import html, dcc
-from dash_extensions.javascript import assign
+from dash_extensions.javascript import Namespace, assign
 from datetime import datetime
 import json
 from ..utils.constants import UNIT_TYPES
 
 color_dict = {k: v['color'] for k, v in UNIT_TYPES.items()}
 
-style_function = assign(f"""
+style_function = f"""
 function(feature, context) {{
     const sel = context.hideout.selected || [];
     
@@ -35,13 +35,18 @@ function(feature, context) {{
         }};
     }}
 }}
-""")
+"""
 
 
-def create_map_layout(initial_gdf):
+def create_map_layout(initial_gdf, assets_folder):
     """
     Creates the layout that uses Dash Leaflet instead of Plotly.
     """
+    
+    map_namespace = Namespace("map_leaflet")
+    map_namespace.add(style_function, "style_function")
+    map_namespace.dump(assets_folder=assets_folder)
+    
     buttons = []
 
     for k, v in UNIT_TYPES.items():
@@ -71,7 +76,6 @@ def create_map_layout(initial_gdf):
                     children=[
                         html.H4("Filter by Unit Type", className="mb-2"),
                         html.Div(buttons, className="d-flex flex-wrap"),
-                        
                         # Year range slider
                         html.Div([
                             html.H4("Filter by Year Range", className="mt-2 mb-2"),
@@ -109,7 +113,7 @@ def create_map_layout(initial_gdf):
                                     hideout=dict(selected=[]),
                                     zoomToBounds=True,
                                     options=dict(pane="overlayPane"),
-                                    style=style_function,
+                                    style=map_namespace("style_function"),
                                     format="geojson",
                                     
                                 ),
