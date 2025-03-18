@@ -110,11 +110,11 @@ def create_map_layout(initial_gdf, assets_folder):
                                 dl.GeoJSON(
                                     id="geojson-layer",
                                     data=json.loads(initial_gdf.to_json()),
+                                    format="flatgeobuf",
                                     hideout=dict(selected=[]),
                                     zoomToBounds=True,
                                     options=dict(pane="overlayPane"),
                                     style=map_namespace("style_function"),
-                                    format="geojson",
                                     
                                 ),
                             ],

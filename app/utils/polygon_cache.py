@@ -209,7 +209,7 @@ class PolygonCache:
                     query = f"""
                     SELECT 
                         g_unit, 
-                        g_foot_ertslcc,
+                        ST_AsFlatGeobuf(g_foot_ertslcc) AS g_foot_ertslcc,
                         g_unit_type,
                         auo_util.get_unit_name(g_unit) as unit_name, 
                         util.get_start_year(g_duration) as start_year, 
