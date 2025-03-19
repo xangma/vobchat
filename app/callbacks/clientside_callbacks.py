@@ -114,3 +114,21 @@ def register_clientside_callbacks(app: Dash):
         Input("counts-store", "data"),
         State({'type': 'unit-filter', 'unit': ALL}, 'id')
     )
+
+    app.clientside_callback(
+        """
+        function(mapState, appState) {
+            // This function is defined in the polygon_management.js file
+            return window.dash_clientside.clientside.updateMapWithPolygons(mapState, appState);
+        }
+        """,
+        [
+            Output('year-range-container', 'style', allow_duplicate=True),
+            Output('geojson-layer', 'data', allow_duplicate=True),
+            Output('geojson-layer', 'hideout', allow_duplicate=True),
+            Output('debug-output', 'children', allow_duplicate=True),
+            Output("current_geojson", "data", allow_duplicate=True),
+        ],
+        Input("map-state", "data"),
+        State("app-state", "data"),
+    )

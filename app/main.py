@@ -13,6 +13,7 @@ from .callbacks.chat import register_chat_callbacks
 from .callbacks.map_leaflet import register_map_leaflet_callbacks
 from .callbacks.visualization import register_visualization_callbacks
 from .callbacks.clientside_callbacks import register_clientside_callbacks
+from .api.polygon_routes import register_polygon_routes
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,8 @@ def create_app():
     register_visualization_callbacks(app, compiled_workflow)
     register_clientside_callbacks(app)
 
+    register_polygon_routes(app.server)
+    
     return app
 
 # Create app and expose `server` for Gunicorn

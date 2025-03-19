@@ -248,7 +248,7 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
             Output('year-range-slider', 'min'),                       # Slider min value
             Output('year-range-slider', 'max'),                       # Slider max value
             Output('year-range-slider', 'marks'),                     # Slider marks
-            Output("current_geojson", "data"),                        # GeoJSON store
+            # Output("current_geojson", "data"),                        # GeoJSON store
             Output('geojson-layer', 'data'),                          # Map layer data
             Output('geojson-layer', 'hideout'),                       # Map layer settings
             Output('debug-output', 'children'),                       # Debug text
@@ -261,11 +261,12 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
         State({'type': 'unit-filter', 'unit': ALL}, 'id'),            # Unit button IDs
         State("app-state", "data"),                                   # App state
         State("counts-store", "data"),                                # Polygon counts
-        State("current_geojson", "data"),                             # Current GeoJSON
+        # State("current_geojson", "data"),                             # Current GeoJSON
         State('geojson-layer', 'data'),                               # Map layer data
+        State("geojson-layer", "hideout"),                            # Map layer settings
         # Run initially to set up the map
     )
-    def render_map_display(map_state, button_ids, app_state, counts, current_geojson, map_geojson):
+    def render_map_display(map_state, button_ids, app_state, counts, map_geojson, map_hideout):
         """
         Update the map display based on the current map state.
         
@@ -287,6 +288,7 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
         Returns:
             tuple: Multiple outputs for map display components
         """
+        debug_msg = None
         ctx = dash.callback_context
         ctx_trigger = ctx.triggered[0]["prop_id"]
         
@@ -311,61 +313,61 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
         # Create marks for the slider
         slider_marks = {str(y): str(y) for y in range(min_year, max_year+1, step)}
 
-        # SECTION C: Build polygons for active unit types
-        year_range = map_state.get("year_range")
+        # # SECTION C: Build polygons for active unit types
+        # year_range = map_state.get("year_range")
         
-        # Initialize hideout for selected polygons
-        new_hideout = {"type": "FeatureCollection", "features": []}
-        # Determine if we need to fetch new polygons
-        need_to_fetch = True
-        current_features = []
+        # # Initialize hideout for selected polygons
+        # new_hideout = {"type": "FeatureCollection", "features": []}
+        # # Determine if we need to fetch new polygons
+        # need_to_fetch = True
+        # current_features = []
         
-        # Check if we can reuse existing polygons
-        if current_geojson and 'features' in current_geojson:
-            current_features = current_geojson['features']
+        # # Check if we can reuse existing polygons
+        # if current_geojson and 'features' in current_geojson:
+        #     current_features = current_geojson['features']
             
-            # Get all feature IDs and unit types in the current GeoJSON
-            current_ids = set()
-            current_unit_types = set()
-            for feature in current_features:
-                if 'id' in feature and 'properties' in feature and 'g_unit_type' in feature['properties']:
-                    current_ids.add(feature['id'])
-                    current_unit_types.add(feature['properties']['g_unit_type'])
+        #     # Get all feature IDs and unit types in the current GeoJSON
+        #     current_ids = set()
+        #     current_unit_types = set()
+        #     for feature in current_features:
+        #         if 'id' in feature and 'properties' in feature and 'g_unit_type' in feature['properties']:
+        #             current_ids.add(feature['id'])
+        #             current_unit_types.add(feature['properties']['g_unit_type'])
             
-            # If all requested unit types are already in the current GeoJSON,
-            # and we're not changing the year range for non-timeless types, we can skip fetching
-            if set(unit_types).issubset(current_unit_types):
-                non_timeless_requested = [ut for ut in unit_types if ut not in timeless_unit_types]
-                if not non_timeless_requested or not year_range:
-                    need_to_fetch = False
-                    debug_msg = f"Reusing {len(current_features)} polygons for {unit_types}"
+        #     # If all requested unit types are already in the current GeoJSON,
+        #     # and we're not changing the year range for non-timeless types, we can skip fetching
+        #     if set(unit_types).issubset(current_unit_types):
+        #         non_timeless_requested = [ut for ut in unit_types if ut not in timeless_unit_types]
+        #         if not non_timeless_requested or not year_range:
+        #             need_to_fetch = False
+        #             debug_msg = f"Reusing {len(current_features)} polygons for {unit_types}"
         
-        # Fetch polygons if needed
-        if need_to_fetch:
-            gdfs = []
-            for ut in unit_types:
-                # For time-dependent unit types, apply year range if specified
-                if ut not in timeless_unit_types and year_range:
-                    gdf = get_polygons_by_type(ut, year_range[0], year_range[1])
-                else:
-                    gdf = get_polygons_by_type(ut)
-                gdfs.append(gdf)
+        # # Fetch polygons if needed
+        # if need_to_fetch:
+        #     gdfs = []
+        #     for ut in unit_types:
+        #         # For time-dependent unit types, apply year range if specified
+        #         if ut not in timeless_unit_types and year_range:
+        #             gdf = get_polygons_by_type(ut, year_range[0], year_range[1])
+        #         else:
+        #             gdf = get_polygons_by_type(ut)
+        #         gdfs.append(gdf)
 
-            # Process the combined GeoDataFrames
-            if gdfs:
-                combined = pd.concat(gdfs)
-                combined = combined.drop_duplicates()
-                if combined.empty:
-                    map_geojson = {"type": "FeatureCollection", "features": []}
-                    debug_msg = "No polygons found."
-                else:
-                    map_geojson = json.loads(combined.to_json())
-                    debug_msg = f"Showing {len(combined)} polygons for {unit_types}"
-            else:
-                debug_msg = "No polygons loaded."
+        #     # Process the combined GeoDataFrames
+        #     if gdfs:
+        #         combined = pd.concat(gdfs)
+        #         combined = combined.drop_duplicates()
+        #         if combined.empty:
+        #             map_geojson = {"type": "FeatureCollection", "features": []}
+        #             debug_msg = "No polygons found."
+        #         else:
+        #             map_geojson = json.loads(combined.to_json())
+        #             debug_msg = f"Showing {len(combined)} polygons for {unit_types}"
+        #     else:
+        #         debug_msg = "No polygons loaded."
         
         # SECTION D: Update hideout with selected polygons
-        new_hideout["selected"] = map_state.get("selected_polygons", [])
+        # new_hideout["selected"] = map_state.get("selected_polygons", [])
 
         # SECTION E: Prepare button styles
         # Map unit types to their corresponding colors
@@ -409,17 +411,17 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
                 counts[selected_id_unit_type + '_g_units'].append(selected_id)
             counts[selected_id_unit_type] = counts.get(selected_id_unit_type, 0) + 1
 
-        # SECTION G: Filter visible features based on show_unselected flag
-        if not map_state.get("show_unselected", True):
-            selected_ids = set(map_state.get("selected_polygons", []))
-            new_hideout["features"] = [
-                feature for feature in new_hideout.get("features", [])
-                if feature["id"] in selected_ids
-            ]
+        # # SECTION G: Filter visible features based on show_unselected flag
+        # if not map_state.get("show_unselected", True):
+        #     selected_ids = set(map_state.get("selected_polygons", []))
+        #     new_hideout["features"] = [
+        #         feature for feature in new_hideout.get("features", [])
+        #         if feature["id"] in selected_ids
+        #     ]
         
-        # If we don't need to fetch new data, keep existing GeoJSON
-        if not need_to_fetch:
-            map_geojson = no_update
+        # # If we don't need to fetch new data, keep existing GeoJSON
+        # if not need_to_fetch:
+        #     map_geojson = no_update
 
         # Return all updated values
         return (
@@ -427,9 +429,9 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
             min_year,                  # Year slider min
             max_year,                  # Year slider max
             slider_marks,              # Year slider marks
-            current_geojson,           # Current GeoJSON store
-            map_geojson,               # Map GeoJSON data
-            new_hideout,               # Map hideout settings
+            map_geojson,           # Current GeoJSON store
+            # no_update,               # Map GeoJSON data
+            map_hideout,               # Map hideout settings
             debug_msg,                 # Debug message
             button_styles,             # Button styles
             counts,                    # Polygon counts

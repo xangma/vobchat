@@ -109,7 +109,7 @@ def create_map_layout(initial_gdf, assets_folder):
                                 dl.TileLayer(),
                                 dl.GeoJSON(
                                     id="geojson-layer",
-                                    data=json.loads(initial_gdf.to_json()),
+                                    data={},
                                     format="flatgeobuf",
                                     hideout=dict(selected=[]),
                                     zoomToBounds=True,
