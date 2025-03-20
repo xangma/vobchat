@@ -222,6 +222,57 @@ window.polygon_management = {
     },
 
     /**
+     * Calculate bounds for selected features
+     * @param {Array} features - Array of GeoJSON features
+     * @returns {L.LatLngBounds|null} - Leaflet bounds object or null if no features
+     */
+    calculateBounds: function(features) {
+        if (!features || features.length === 0) {
+            return null;
+        }
+
+        let bounds = null;
+
+        features.forEach(feature => {
+            if (!feature.geometry) return;
+            
+            // Create a temporary GeoJSON layer to get the bounds
+            const tempLayer = L.geoJSON(feature);
+            const featureBounds = tempLayer.getBounds();
+            
+            if (!bounds) {
+                bounds = featureBounds;
+            } else {
+                bounds.extend(featureBounds);
+            }
+        });
+
+        return bounds;
+    },
+
+    /**
+     * Zoom map to selected features
+     * @param {Object} map - Leaflet map object
+     * @param {Array} selectedFeatures - Array of selected GeoJSON features 
+     */
+    zoomToSelectedFeatures: function(map, selectedFeatures) {
+        const bounds = this.calculateBounds(selectedFeatures);
+        
+        if (bounds && bounds.isValid()) {
+            // Add some padding around the bounds
+            map.fitBounds(bounds, {
+                padding: [50, 50],
+                maxZoom: 12,
+                animate: true,
+                duration: 0.5
+            });
+            console.log("Zoomed to selected features");
+        } else {
+            console.log("No valid bounds for selected features");
+        }
+    },
+
+    /**
      * Update the map based on selected unit types
      * @param {Object} map - Leaflet map object
      * @param {Array} unitTypes - Array of selected unit types
@@ -330,6 +381,19 @@ window.polygon_management = {
 
                 // Force a style refresh on all layers to ensure proper highlighting
                 this.refreshLayerStyles(geojsonLayer, selectedPolygons);
+
+                // If there are selected polygons, zoom to them
+                if (selectedPolygons && selectedPolygons.length > 0) {
+                    // Get the selected features
+                    const selectedFeatures = allFeatures.filter(feature => 
+                        feature.id && selectedPolygons.includes(feature.id)
+                    );
+                    
+                    // Zoom to the selected features
+                    if (selectedFeatures.length > 0) {
+                        this.zoomToSelectedFeatures(map, selectedFeatures);
+                    }
+                }
 
                 return filteredGeoJSON;
             });
