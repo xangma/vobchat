@@ -37,9 +37,10 @@ L.Map.addInitHook(function () {
 
 // Global polygon cache to store loaded polygons by unit type
 window.polygonCache = {
-    loadedUnitTypes: {},
-    allFeatures: {},
-    geojsonLayer: null  // Reference to the main GeoJSON layer
+    loadedUnitTypes: {},      // Tracks which unit types have been loaded
+    pendingRequests: {},      // Tracks in-flight requests by unit type
+    allFeatures: {},          // Stores all features by ID
+    geojsonLayer: null        // Reference to the main GeoJSON layer
 };
 
 window.polygon_management = {
@@ -90,6 +91,23 @@ window.polygon_management = {
      * @returns {Promise} - Promise that resolves to the fetched GeoJSON
      */
     fetchPolygons: function (unitType, yearRange) {
+        // Check if this unit type is already loaded in the cache
+        if (window.polygonCache.loadedUnitTypes[unitType]) {
+            console.log(`Using cached polygons for ${unitType}`);
+            return Promise.resolve({
+                type: "FeatureCollection",
+                features: Object.values(window.polygonCache.allFeatures).filter(
+                    feature => feature.properties && feature.properties.g_unit_type === unitType
+                )
+            });
+        }
+
+        // Check if there's already a pending request for this unit type
+        if (window.polygonCache.pendingRequests[unitType]) {
+            console.log(`Request for ${unitType} already in progress, reusing promise`);
+            return window.polygonCache.pendingRequests[unitType];
+        }
+
         // Build the URL with parameters
         let url = `/api/polygons/${unitType}`;
 
@@ -100,8 +118,8 @@ window.polygon_management = {
 
         console.log(`Fetching polygons for ${unitType}`);
 
-        // Return the fetch Promise
-        return fetch(url)
+        // Create the fetch Promise and store it
+        const fetchPromise = fetch(url)
             .then(response => {
                 if (!response.ok) {
                     throw new Error(`Failed to fetch polygons: ${response.statusText}`);
@@ -129,8 +147,19 @@ window.polygon_management = {
                     });
                 }
 
+                // Remove from pending requests once completed
+                delete window.polygonCache.pendingRequests[unitType];
                 return data;
+            })
+            .catch(error => {
+                // Also remove from pending on error
+                delete window.polygonCache.pendingRequests[unitType];
+                throw error;
             });
+
+        // Store the promise for potential reuse
+        window.polygonCache.pendingRequests[unitType] = fetchPromise;
+        return fetchPromise;
     },
 
     /**
@@ -215,10 +244,16 @@ window.polygon_management = {
 
         // Check if we need to fetch any new unit types
         unitTypes.forEach(unitType => {
-            if (!window.polygonCache.loadedUnitTypes[unitType]) {
+            // Only start a new fetch if it's not already loaded or pending
+            if (!window.polygonCache.loadedUnitTypes[unitType] &&
+                !window.polygonCache.pendingRequests[unitType]) {
                 // Need to fetch this unit type
                 fetchPromises.push(this.fetchPolygons(unitType, yearRange));
+            } else if (window.polygonCache.pendingRequests[unitType]) {
+                // There's a pending request, so we need to wait for it
+                fetchPromises.push(window.polygonCache.pendingRequests[unitType]);
             }
+            // No need to push anything if it's already loaded
         });
 
         // Once all fetches are complete, update the map
