@@ -399,7 +399,7 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
         counts = counts or {}
         # Initialize counts for each unit type
         for unit_type in UNIT_TYPES.keys():
-            counts[unit_type + '_g_units'] = counts.get(unit_type + '_g_units', [])
+            counts[unit_type + '_g_units'] = []
             counts[unit_type] = 0
         
         # Count selected polygons by unit type
