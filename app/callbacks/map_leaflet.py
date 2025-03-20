@@ -409,7 +409,7 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
         ):
             if selected_id not in counts[selected_id_unit_type + '_g_units']:
                 counts[selected_id_unit_type + '_g_units'].append(selected_id)
-            counts[selected_id_unit_type] = counts.get(selected_id_unit_type, 0) + 1
+                counts[selected_id_unit_type] = counts.get(selected_id_unit_type, 0) + 1
 
         # # SECTION G: Filter visible features based on show_unselected flag
         # if not map_state.get("show_unselected", True):
