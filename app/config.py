@@ -31,6 +31,8 @@ def load_config(filename=os.path.join(BASE_DIR, "database.ini"), section='postgr
 def get_db(config):
     dburi = f"postgresql://{config['user']}:{config['password']}@{config['host']}:5432/{config['dbname']}"
     db = SQLDatabase.from_uri(dburi, schema=config['schema'])
+    # Set the connection to read-only mode
+    db.run("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;")
     return db
 
 if __name__ == '__main__':
