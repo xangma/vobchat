@@ -11,7 +11,8 @@ color_dict = {k: v['color'] for k, v in UNIT_TYPES.items()}
 
 style_function = f"""
 function(feature, context) {{
-    const sel = context.hideout.selected || [];
+    // Add a fallback for context or hideout if they're undefined
+    const sel = (context && context.hideout) ? context.hideout.selected || [] : [];
     
     // Mapping unit types to outline colors:
     const unitColors = {color_dict};
@@ -110,12 +111,11 @@ def create_map_layout(initial_gdf, assets_folder):
                                 dl.GeoJSON(
                                     id="geojson-layer",
                                     data={},
-                                    format="flatgeobuf",
+                                    format="geojson",  # Changed from flatgeobuf to geojson
                                     hideout=dict(selected=[]),
                                     zoomToBounds=True,
                                     options=dict(pane="overlayPane"),
                                     style=map_namespace("style_function"),
-                                    
                                 ),
                             ],
                             center=[55.0, 10.0],

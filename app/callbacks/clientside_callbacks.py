@@ -115,6 +115,92 @@ def register_clientside_callbacks(app: Dash):
         State({'type': 'unit-filter', 'unit': ALL}, 'id')
     )
 
+    # Add new callback for map moveend event
+    app.clientside_callback(
+        """
+        function(mapState, mapTriggerId) {
+            // Get the Leaflet map object
+            const mapElement = document.getElementById('leaflet-map');
+            if (!mapElement || !mapElement._leaflet_map) {
+                return window.dash_clientside.no_update;
+            }
+
+            const map = mapElement._leaflet_map;
+            
+            // Set up the moveend event handler if it doesn't exist yet
+            if (!window.moveendHandlerSet) {
+                map.on('moveend', function() {
+                    // Skip if the move was triggered by fitBounds
+                    if (window.polygon_management && window.polygon_management.skipNextMoveend) {
+                        window.polygon_management.skipNextMoveend = false;
+                        return;
+                    }
+                    
+                    // Trigger the callback by updating a store value
+                    if (window.dash_clientside.set_props) {
+                        window.dash_clientside.set_props("map-moveend-trigger", {data: Date.now()});
+                    }
+                });
+                
+                window.moveendHandlerSet = true;
+            }
+            
+            // Return no update as we're just setting up the handler
+            return window.dash_clientside.no_update;
+        }
+        """,
+        Output('leaflet-map', 'className'),
+        Input('map-state', 'data'),
+        Input('leaflet-map', 'id')
+    )
+    
+    # Add callback to handle map moveend event
+    app.clientside_callback(
+        """
+        function(moveendTrigger, mapState) {
+            // Ignore initial load
+            if (!moveendTrigger) {
+                return window.dash_clientside.no_update;
+            }
+            
+            // Get the Leaflet map object
+            const mapElement = document.getElementById('leaflet-map');
+            if (!mapElement || !mapElement._leaflet_map) {
+                return window.dash_clientside.no_update;
+            }
+
+            const map = mapElement._leaflet_map;
+            
+            // Get current bounds
+            const bounds = map.getBounds();
+            
+            // Extract required data from map state
+            const unitTypes = mapState.unit_types || ['MOD_REG'];
+            const yearRange = mapState.year_range ? {
+                min: mapState.year_range[0],
+                max: mapState.year_range[1]
+            } : null;
+            
+            // Update the map with the new bounds
+            if (window.polygon_management) {
+                window.polygon_management.updateMapWithBounds(map, unitTypes, bounds, yearRange)
+                    .then(result => {
+                        console.log(`Map updated on moveend with ${result.features ? result.features.length : 0} features`);
+                    })
+                    .catch(error => {
+                        console.error('Error updating map on moveend:', error);
+                    });
+            }
+            
+            // Return no update as we handle the update directly
+            return window.dash_clientside.no_update;
+        }
+        """,
+        Output('debug-output', 'id'),
+        Input('map-moveend-trigger', 'data'),
+        State('map-state', 'data')
+    )
+
     app.clientside_callback(
         """
         function(mapState, appState) {

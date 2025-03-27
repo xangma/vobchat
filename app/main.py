@@ -14,6 +14,7 @@ from .callbacks.map_leaflet import register_map_leaflet_callbacks
 from .callbacks.visualization import register_visualization_callbacks
 from .callbacks.clientside_callbacks import register_clientside_callbacks
 from .api.polygon_routes import register_polygon_routes
+from .api.bounding_box_routes import register_bounding_box_routes
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,7 @@ def create_app():
     register_clientside_callbacks(app)
 
     register_polygon_routes(app.server)
+    register_bounding_box_routes(app.server)
     
     return app
 

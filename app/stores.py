@@ -36,6 +36,7 @@ def create_stores():
         # Map-related store
         dcc.Store(id="map-state", data=map_state_data),
         dcc.Store(id='ctrl-pressed-store', data=False),
+        dcc.Store(id="map-moveend-trigger", data=None),
         dcc.Store(id="current_geojson", data={"type": "FeatureCollection", "features": []}),
 
         # Place-related store

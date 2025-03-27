@@ -1,6 +1,7 @@
 window.map_leaflet = Object.assign({}, window.map_leaflet, {
     style_function: function(feature, context) {
-        const sel = context.hideout.selected || [];
+        // Add a fallback for context or hideout if they're undefined
+        const sel = (context && context.hideout) ? context.hideout.selected || [] : [];
 
         // Mapping unit types to outline colors:
         const unitColors = {
