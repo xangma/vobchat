@@ -28,6 +28,7 @@ setup(
         "psycopg2-binary",
         "dash-leaflet",
         "grandalf",
+        "redis",
     ],
     include_package_data=True,
     classifiers=[
