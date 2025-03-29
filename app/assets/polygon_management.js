@@ -344,9 +344,11 @@ window.polygon_management = {
                     console.log("Using style function from window.map_leaflet");
                 }
 
-                geojsonLayer = L.geoJSON([], {
+                geojsonLayer = dash_leaflet.GeoJSON([], {
                     style: styleFunction
-                }).addTo(map);
+                })
+                // Add the layer to the map
+                geojsonLayer.addTo(map);
                 window.polygonCache.geojsonLayer = geojsonLayer;
             } catch (error) {
                 console.error("Error creating new GeoJSON layer", error);
@@ -372,7 +374,7 @@ window.polygon_management = {
             if (!feature.geometry) return;
 
             // Create a temporary GeoJSON layer to get the bounds
-            const tempLayer = L.geoJSON(feature);
+            const tempLayer = dash_leaflet.geoJSON(feature);
             const featureBounds = tempLayer.getBounds();
 
             if (!bounds) {
@@ -552,11 +554,9 @@ window.polygon_management = {
                 hideout: { selected: selectedPolygons }
             };
 
-            // Add cached features to the map
-            const tempLayer = L.geoJSON(cachedGeodata, geoJsonOptions);
-            tempLayer.eachLayer(layer => {
-                geojsonLayer.addLayer(layer);
-            });
+
+            // Add each layer to the main GeoJSON layer
+            geojsonLayer.addData(cachedGeodata, geoJsonOptions);
 
             // Update the hideout property with selected IDs
             if (geojsonLayer.options) {
@@ -633,10 +633,7 @@ window.polygon_management = {
                 };
 
                 // Add all features to the map
-                const tempLayer = L.geoJSON(completeGeodata, geoJsonOptions);
-                tempLayer.eachLayer(layer => {
-                    geojsonLayer.addLayer(layer);
-                });
+                geojsonLayer.addData(completeGeodata, geoJsonOptions);
 
                 // Update the hideout property
                 if (geojsonLayer.options) {
