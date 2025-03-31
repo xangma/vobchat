@@ -409,7 +409,7 @@ window.polygon_management = {
      * @param {Object} yearRange - Optional year range
      * @returns {Promise} - Promise that resolves when update is complete
      */
-    updateMapWithBounds: function (map, unitTypes, bounds, yearRange) {
+    updateMapWithBounds: function (map, unitTypes, bounds, mapState, yearRange) {
         if (!map || !unitTypes || !unitTypes.length || !bounds) {
             console.error('Missing required parameters for updateMapWithBounds');
             return Promise.reject('Missing parameters');
@@ -423,19 +423,20 @@ window.polygon_management = {
             console.error('GeoJSON layer not found in map');
             return Promise.reject('No GeoJSON layer found');
         }
+        
+        let showUnselected = true; // Default to true
+        if (mapState && mapState.show_unselected) {
+                showUnselected = mapState.show_unselected;
+        }
 
-        // Get the map state to determine selected polygons and other settings
-        const mapState = window.dash_clientside.store &&
-            window.dash_clientside.store.getState &&
-            window.dash_clientside.store.getState()["map-state"] || {};
-
-        // Extract map state data
-        const selectedPolygons = mapState.selected_polygons || [];
-        const showUnselected = mapState.show_unselected !== false; // Default to true
-
+        let selectedPolygons = [];
+        // // Extract map state data
+        if (mapState && mapState.selected_polygons) {
+            selectedPolygons = mapState.selected_polygons;
+        }
         // Generate a unique request ID for tracking
         const requestId = Date.now().toString(36) + Math.random().toString(36).substring(2, 7);
-
+        console.log(`CLIENT: ${requestId}: Selected polygons: ${selectedPolygons.length}`);
         // Track the current zoom level
         const currentZoom = map.getZoom();
         console.log(`CLIENT: ${requestId}: Current zoom level: ${currentZoom}`);
@@ -555,7 +556,7 @@ window.polygon_management = {
         const bounds = map.getBounds();
 
         // Update the map using the current bounds approach
-        return this.updateMapWithBounds(map, unitTypes, bounds, yearRange);
+        return this.updateMapWithBounds(map, unitTypes, bounds, mapState, yearRange);
     }
 };
 
@@ -609,7 +610,7 @@ window.dash_clientside = Object.assign({}, window.dash_clientside, {
             const bounds = map.getBounds();
 
             // Call the updateMapWithBounds function
-            window.polygon_management.updateMapWithBounds(map, unitTypes, bounds, yearRange)
+            window.polygon_management.updateMapWithBounds(map, unitTypes, bounds, mapState,yearRange)
                 .then(filteredGeoJSON => {
                     // Success - the map has been updated directly
                     console.log(`Map updated successfully with ${filteredGeoJSON.features.length} features`);
