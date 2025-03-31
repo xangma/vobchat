@@ -1,4 +1,4 @@
-// app/assets/polygon_management.js (updated with bounding box support)
+// app/assets/polygon_management.js
 
 // Add init hook to make map accessible from the container
 L.Map.addInitHook(function () {
@@ -34,13 +34,12 @@ L.Map.addInitHook(function () {
     });
 });
 
-// Global polygon cache to store loaded polygons by unit type
+// Global polygon cache to store loaded polygons by unit type and feature ID
 window.polygonCache = {
-    loadedUnitTypes: {},      // Tracks which unit types have been loaded
-    pendingRequests: {},      // Tracks in-flight requests by unit type
-    bboxCache: {},            // Stores bounding boxes by unit type that have been loaded
-    allFeatures: {},          // Stores all features by ID
-    geojsonLayer: null        // Reference to the main GeoJSON layer
+    featureById: {},        // Stores features by ID
+    featuresByUnitType: {},  // Stores feature IDs by unit type
+    pendingRequests: {},    // Tracks in-flight requests 
+    geojsonLayer: null      // Reference to the main GeoJSON layer
 };
 
 window.polygon_management = {
@@ -48,7 +47,7 @@ window.polygon_management = {
     skipNextMoveend: false,
 
     /**
-     * Get a simple string representation of bounds for cache tracking
+     * Get a simple string representation of bounds for request tracking
      * @param {L.LatLngBounds} bounds - Leaflet bounds object
      * @returns {string} - String representation of bounds (rounded to 4 decimals)
      */
@@ -64,22 +63,20 @@ window.polygon_management = {
     },
 
     /**
-     * Check if a bounding box is already cached
-     * @param {string} unitType - The unit type
-     * @param {L.LatLngBounds} bounds - Leaflet bounds object
-     * @returns {boolean} - True if this bounding box is already cached
+     * Get list of cached feature IDs for specific unit types
+     * @param {Array} unitTypes - Array of unit types
+     * @returns {Array} - Array of feature IDs that are already cached
      */
-    isBoundsCached: function (unitType, bounds) {
-        const boundsKey = this.getBoundsKey(bounds);
-
-        // Check if this unit type has any cached bounds
-        if (!window.polygonCache.bboxCache[unitType]) {
-            window.polygonCache.bboxCache[unitType] = {};
-            return false;
-        }
-
-        // Check if this specific bounds is cached
-        return !!window.polygonCache.bboxCache[unitType][boundsKey];
+    getCachedFeatureIds: function(unitTypes) {
+        const cachedIds = new Set();
+        
+        // Collect IDs from each unit type
+        unitTypes.forEach(unitType => {
+            const idsForType = window.polygonCache.featuresByUnitType[unitType] || [];
+            idsForType.forEach(id => cachedIds.add(id));
+        });
+        
+        return Array.from(cachedIds);
     },
 
     /**
@@ -128,13 +125,14 @@ window.polygon_management = {
     },
 
     /**
-         * Fetch polygons within a bounding box for specified unit types
-         * @param {Array} unitTypes - Array of unit types to fetch
-         * @param {L.LatLngBounds} bounds - Leaflet bounds object
-         * @param {Object} yearRange - Optional year range for time-dependent units
-         * @returns {Promise} - Promise that resolves to the fetched GeoJSON
-         */
-    fetchPolygonsByBounds: function (unitTypes, bounds, yearRange) {
+     * Fetch polygons within a bounding box for specified unit types, excluding already cached IDs
+     * @param {Array} unitTypes - Array of unit types to fetch
+     * @param {L.LatLngBounds} bounds - Leaflet bounds object
+     * @param {Array} cachedIds - Array of feature IDs to exclude from the request
+     * @param {Object} yearRange - Optional year range for time-dependent units
+     * @returns {Promise} - Promise that resolves to the fetched GeoJSON
+     */
+    fetchPolygonsByBounds: function (unitTypes, bounds, cachedIds, yearRange) {
         if (!unitTypes || !unitTypes.length || !bounds) {
             return Promise.reject('Missing parameters');
         }
@@ -146,53 +144,13 @@ window.polygon_management = {
         // Generate a unique request ID for tracking
         const requestId = Date.now().toString(36) + Math.random().toString(36).substring(2, 7);
 
-        // Check if we already have cached all the data for this view
-        const boundsKey = this.getBoundsKey(bounds);
-        let allDataCached = true;
-        let cachedFeaturesForView = 0;
-
-        // For each unit type, check if we have this bounds in cache
-        for (const unitType of unitTypes) {
-            if (!window.polygonCache.bboxCache[unitType] ||
-                !window.polygonCache.bboxCache[unitType][boundsKey]) {
-                allDataCached = false;
-                break;
-            }
-
-            // Check how many cached features we have for this unit type
-            cachedFeaturesForView += Object.values(window.polygonCache.allFeatures)
-                .filter(f => f.properties && f.properties.g_unit_type === unitType)
-                .length;
-        }
-
-        // Build URL with parameters
-        let url = `/api/polygons/bbox?unit_types=${unitTypes.join(',')}&minX=${sw.lng}&minY=${sw.lat}&maxX=${ne.lng}&maxY=${ne.lat}&request_id=${requestId}`;
-
-        // Add year range if specified
-        if (yearRange && yearRange.min && yearRange.max) {
-            url += `&start_year=${yearRange.min}&end_year=${yearRange.max}`;
-        }
-
-        // If we have all data cached, tell the server
-        if (allDataCached && cachedFeaturesForView > 0) {
-            url += `&client_has_data=true`;
-            console.log(`CLIENT: ${requestId}: All data already cached locally (${cachedFeaturesForView} features), informing server`);
-        } else {
-            console.log(`CLIENT: ${requestId}: Not all data cached (cached=${allDataCached}, features=${cachedFeaturesForView}), requesting from server`);
-        }
-
-        console.log(`CLIENT: ${requestId}: Fetching polygons for bounds: ${sw.lng},${sw.lat} to ${ne.lng},${ne.lat}`);
+        // Make sure cachedIds is an array
+        const excludeIds = Array.isArray(cachedIds) ? cachedIds : [];
 
         // Cache key for tracking this request
-        const requestKey = `bbox_${unitTypes.join('_')}_${boundsKey}`;
+        const boundsKey = this.getBoundsKey(bounds);
+        const requestKey = `${unitTypes.join('_')}_${boundsKey}`;
         console.log(`CLIENT: ${requestId}: Request key: ${requestKey}`);
-
-        // Log current cache state
-        console.log(`CLIENT: ${requestId}: Current client-side cache state:`);
-        for (const unitType in window.polygonCache.bboxCache) {
-            const cachedBounds = Object.keys(window.polygonCache.bboxCache[unitType] || {});
-            console.log(`CLIENT: ${requestId}: Unit type ${unitType}: ${cachedBounds.length} cached bounds: ${cachedBounds.join(', ')}`);
-        }
 
         // Check if this request is already in progress
         if (window.polygonCache.pendingRequests[requestKey]) {
@@ -200,102 +158,154 @@ window.polygon_management = {
             return window.polygonCache.pendingRequests[requestKey];
         }
 
-        // Make the fetch request
-        const fetchPromise = fetch(url)
+        // Build the base params for both GET and POST requests
+        const params = {
+            minX: sw.lng,
+            minY: sw.lat,
+            maxX: ne.lng,
+            maxY: ne.lat,
+            request_id: requestId
+        };
+
+        // Add year range if specified
+        if (yearRange && yearRange.min && yearRange.max) {
+            params.start_year = yearRange.min;
+            params.end_year = yearRange.max;
+        }
+
+        let fetchPromise;
+
+        // Decide between GET and POST based on number of cached IDs
+        if (excludeIds.length > 50) {
+            // Use POST for large number of IDs
+            console.log(`CLIENT: ${requestId}: Using POST to send ${excludeIds.length} cached IDs`);
+            
+            // Build the POST request payload
+            const payload = {
+                unit_types: unitTypes,
+                bounds: {
+                    minX: sw.lng,
+                    minY: sw.lat,
+                    maxX: ne.lng,
+                    maxY: ne.lat
+                },
+                exclude_ids: excludeIds,
+                request_id: requestId
+            };
+            
+            // Add year range if specified
+            if (yearRange && yearRange.min && yearRange.max) {
+                payload.start_year = yearRange.min;
+                payload.end_year = yearRange.max;
+            }
+
+            // Make the POST request
+            fetchPromise = fetch('/api/polygons/bbox', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+            })
             .then(response => {
                 if (!response.ok) {
                     throw new Error(`Failed to fetch polygons: ${response.statusText}`);
                 }
                 return response.json();
-            })
-            .then(data => {
-                // Handle special case where server tells us to use cached data
-                if (data.useCachedFeatures) {
-                    console.log(`CLIENT: ${requestId}: Server confirmed we can use our cached data`);
+            });
+        } else {
+            // Use GET for smaller number of IDs
+            // Build URL with parameters
+            let url = `/api/polygons/bbox?unit_types=${unitTypes.join(',')}&minX=${sw.lng}&minY=${sw.lat}&maxX=${ne.lng}&maxY=${ne.lat}&request_id=${requestId}`;
 
-                    // Create a filtered version of our cached features for this view
-                    const filteredFeatures = Object.values(window.polygonCache.allFeatures)
-                        .filter(f => unitTypes.includes(f.properties && f.properties.g_unit_type))
-                        .filter(f => {
-                            // Check if the feature is within the current bounds
-                            // This is a simplified check that works for points
-                            if (f.geometry && f.geometry.type === 'Point') {
-                                const coords = f.geometry.coordinates;
-                                return coords[0] >= sw.lng && coords[0] <= ne.lng &&
-                                    coords[1] >= sw.lat && coords[1] <= ne.lat;
-                            }
-                            // For polygons and other geometries, assume they're in the view
-                            // A more accurate check would use turf.js to check spatial relationships
-                            return true;
-                        });
+            // Add year range if specified
+            if (yearRange && yearRange.min && yearRange.max) {
+                url += `&start_year=${yearRange.min}&end_year=${yearRange.max}`;
+            }
 
-                    console.log(`CLIENT: ${requestId}: Using ${filteredFeatures.length} cached features for the current view`);
+            // Add the cached IDs parameter if we have any
+            if (excludeIds.length > 0) {
+                url += `&exclude_ids=${excludeIds.join(',')}`;
+                console.log(`CLIENT: ${requestId}: Excluding ${excludeIds.length} cached IDs from request`);
+            }
 
-                    // Return filtered features as a GeoJSON object
-                    return {
-                        type: "FeatureCollection",
-                        features: filteredFeatures,
-                        fromCache: true
-                    };
-                }
+            console.log(`CLIENT: ${requestId}: Fetching polygons for bounds: ${sw.lng},${sw.lat} to ${ne.lng},${ne.lat}`);
 
-                console.log(`CLIENT: ${requestId}: Received ${data.features ? data.features.length : 0} polygons from server`);
-
-                // Check if we have duplicates with what's already in cache
-                const newFeatureIds = new Set();
-                if (data.features) {
-                    data.features.forEach(f => {
-                        if (f.id) newFeatureIds.add(f.id);
-                    });
-                }
-
-                const existingIds = new Set();
-                Object.values(window.polygonCache.allFeatures).forEach(f => {
-                    if (f.id) existingIds.add(f.id);
-                });
-
-                const intersection = [...newFeatureIds].filter(id => existingIds.has(id));
-                console.log(`CLIENT: ${requestId}: ${intersection.length} features already in cache out of ${newFeatureIds.size} received`);
-
-                // Mark these bounds as cached for each unit type
-                unitTypes.forEach(unitType => {
-                    if (!window.polygonCache.bboxCache[unitType]) {
-                        window.polygonCache.bboxCache[unitType] = {};
+            // Make the GET request
+            fetchPromise = fetch(url)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`Failed to fetch polygons: ${response.statusText}`);
                     }
-                    window.polygonCache.bboxCache[unitType][boundsKey] = true;
-                    console.log(`CLIENT: ${requestId}: Cached bounds ${boundsKey} for unit type ${unitType}`);
+                    return response.json();
                 });
+        }
+        fetchPromise
+        .then(data => {
+            // Handle special case where server tells us to use cached data
+            if (data.useCachedFeatures) {
+                console.log(`CLIENT: ${requestId}: Server confirmed we can use our cached data`);
 
-                // Store individual features for filtering
-                let newFeaturesAdded = 0;
-                if (data && data.features) {
-                    data.features.forEach(feature => {
-                        // Use feature ID as key if it exists
-                        if (feature.id) {
-                            if (!window.polygonCache.allFeatures[feature.id]) {
-                                newFeaturesAdded++;
-                            }
-                            window.polygonCache.allFeatures[feature.id] = feature;
+                // Create a filtered version of our cached features for this view
+                const filteredFeatures = [];
+                unitTypes.forEach(unitType => {
+                    const featureIds = window.polygonCache.featuresByUnitType[unitType] || [];
+                    featureIds.forEach(id => {
+                        const feature = window.polygonCache.featureById[id];
+                        if (feature) {
+                            filteredFeatures.push(feature);
                         }
                     });
-                }
-                console.log(`CLIENT: ${requestId}: Added ${newFeaturesAdded} new features to the client-side feature cache`);
+                });
 
-                // Remove from pending requests
-                delete window.polygonCache.pendingRequests[requestKey];
-                return data;
-            })
-            .catch(error => {
-                console.error(`CLIENT: ${requestId}: Error fetching polygons: ${error.message}`);
-                // Remove from pending requests on error
-                delete window.polygonCache.pendingRequests[requestKey];
-                throw error;
-            });
+                console.log(`CLIENT: ${requestId}: Using ${filteredFeatures.length} cached features for the current view`);
+
+                // Return filtered features as a GeoJSON object
+                return {
+                    type: "FeatureCollection",
+                    features: filteredFeatures,
+                    fromCache: true
+                };
+            }
+
+            console.log(`CLIENT: ${requestId}: Received ${data.features ? data.features.length : 0} new polygons from server`);
+
+            // Store new features in the cache
+            if (data.features && data.features.length > 0) {
+                data.features.forEach(feature => {
+                    if (feature.id) {
+                        // Store the feature by ID
+                        window.polygonCache.featureById[feature.id] = feature;
+                        
+                        // Store the ID in the unit type index
+                        if (feature.properties && feature.properties.g_unit_type) {
+                            const unitType = feature.properties.g_unit_type;
+                            if (!window.polygonCache.featuresByUnitType[unitType]) {
+                                window.polygonCache.featuresByUnitType[unitType] = [];
+                            }
+                            if (!window.polygonCache.featuresByUnitType[unitType].includes(feature.id)) {
+                                window.polygonCache.featuresByUnitType[unitType].push(feature.id);
+                            }
+                        }
+                    }
+                });
+            }
+
+            // Remove from pending requests
+            delete window.polygonCache.pendingRequests[requestKey];
+            return data;
+        })
+        .catch(error => {
+            console.error(`CLIENT: ${requestId}: Error fetching polygons: ${error.message}`);
+            // Remove from pending requests on error
+            delete window.polygonCache.pendingRequests[requestKey];
+            throw error;
+        });
 
         // Store the promise for potential reuse
         window.polygonCache.pendingRequests[requestKey] = fetchPromise;
         return fetchPromise;
-    },    
+    },
     
     /**
      * Find the GeoJSON layer in the map
@@ -332,30 +342,9 @@ window.polygon_management = {
 
         // Store for future reference
         if (geojsonLayer) {
+            console.log("Found GeoJSON layer in map", geojsonLayer);
             window.polygonCache.geojsonLayer = geojsonLayer;
-        } else {
-            console.warn("No GeoJSON layer found, will create one");
-            // If no layer is found, we could create one with the correct style
-            try {
-                // Try to get the style function from the global namespace
-                let styleFunction = null;
-                if (window.map_leaflet && window.map_leaflet.style_function) {
-                    styleFunction = window.map_leaflet.style_function;
-                    console.log("Using style function from window.map_leaflet");
-                }
-
-                geojsonLayer = dash_leaflet.GeoJSON([], {
-                    style: styleFunction
-                })
-                // Add the layer to the map
-                geojsonLayer.addTo(map);
-                window.polygonCache.geojsonLayer = geojsonLayer;
-            } catch (error) {
-                console.error("Error creating new GeoJSON layer", error);
-            }
-        }
-
-        return geojsonLayer;
+        } 
     },
 
     /**
@@ -413,13 +402,13 @@ window.polygon_management = {
     },
 
     /**
-         * Update the map with polygons based on current bounds
-         * @param {Object} map - Leaflet map object
-         * @param {Array} unitTypes - Array of unit types to fetch
-         * @param {L.LatLngBounds} bounds - Current map bounds
-         * @param {Object} yearRange - Optional year range
-         * @returns {Promise} - Promise that resolves when update is complete
-         */
+     * Update the map with polygons based on current bounds
+     * @param {Object} map - Leaflet map object
+     * @param {Array} unitTypes - Array of unit types to fetch
+     * @param {L.LatLngBounds} bounds - Current map bounds
+     * @param {Object} yearRange - Optional year range
+     * @returns {Promise} - Promise that resolves when update is complete
+     */
     updateMapWithBounds: function (map, unitTypes, bounds, yearRange) {
         if (!map || !unitTypes || !unitTypes.length || !bounds) {
             console.error('Missing required parameters for updateMapWithBounds');
@@ -447,175 +436,47 @@ window.polygon_management = {
         // Generate a unique request ID for tracking
         const requestId = Date.now().toString(36) + Math.random().toString(36).substring(2, 7);
 
-        // Extract bounds coordinates
-        const sw = bounds.getSouthWest();
-        const ne = bounds.getNorthEast();
-        const boundsKey = this.getBoundsKey(bounds);
-
         // Track the current zoom level
         const currentZoom = map.getZoom();
         console.log(`CLIENT: ${requestId}: Current zoom level: ${currentZoom}`);
 
-        // Check if we need to fetch new data by comparing with our cached regions
-        let needFetchFromServer = false;
+        // Get list of cached feature IDs for these unit types
+        const cachedIds = this.getCachedFeatureIds(unitTypes);
+        console.log(`CLIENT: ${requestId}: Found ${cachedIds.length} cached features for the requested unit types`);
 
-        // Check each unit type to see if we have coverage for the current bounds
-        for (const unitType of unitTypes) {
-            // Initialize unit type cache if it doesn't exist
-            if (!window.polygonCache.bboxCache[unitType]) {
-                window.polygonCache.bboxCache[unitType] = {};
-                needFetchFromServer = true;
-                console.log(`CLIENT: ${requestId}: No cache for unit type ${unitType}, will fetch from server`);
-                continue;
-            }
-
-            // Check if current bounds are fully contained within our cached bounds
-            const cachedBoundsKeys = Object.keys(window.polygonCache.bboxCache[unitType]);
-            if (cachedBoundsKeys.length === 0) {
-                needFetchFromServer = true;
-                console.log(`CLIENT: ${requestId}: No cached bounds for unit type ${unitType}, will fetch from server`);
-                continue;
-            }
-
-            // Check if current view is covered by cached areas
-            let isCovered = false;
-
-            // For each cached bound, check if it contains or mostly overlaps the current bounds
-            // This is a simplified approach - in production you'd use a proper spatial index
-            for (const cachedKey of cachedBoundsKeys) {
-                // Extract the coordinates from the cached key
-                const coordParts = cachedKey.split('_');
-                if (coordParts.length < 5) continue; // Skip invalid keys
-
-                const cachedSW = {
-                    lng: parseFloat(coordParts[1]),
-                    lat: parseFloat(coordParts[2])
-                };
-                const cachedNE = {
-                    lng: parseFloat(coordParts[3]),
-                    lat: parseFloat(coordParts[4])
-                };
-
-                // Calculate overlap percentage between current bounds and cached bounds
-                const overlapX = Math.max(0, Math.min(ne.lng, cachedNE.lng) - Math.max(sw.lng, cachedSW.lng));
-                const overlapY = Math.max(0, Math.min(ne.lat, cachedNE.lat) - Math.max(sw.lat, cachedSW.lat));
-
-                // Calculate areas
-                const currentArea = (ne.lng - sw.lng) * (ne.lat - sw.lat);
-                const cachedArea = (cachedNE.lng - cachedSW.lng) * (cachedNE.lat - cachedSW.lat);
-                const overlapArea = overlapX * overlapY;
-
-                // If current view is at least 90% covered by cached area, consider it covered
-                if (overlapArea > 0 && (overlapArea / currentArea) > 0.9) {
-                    isCovered = true;
-                    console.log(`CLIENT: ${requestId}: Unit type ${unitType} is covered by cached bounds ${cachedKey} (${Math.round(overlapArea / currentArea * 100)}%)`);
-                    break;
-                }
-            }
-
-            if (!isCovered) {
-                needFetchFromServer = true;
-                console.log(`CLIENT: ${requestId}: Unit type ${unitType} not fully covered by cached bounds, will fetch from server`);
-            }
-        }
-
-        // Get features that match the current unit types
-        const cachedFeatures = Object.values(window.polygonCache.allFeatures).filter(f =>
-            f.properties && unitTypes.includes(f.properties.g_unit_type)
-        );
-
-        // If we have features but need to fetch more, we'll do both:
-        // 1. Render what we have now
-        // 2. Fetch additional data and update the map when it arrives
-        if (cachedFeatures.length > 0) {
-            console.log(`CLIENT: ${requestId}: Using ${cachedFeatures.length} cached features while fetching additional data`);
-
-            // Filter features based on selected state if needed
-            let displayFeatures = cachedFeatures;
-            if (!showUnselected) {
-                displayFeatures = displayFeatures.filter(feature =>
-                    feature.id && selectedPolygons.includes(feature.id));
-            }
-
-            // Clear existing layers and add the cached ones immediately
-            geojsonLayer.clearLayers();
-
-            // Create a temporary GeoJSON object with the cached features
-            const cachedGeodata = {
-                type: "FeatureCollection",
-                features: displayFeatures
-            };
-
-            // Create options object with hideout to ensure style function works correctly
-            const geoJsonOptions = {
-                style: geojsonLayer.options && geojsonLayer.options.style,
-                pointToLayer: geojsonLayer.options && geojsonLayer.options.pointToLayer,
-                onEachFeature: geojsonLayer.options && geojsonLayer.options.onEachFeature,
-                hideout: { selected: selectedPolygons }
-            };
-
-
-            // Add each layer to the main GeoJSON layer
-            geojsonLayer.addData(cachedGeodata, geoJsonOptions);
-
-            // Update the hideout property with selected IDs
-            if (geojsonLayer.options) {
-                geojsonLayer.options.hideout = { selected: selectedPolygons };
-            } else {
-                geojsonLayer.options = { hideout: { selected: selectedPolygons } };
-            }
-
-            // Force a style refresh
-            this.refreshLayerStyles(geojsonLayer, selectedPolygons);
-        }
-
-        // If we don't need to fetch from the server, return the cached data
-        if (!needFetchFromServer) {
-            console.log(`CLIENT: ${requestId}: Using only cached data, no server fetch needed`);
-
-            // Create a GeoJSON object with the cached features
-            const geodata = {
-                type: "FeatureCollection",
-                features: cachedFeatures
-            };
-
-            return Promise.resolve(geodata);
-        }
-
-        // Otherwise, fetch from the server
-        console.log(`CLIENT: ${requestId}: Fetching additional data from server for bounds ${sw.lng},${sw.lat} to ${ne.lng},${ne.lat}`);
-
-        // Expand bounds slightly to ensure we fetch polygons that might be partially visible
-        const expandedBounds = bounds.pad(0.1); // Add 10% padding around the visible area
-
-        // Fetch polygons based on the expanded bounds
-        return this.fetchPolygonsByBounds(unitTypes, expandedBounds, yearRange)
+        // Fetch new polygons, excluding cached ones
+        return this.fetchPolygonsByBounds(unitTypes, bounds, cachedIds, yearRange)
             .then(geodata => {
                 console.log(`CLIENT: ${requestId}: Received ${geodata.features ? geodata.features.length : 0} polygons from server`);
 
                 // Get all features (both newly fetched and previously cached)
-                let allFeatures = [...cachedFeatures];
+                const displayFeatures = [];
+
+                // Collect features from each requested unit type
+                unitTypes.forEach(unitType => {
+                    const featureIds = window.polygonCache.featuresByUnitType[unitType] || [];
+                    featureIds.forEach(id => {
+                        const feature = window.polygonCache.featureById[id];
+                        if (feature && (!geodata.fromCache || isFeatureInView(feature, bounds))) {
+                            // Filter features based on selected state if needed
+                            if (showUnselected || (feature.id && selectedPolygons.includes(feature.id))) {
+                                displayFeatures.push(feature);
+                            }
+                        }
+                    });
+                });
 
                 // Add any new features from the server response
-                if (geodata.features && geodata.features.length > 0) {
-                    // Add only features that aren't already in our cache
-                    const existingIds = new Set(cachedFeatures.map(f => f.id));
-                    const newFeatures = geodata.features.filter(f => !existingIds.has(f.id));
-
-                    console.log(`CLIENT: ${requestId}: Adding ${newFeatures.length} new features to the display`);
-
-                    // Update the all features array
-                    allFeatures = [...cachedFeatures, ...newFeatures];
+                if (geodata.features && !geodata.fromCache) {
+                    geodata.features.forEach(feature => {
+                        // Filter features based on selected state if needed
+                        if (showUnselected || (feature.id && selectedPolygons.includes(feature.id))) {
+                            displayFeatures.push(feature);
+                        }
+                    });
                 }
 
-                // Filter features based on selected state if needed
-                let displayFeatures = allFeatures;
-                if (!showUnselected) {
-                    displayFeatures = displayFeatures.filter(feature =>
-                        feature.id && selectedPolygons.includes(feature.id));
-                }
-
-                // Clear existing layers and add all features
+                // Clear existing layers
                 geojsonLayer.clearLayers();
 
                 // Create a GeoJSON object with all features
@@ -645,13 +506,31 @@ window.polygon_management = {
                 // Force a style refresh
                 this.refreshLayerStyles(geojsonLayer, selectedPolygons);
 
-                console.log(`CLIENT: ${requestId}: Map updated with combined data (${displayFeatures.length} features)`);
+                console.log(`CLIENT: ${requestId}: Map updated with combined data (${displayFeatures.length} features displayed)`);
                 return completeGeodata;
             })
             .catch(error => {
                 console.error(`CLIENT: ${requestId}: Error updating map:`, error);
                 return Promise.reject(error);
             });
+
+        // Helper function to check if a feature is in the current view
+        function isFeatureInView(feature, bounds) {
+            if (!feature.geometry) return false;
+            
+            // For points, simple check if coordinates are within bounds
+            if (feature.geometry.type === 'Point') {
+                const coords = feature.geometry.coordinates;
+                return coords[0] >= bounds.getWest() && 
+                       coords[0] <= bounds.getEast() &&
+                       coords[1] >= bounds.getSouth() && 
+                       coords[1] <= bounds.getNorth();
+            }
+            
+            // For other geometries, assume they might be visible
+            // A more accurate check would use a spatial library but this is lighter
+            return true;
+        }
     },
 
     /**
