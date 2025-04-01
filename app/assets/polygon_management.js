@@ -10,29 +10,55 @@ L.Map.addInitHook(function () {
     this.once('load', function () {
         console.log("Map loaded, initializing polygon management");
 
-        // Wait a moment for all layers to initialize
+        // Create a flag to track when GeoJSON layer is ready
+        window.geojsonLayerReady = false;
+
+        // Increase timeout to allow all components to initialize
         setTimeout(() => {
-            // Find the GeoJSON layer and store it
-            if (window.polygon_management) {
-                window.polygon_management.findGeoJSONLayer(this);
-
-                // Initialize with default unit type if needed
-                const initialState = window.dash_clientside.store &&
-                    window.dash_clientside.store.getState &&
-                    window.dash_clientside.store.getState()["map-state"] ||
-                    { unit_types: ['MOD_REG'] };
-
-                if (initialState && initialState.unit_types && initialState.unit_types.length > 0) {
-                    // Note: moveend event is now handled in the clientside callback
-
-                    // Initial load with current bounds
-                    const bounds = this.getBounds();
-                    window.polygon_management.updateMapWithBounds(this, initialState.unit_types, bounds);
-                }
-            }
+            initializeMapLayers(this);
         }, 500);
     });
 });
+
+/**
+ * New function to initialize map layers and ensure GeoJSON layer is found
+ * before attempting to update the map
+ * @param {Object} map - Leaflet map object
+ */
+function initializeMapLayers(map) {
+    if (!window.polygon_management) {
+        console.warn("polygon_management object not initialized");
+        return;
+    }
+
+    // First, try to find the GeoJSON layer
+    const geojsonLayer = window.polygon_management.findGeoJSONLayer(map);
+    
+    // If GeoJSON layer not found, retry after a short delay
+    if (!geojsonLayer) {
+        console.log("GeoJSON layer not found, will retry in 200ms");
+        setTimeout(() => {
+            initializeMapLayers(map);
+        }, 200);
+        return;
+    }
+    
+    // Mark the GeoJSON layer as ready
+    window.geojsonLayerReady = true;
+    console.log("GeoJSON layer found and ready for updates");
+    
+    // Initialize with default unit type if needed
+    const initialState = window.dash_clientside.store &&
+        window.dash_clientside.store.getState &&
+        window.dash_clientside.store.getState()["map-state"] ||
+        { unit_types: ['MOD_REG'] };
+
+    if (initialState && initialState.unit_types && initialState.unit_types.length > 0) {
+        // Initial load with current bounds
+        const bounds = map.getBounds();
+        window.polygon_management.updateMapWithBounds(map, initialState.unit_types, bounds);
+    }
+}
 
 // Global polygon cache to store loaded polygons by unit type and feature ID
 window.polygonCache = {
@@ -345,6 +371,8 @@ window.polygon_management = {
             console.log("Found GeoJSON layer in map", geojsonLayer);
             window.polygonCache.geojsonLayer = geojsonLayer;
         } 
+        
+        return geojsonLayer;
     },
 
     /**
@@ -413,6 +441,15 @@ window.polygon_management = {
         if (!map || !unitTypes || !unitTypes.length || !bounds) {
             console.error('Missing required parameters for updateMapWithBounds');
             return Promise.reject('Missing parameters');
+        }
+
+        // Check if GeoJSON layer is ready
+        if (!window.geojsonLayerReady) {
+            console.warn('GeoJSON layer not ready yet, deferring update');
+            return Promise.resolve({
+                type: "FeatureCollection",
+                features: []
+            });
         }
 
         console.log(`Updating map with bounds for unit types: ${unitTypes.join(', ')}`);
@@ -586,6 +623,13 @@ window.dash_clientside = Object.assign({}, window.dash_clientside, {
 
             const map = mapElement._leaflet_map;
 
+            // Check if the GeoJSON layer is ready before proceeding
+            if (!window.geojsonLayerReady) {
+                console.warn('GeoJSON layer not ready yet, skipping callback');
+                return [dash_clientside.no_update, dash_clientside.no_update, dash_clientside.no_update,
+                dash_clientside.no_update, dash_clientside.no_update];
+            }
+
             // Determine if we need to show/hide the year range container
             let containerStyle = { 'display': 'none' };
 
@@ -610,7 +654,7 @@ window.dash_clientside = Object.assign({}, window.dash_clientside, {
             const bounds = map.getBounds();
 
             // Call the updateMapWithBounds function
-            window.polygon_management.updateMapWithBounds(map, unitTypes, bounds, mapState,yearRange)
+            window.polygon_management.updateMapWithBounds(map, unitTypes, bounds, mapState, yearRange)
                 .then(filteredGeoJSON => {
                     // Success - the map has been updated directly
                     console.log(`Map updated successfully with ${filteredGeoJSON.features.length} features`);

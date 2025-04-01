@@ -129,20 +129,32 @@ def register_clientside_callbacks(app: Dash):
             
             // Set up the moveend event handler if it doesn't exist yet
             if (!window.moveendHandlerSet) {
-                map.on('moveend', function() {
-                    // Skip if the move was triggered by fitBounds
-                    if (window.polygon_management && window.polygon_management.skipNextMoveend) {
-                        window.polygon_management.skipNextMoveend = false;
-                        return;
+                // Only set up the event handler when we confirm GeoJSON layer is ready
+                const setupMoveendHandler = function() {
+                    if (window.geojsonLayerReady) {
+                        map.on('moveend', function() {
+                            // Skip if the move was triggered by fitBounds
+                            if (window.polygon_management && window.polygon_management.skipNextMoveend) {
+                                window.polygon_management.skipNextMoveend = false;
+                                return;
+                            }
+                            
+                            // Trigger the callback by updating a store value
+                            if (window.dash_clientside.set_props) {
+                                window.dash_clientside.set_props("map-moveend-trigger", {data: Date.now()});
+                            }
+                        });
+                        
+                        window.moveendHandlerSet = true;
+                        console.log("Moveend handler set up successfully");
+                    } else {
+                        // Check again in a moment
+                        setTimeout(setupMoveendHandler, 100);
                     }
-                    
-                    // Trigger the callback by updating a store value
-                    if (window.dash_clientside.set_props) {
-                        window.dash_clientside.set_props("map-moveend-trigger", {data: Date.now()});
-                    }
-                });
+                };
                 
-                window.moveendHandlerSet = true;
+                // Start the setup process
+                setupMoveendHandler();
             }
             
             // Return no update as we're just setting up the handler
@@ -171,6 +183,12 @@ def register_clientside_callbacks(app: Dash):
 
             const map = mapElement._leaflet_map;
             
+            // Ensure GeoJSON layer is ready before proceeding
+            if (!window.geojsonLayerReady) {
+                console.warn("GeoJSON layer not ready, skipping moveend update");
+                return window.dash_clientside.no_update;
+            }
+            
             // Get current bounds
             const bounds = map.getBounds();
             
@@ -183,7 +201,7 @@ def register_clientside_callbacks(app: Dash):
             
             // Update the map with the new bounds
             if (window.polygon_management) {
-                window.polygon_management.updateMapWithBounds(map, unitTypes, bounds, yearRange)
+                window.polygon_management.updateMapWithBounds(map, unitTypes, bounds, mapState, yearRange)
                     .then(result => {
                         console.log(`Map updated on moveend with ${result.features ? result.features.length : 0} features`);
                     })
@@ -204,6 +222,18 @@ def register_clientside_callbacks(app: Dash):
     app.clientside_callback(
         """
         function(mapState, appState) {
+            // Only call updateMapWithPolygons when GeoJSON layer is ready
+            if (!window.geojsonLayerReady) {
+                console.log("GeoJSON layer not ready, deferring updateMapWithPolygons");
+                return [
+                    {'display': 'none'},
+                    window.dash_clientside.no_update,
+                    window.dash_clientside.no_update,
+                    "Waiting for map initialization...",
+                    window.dash_clientside.no_update
+                ];
+            }
+            
             // This function is defined in the polygon_management.js file
             return window.dash_clientside.clientside.updateMapWithPolygons(mapState, appState);
         }
