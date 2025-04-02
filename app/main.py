@@ -4,8 +4,9 @@ import dash_bootstrap_components as dbc
 from dash import html
 from .config import load_config, get_db
 from .workflow import create_workflow, lg_State
-from .mapinit import get_polygons_by_type, get_date_ranges_by_type
+from .tools import get_date_ranges_by_type
 from .stores import create_stores
+from .utils.polygon_cache import polygon_cache
 from .components.chat import create_chat_layout
 from .components.map import create_map_layout
 from .components.visualization import create_visualization_layout
@@ -28,7 +29,7 @@ def create_app():
     app = DashProxy(transforms=[CycleBreakerTransform()], external_stylesheets=[
                     dbc.themes.BOOTSTRAP], url_base_pathname=os.getenv("DASH_URL_BASE", None), suppress_callback_exceptions=True)
 
-    initial_gdf = get_polygons_by_type('MOD_REG')
+    # initial_gdf = polygon_cache.get_polygons('MOD_REG')
     date_ranges_df = get_date_ranges_by_type()
     compiled_workflow = create_workflow(lg_State)
 
@@ -47,7 +48,7 @@ def create_app():
                     html.Div(className="resize-handle-horizontal"),
                     # Map panel
                     html.Div(className="resizable-panel", id="map-panel", children=[
-                        create_map_layout(initial_gdf, assets_folder)
+                        create_map_layout(assets_folder)
                     ]),
                 ]),
                 # Vertical resize handle (hidden by default, shown when visualization appears)

@@ -44,7 +44,6 @@ The code is organized into the following directories and files:
         * `visualization.py`: Defines the visualization layout.
     * `config.py`: Loads configuration settings.
     * `stores.py`: Manages data stores for the application state.
-    * `mapinit.py`: Initializes map-related data.
     * `tools.py`: Provides helper functions for database queries.
     * `utils`: Contains utility functions and constants.
         * `constants.py`: Defines constants for unit types and themes.

@@ -41,8 +41,6 @@ from .tools import (
     find_themes_for_unit,
     find_places_by_name
 )
-from .mapinit import get_polygons_by_type
-from .utils.polygon_cache import polygon_cache
 
 from .utils.redis_checkpoint import RedisSaver
 from redis import Redis

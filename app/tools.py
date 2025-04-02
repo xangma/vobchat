@@ -57,6 +57,22 @@ def _print_event(event: dict, _printed: set, max_length=1500):
 # MAP TOOLS
 
 
+def get_date_ranges_by_type() -> pd.DataFrame:
+    """Fetch min and max dates for each unit type."""
+    query = """
+    SELECT 
+        g_unit_type,
+        MIN(util.get_start_year(g_duration)) as min_year,
+        MAX(util.get_end_year(g_duration)) as max_year
+    FROM hgis.g_foot 
+    WHERE use_for_stat_map='Y'
+    GROUP BY g_unit_type
+    ORDER BY g_unit_type;
+    """
+    res = db.run(query, fetch="cursor")
+    res = list(res.mappings())
+    return pd.DataFrame(res)
+
 def calculate_center_and_zoom(gdf_filtered):
     """
     Calculate the center and zoom level for a GeoDataFrame of selected polygons.

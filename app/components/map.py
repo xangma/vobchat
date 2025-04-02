@@ -39,7 +39,7 @@ function(feature, context) {{
 """
 
 
-def create_map_layout(initial_gdf, assets_folder):
+def create_map_layout(assets_folder):
     """
     Creates the layout that uses Dash Leaflet instead of Plotly.
     """
