@@ -234,6 +234,25 @@ def register_clientside_callbacks(app: Dash):
                 ];
             }
             
+            // Check if we need to zoom to selection
+            if (mapState && mapState.zoom_to_selection && mapState.selected_polygons && mapState.selected_polygons.length > 0) {
+                // Get the map object
+                const mapElement = document.getElementById('leaflet-map');
+                if (mapElement && mapElement._leaflet_map) {
+                    const map = mapElement._leaflet_map;
+                    
+                    // Use the zoomToSelectedIds function to zoom to the selected polygons
+                    if (window.polygon_management) {
+                        window.polygon_management.zoomToSelected(map, mapState.selected_polygons);
+                    } 
+                    
+                    // Remove the zoom flag to prevent repeated zooming
+                    let newMapState = {...mapState};
+                    delete newMapState.zoom_to_selection;
+                    window.dash_clientside.set_props("map-state", {data: newMapState});
+                }
+            }            
+            
             // This function is defined in the polygon_management.js file
             return window.dash_clientside.clientside.updateMapWithPolygons(mapState, appState);
         }

@@ -409,14 +409,27 @@ window.polygon_management = {
      * @param {Object} map - Leaflet map object
      * @param {Array} selectedFeatures - Array of selected GeoJSON features 
      */
-    zoomToSelectedFeatures: function (map, selectedFeatures) {
-        const bounds = this.calculateBounds(selectedFeatures);
+    zoomToSelected: function (map, selectedIds) {
+        if (!map || !selectedIds || selectedIds.length === 0) return;
 
-        if (bounds && bounds.isValid()) {
-            // Set flag to ignore the moveend event triggered by this fit bounds
-            this.skipNextMoveend = true;
+        // Find features with the selected IDs
+        const geojsonLayer = window.polygon_management.findGeoJSONLayer(map);
+        if (!geojsonLayer) return;
 
-            // Add some padding around the bounds
+        // Get bounds of selected features
+        const bounds = L.latLngBounds();
+        let foundFeature = false;
+
+        Object.values(geojsonLayer._layers).forEach(layer => {
+            if (layer.feature && selectedIds.includes(layer.feature.id)) {
+                bounds.extend(layer.getBounds());
+                foundFeature = true;
+            }
+        });
+
+        // If we found at least one feature, zoom to it
+        if (foundFeature) {
+            window.polygon_management.skipNextMoveend = true;
             map.fitBounds(bounds, {
                 padding: [50, 50],
                 maxZoom: 12,
@@ -424,8 +437,6 @@ window.polygon_management = {
                 duration: 0.5
             });
             console.log("Zoomed to selected features");
-        } else {
-            console.log("No valid bounds for selected features");
         }
     },
 

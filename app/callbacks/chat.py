@@ -245,6 +245,8 @@ def register_chat_callbacks(app, compiled_workflow):
                             map_state["selected_polygons"].append(str(g_unit))
                             map_state["selected_polygons_unit_types"].append(selected_place_g_unit_types[i])
                             map_state["unit_types"] = interrupt_value["selected_place_g_unit_types"]
+                            # Add the zoom to selection flag to trigger zooming to the polygons
+                            map_state["zoom_to_selection"] = True
 
                     app_state.update({
                         "button_options": [],

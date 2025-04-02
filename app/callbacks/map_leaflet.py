@@ -227,6 +227,8 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
                     # Update map state with new selection
                     new_map_state["selected_polygons"] = selected_ids
                     new_map_state["selected_polygons_unit_types"] = selected_units
+                    # Set a flag to trigger zooming to the selected polygons
+                    new_map_state["zoom_to_selection"] = True
 
         # SECTION E: Handle Toggle Unselected Polygons Button
         elif "toggle-unselected.n_clicks" in triggered_prop_ids:

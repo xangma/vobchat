@@ -9,6 +9,7 @@ map_state_data = {
     "selected_polygons": [],
     "selected_polygons_unit_types": [],
     "show_unselected": True,
+    "zoom_to_selection": False,
 }
 
 place_state_data = {
