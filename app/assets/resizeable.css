@@ -34,7 +34,7 @@
 }
 
 .resize-handle-horizontal {
-  width: 8px;
+  width: 10px;
   background-color: #e0e0e0;
   cursor: col-resize;
   transition: background-color 0.2s;
@@ -45,7 +45,7 @@
 }
 
 .resize-handle-vertical {
-  height: 8px;
+  height: 10px;
   background-color: #e0e0e0;
   cursor: row-resize;
   transition: background-color 0.2s;

@@ -202,7 +202,7 @@ class ThemeDecision(BaseModel):
 choose_theme_prompt = ChatPromptTemplate.from_messages([
     (
         "system",
-        "You are an assistant that determines the appropriate statistical theme based on a user's question."
+        "You are an expert in determining the appropriate statistical theme based on a user's question."
     ),
     (
         "system",

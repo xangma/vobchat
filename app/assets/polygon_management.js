@@ -21,6 +21,26 @@ L.Map.addInitHook(function () {
 });
 
 /**
+ * Waits for features to appear in the GeoJSON layer, then zooms to them
+ * @param {Object} map - Leaflet map object
+ * @param {number} retries - How many times to retry (default 10)
+ */
+function waitForFeaturesAndZoom(map, retries = 10) {
+    const geojsonLayer = window.polygon_management.findGeoJSONLayer(map);
+    if (!geojsonLayer || !geojsonLayer._layers || Object.keys(geojsonLayer._layers).length === 0) {
+        if (retries > 0) {
+            setTimeout(() => waitForFeaturesAndZoom(map, retries - 1), 300);
+        } else {
+            console.warn("Zoom-to-features timed out: no features found");
+        }
+        return;
+    }
+
+    // Found features, zoom to them
+    window.polygon_management.zoomTo(map);
+}
+
+/**
  * New function to initialize map layers and ensure GeoJSON layer is found
  * before attempting to update the map
  * @param {Object} map - Leaflet map object
@@ -31,10 +51,8 @@ function initializeMapLayers(map) {
         return;
     }
 
-    // First, try to find the GeoJSON layer
     const geojsonLayer = window.polygon_management.findGeoJSONLayer(map);
-    
-    // If GeoJSON layer not found, retry after a short delay
+
     if (!geojsonLayer) {
         console.log("GeoJSON layer not found, will retry in 200ms");
         setTimeout(() => {
@@ -42,21 +60,26 @@ function initializeMapLayers(map) {
         }, 200);
         return;
     }
-    
-    // Mark the GeoJSON layer as ready
+
     window.geojsonLayerReady = true;
     console.log("GeoJSON layer found and ready for updates");
-    
-    // Initialize with default unit type if needed
+
     const initialState = window.dash_clientside.store &&
         window.dash_clientside.store.getState &&
         window.dash_clientside.store.getState()["map-state"] ||
         { unit_types: ['MOD_REG'] };
 
     if (initialState && initialState.unit_types && initialState.unit_types.length > 0) {
-        // Initial load with current bounds
         const bounds = map.getBounds();
-        window.polygon_management.updateMapWithBounds(map, initialState.unit_types, bounds);
+
+        window.polygon_management.updateMapWithBounds(map, initialState.unit_types, bounds, initialState)
+            .then(() => {
+                // Wait and zoom once features are present
+                waitForFeaturesAndZoom(map);
+            })
+            .catch(err => {
+                console.error("Error during initial polygon load:", err);
+            });
     }
 }
 
@@ -409,8 +432,7 @@ window.polygon_management = {
      * @param {Object} map - Leaflet map object
      * @param {Array} selectedFeatures - Array of selected GeoJSON features 
      */
-    zoomToSelected: function (map, selectedIds) {
-        if (!map || !selectedIds || selectedIds.length === 0) return;
+    zoomTo: function (map, selectedIds) {
 
         // Find features with the selected IDs
         const geojsonLayer = window.polygon_management.findGeoJSONLayer(map);
@@ -421,7 +443,12 @@ window.polygon_management = {
         let foundFeature = false;
 
         Object.values(geojsonLayer._layers).forEach(layer => {
-            if (layer.feature && selectedIds.includes(layer.feature.id)) {
+            if (layer.feature && !selectedIds) {
+                bounds.extend(layer.getBounds());
+                foundFeature = true;
+            }
+            if (layer.feature && selectedIds && 
+                selectedIds.includes(layer.feature.id)) {
                 bounds.extend(layer.getBounds());
                 foundFeature = true;
             }
@@ -431,7 +458,7 @@ window.polygon_management = {
         if (foundFeature) {
             window.polygon_management.skipNextMoveend = true;
             map.fitBounds(bounds, {
-                padding: [50, 50],
+                padding: [5, 5],
                 maxZoom: 12,
                 animate: true,
                 duration: 0.5

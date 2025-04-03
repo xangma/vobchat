@@ -37,26 +37,25 @@ def create_app():
     app.layout = html.Div([
         create_stores(),
         html.Div(className="resizable-container", children=[
-            html.Div(className="resizable-vertical", children=[
-                # Top row with chat and map side by side (horizontal split)
-                html.Div(className="resizable-horizontal", style={"flex": "1"}, children=[
-                    # Chat panel
-                    html.Div(className="resizable-panel", id="chat-panel", children=[
-                        create_chat_layout()
-                    ]),
-                    # Horizontal resize handle
-                    html.Div(className="resize-handle-horizontal"),
-                    # Map panel
+            html.Div(className="resizable-horizontal", style={"flex": "1"}, children=[
+                # Chat panel on the left
+                html.Div(className="resizable-panel", id="chat-panel", children=[
+                    create_chat_layout()
+                ]),
+                # Horizontal resize handle
+                html.Div(className="resize-handle-horizontal"),
+                # Right side: map on top, visualization below
+                html.Div(className="resizable-vertical", children=[
                     html.Div(className="resizable-panel", id="map-panel", children=[
                         create_map_layout(assets_folder)
                     ]),
+                    # Vertical resize handle (for toggling visualization)
+                    html.Div(className="resize-handle-vertical", id="vertical-resize-handle", style={"display": "none"}),
+                    html.Div(className="resizable-panel", id="visualization-panel", children=[
+                        create_visualization_layout()
+                    ],
+                    style={"display": "none"}),  # Initially hidden
                 ]),
-                # Vertical resize handle (hidden by default, shown when visualization appears)
-                html.Div(className="resize-handle-vertical", id="vertical-resize-handle", style={"display": "none"}),
-                # Bottom row with visualization
-                html.Div(className="resizable-panel", id="visualization-panel", children=[
-                    create_visualization_layout()
-                ], style={"minHeight": "200px"}),
             ]),
         ]),
     ],
@@ -64,8 +63,8 @@ def create_app():
 
     register_chat_callbacks(app, compiled_workflow)
     register_map_leaflet_callbacks(app, date_ranges_df)
-    register_visualization_callbacks(app, compiled_workflow)
     register_clientside_callbacks(app)
+    register_visualization_callbacks(app, compiled_workflow)
 
     register_polygon_routes(app.server)
     register_bounding_box_routes(app.server)

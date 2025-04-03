@@ -69,7 +69,7 @@ def create_map_layout(assets_folder):
         
         # Main content container with proper flex layout
         html.Div(
-            style={"display": "flex", "flexDirection": "column", "height": "calc(100% - 40px)"},
+            style={"display": "flex", "flexDirection": "column", "height": "100%"},
             children=[
                 # Filter controls (fixed height, non-scrollable)
                 html.Div(
@@ -102,7 +102,7 @@ def create_map_layout(assets_folder):
                         "minHeight": "300px",
                         "border": "1px solid #dee2e6",
                         "borderRadius": "5px",
-                        "overflow": "hidden" # Keeps the map contained
+                        "overflow": "hidden", # Keeps the map contained
                     },
                     children=[
                         dl.Map(
@@ -118,7 +118,7 @@ def create_map_layout(assets_folder):
                                     style=map_namespace("style_function"),
                                 ),
                             ],
-                            center=[55.0, 10.0],
+                            center=[55.0, 9.0],
                             zoom=5,
                             style={'height': '100%', 'width': '100%'},
                             id="leaflet-map",
@@ -149,18 +149,6 @@ def create_map_layout(assets_folder):
                             }
                         )
                     ]
-                ),
-                
-                # Debug output (fixed height, always visible)
-                html.Div(
-                    id='debug-output',
-                    style={
-                        'whiteSpace': 'pre-line',
-                        'marginTop': '10px',
-                        'height': '40px',
-                        'overflowY': 'auto',
-                        'flexShrink': '0'
-                    }
                 ),
             ]
         )

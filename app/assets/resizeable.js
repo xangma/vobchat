@@ -194,14 +194,14 @@ function setInitialPanelSizes() {
         return;
     }
 
-    // Set initial horizontal split (50% for chat, 50% for map)
+    // Set initial horizontal split (30% for chat, 70% for map)
     const horizontalContainer = document.querySelector('.resizable-horizontal');
     if (horizontalContainer) {
         const panels = horizontalContainer.querySelectorAll('.resizable-panel');
         if (panels.length >= 2) {
             const totalWidth = horizontalContainer.getBoundingClientRect().width;
-            panels[0].style.flex = `0 0 ${totalWidth * 0.5}px`; // First panel (chat) - 50%
-            panels[1].style.flex = `0 0 ${totalWidth * 0.5}px`; // Second panel (map) - 50%
+            panels[0].style.flex = `0 0 ${totalWidth * 0.3}px`; // First panel (chat) - 30%
+            panels[1].style.flex = `0 0 ${totalWidth * 0.7}px`; // Second panel (map) - 70%
         }
     }
 
@@ -210,22 +210,26 @@ function setInitialPanelSizes() {
     const verticalContainer = document.querySelector('.resizable-vertical');
     if (verticalContainer) {
         const children = verticalContainer.children;
+        const panels = verticalContainer.querySelectorAll('.resizable-panel');
         if (children.length >= 3) { // First child is top row, second is resize handle, third is visualization
             const visualizationArea = document.getElementById('visualization-area');
             const isVisualizationHidden = visualizationArea &&
                 window.getComputedStyle(visualizationArea).display === 'none';
 
-            if (isVisualizationHidden) {
-                // If visualization is hidden, give top row full height
-                children[0].style.flex = `1 1 auto`; // Top row takes all available space
-                children[2].style.flex = `0 0 0`; // Visualization gets no space
-            } else {
-                // Normal split if visualization is visible
-                const totalHeight = verticalContainer.getBoundingClientRect().height;
-                children[0].style.flex = `0 0 ${totalHeight * 0.85}px`; // Top row - 85%
-                children[2].style.flex = `0 0 ${totalHeight * 0.15}px`; // Visualization - 15%
+            if (panels.length >= 2) {
+                if (isVisualizationHidden) {
+                    const totalHeight = verticalContainer.getBoundingClientRect().height;
+                    panels[0].style.flex = `0 0 ${totalHeight}px`; // Top row - 100%
+                    panels[1].style.flex = `0 0 0`; // Visualization - 0%
+                    panels[1].style.minHeight = '0'; // Ensure it doesn't take up space
+                } else {
+                    // Normal split if visualization is visible
+                    const totalHeight = verticalContainer.getBoundingClientRect().height;
+                    panels[0].style.flex = `0 0 ${totalHeight * 0.50}px`; // Top row - 50%
+                    panels[1].style.flex = `0 0 ${totalHeight * 0.50}px`; // Visualization - 50%
+                }
             }
-        }
+        }   
     }
 
     // Trigger resize event to update internal components

@@ -10,10 +10,8 @@ from ..tools import get_all_cube_data
 
 # This file contains all the callbacks for data visualization
 def register_visualization_callbacks(app, compiled_workflow):
+    
     # Add new callbacks for data visualization
-
-# Update the callback in app/callbacks/visualization.py
-
     @app.callback(
         Output("visualization-area", "style"),
         Output("cube-selector", "options"),
@@ -28,7 +26,7 @@ def register_visualization_callbacks(app, compiled_workflow):
     def handle_visualization_request(app_state, thread_id, place_state, current_visibility):
         if not app_state or app_state.get("show_visualization") is False:
             # Keep visualization hidden when not requested
-            return {"height": "100%", "display": "none", "flexDirection": "column"}, [], place_state, "true"
+            return {"height": "100%", "display": "none", "flexDirection": "column", "position": "relative"}, [], place_state, "true"
 
         try:
             # Get the state to access additional data
@@ -39,7 +37,7 @@ def register_visualization_callbacks(app, compiled_workflow):
             cubes = place_state.get("cubes", [])
             if not cubes:
                 # Also keep hidden if no cubes are available
-                return {"height": "100%", "display": "none", "flexDirection": "column"}, [], place_state, "true"
+                return {"height": "100%", "display": "none", "flexDirection": "column", "position": "relative"}, [], place_state, "true"
             
             # Get all cube data at once
             cubes_df = pd.DataFrame(cubes)
@@ -60,13 +58,13 @@ def register_visualization_callbacks(app, compiled_workflow):
             place_state['cube_data'] = all_cube_data.to_json(orient='split')
             # Show the visualization with full opacity when data is available
             # Return "false" to indicate visualization is visible
-            return {"height": "100%", "display": "flex", "flexDirection": "column"}, options, place_state, "false"
+            return {"height": "100%", "display": "flex", "flexDirection": "column", "position": "relative"}, options, place_state, "false"
                         
         except Exception as e:
             print(f"Error handling visualization request: {e}")
             
         # Also hide on error
-        return {"height": "100%", "display": "none", "flexDirection": "column"}, [], place_state, "true"
+        return {"height": "100%", "display": "none", "flexDirection": "column", "position": "relative"}, [], place_state, "true"
 
     @app.callback(
         Output("data-plot", "figure", allow_duplicate=True),
@@ -118,7 +116,7 @@ def register_visualization_callbacks(app, compiled_workflow):
         if visualization_style.get("display") == "none":
             return {"display": "none"}
         else:
-            return {"display": "flex"}  # Use flex to maintain the resize handle styling# app/callbacks/visualization.py
+            return {"display": "flex"}  # Use flex to maintain the resize handle styling
 
     @app.callback(
         Output("visualization-area", "style", allow_duplicate=True),
@@ -130,5 +128,5 @@ def register_visualization_callbacks(app, compiled_workflow):
     def clear_visualization(n_clicks):
         if n_clicks:
             # Hide the visualization panel completely
-            return {"height": "100%", "display": "none", "flexDirection": "column"}, None, {}
+            return {"height": "100%", "display": "none", "flexDirection": "column", "position": "relative"}, None, {}
         raise PreventUpdate

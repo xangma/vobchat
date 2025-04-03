@@ -10,6 +10,7 @@ def create_visualization_layout():
             # Add data attribute to track visibility state
             **{'data-was-hidden': 'true'},
             children=[
+                # Control panel will be added by JavaScript
                 html.H3("Data Visualization", className="mb-3"),
                 
                 # Main content area with flex layout
@@ -39,14 +40,22 @@ def create_visualization_layout():
                             ]
                         ),
                         
-                        # Button (fixed height)
+                        # Buttons (fixed height)
                         html.Div(
-                            style={"marginTop": "10px", "flexShrink": "0"},
+                            style={"marginTop": "10px", "flexShrink": "0", "display": "flex", "justifyContent": "space-between"},
                             children=[
                                 dbc.Button(
                                     "Clear Plot",
                                     id="clear-plot-button",
                                     color="secondary"
+                                ),
+                                # New button to toggle floating mode
+                                dbc.Button(
+                                    "Make Floating",
+                                    id="float-toggle-button",
+                                    color="primary",
+                                    outline=True,
+                                    className="ms-2"
                                 )
                             ]
                         )
@@ -54,4 +63,4 @@ def create_visualization_layout():
                 )
             ]
         )
-    ], style={"height": "100%"})
+    ], style={"height": "100%", "position": "relative"})

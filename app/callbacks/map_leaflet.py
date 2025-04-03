@@ -252,7 +252,6 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
             # Output("current_geojson", "data"),                        # GeoJSON store
             Output('geojson-layer', 'data'),                          # Map layer data
             Output('geojson-layer', 'hideout'),                       # Map layer settings
-            Output('debug-output', 'children'),                       # Debug text
             Output({'type': 'unit-filter', 'unit': ALL}, 'style'),    # Unit button styles
             Output("counts-store", "data", allow_duplicate=True),     # Polygon counts
         ],
@@ -289,7 +288,6 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
         Returns:
             tuple: Multiple outputs for map display components
         """
-        debug_msg = None
         ctx = dash.callback_context
         ctx_trigger = ctx.triggered[0]["prop_id"]
         
@@ -433,7 +431,6 @@ def register_map_leaflet_callbacks(app, date_ranges_df):
             map_geojson,           # Current GeoJSON store
             # no_update,               # Map GeoJSON data
             map_hideout,               # Map hideout settings
-            debug_msg,                 # Debug message
             button_styles,             # Button styles
             counts,                    # Polygon counts
         )

@@ -214,7 +214,6 @@ def register_clientside_callbacks(app: Dash):
             return window.dash_clientside.no_update;
         }
         """,
-        Output('debug-output', 'id'),
         Input('map-moveend-trigger', 'data'),
         State('map-state', 'data')
     )
@@ -234,6 +233,8 @@ def register_clientside_callbacks(app: Dash):
                 ];
             }
             
+            const updateMapWithPolygonsResults = window.dash_clientside.clientside.updateMapWithPolygons(mapState, appState);
+            
             // Check if we need to zoom to selection
             if (mapState && mapState.zoom_to_selection && mapState.selected_polygons && mapState.selected_polygons.length > 0) {
                 // Get the map object
@@ -241,29 +242,48 @@ def register_clientside_callbacks(app: Dash):
                 if (mapElement && mapElement._leaflet_map) {
                     const map = mapElement._leaflet_map;
                     
-                    // Use the zoomToSelectedIds function to zoom to the selected polygons
+                    // Use the zoomTo function to zoom to the selected polygons
                     if (window.polygon_management) {
-                        window.polygon_management.zoomToSelected(map, mapState.selected_polygons);
+                       window.polygon_management.zoomTo(map, mapState.selected_polygons);
                     } 
                     
                     // Remove the zoom flag to prevent repeated zooming
                     let newMapState = {...mapState};
                     delete newMapState.zoom_to_selection;
+
                     window.dash_clientside.set_props("map-state", {data: newMapState});
                 }
             }            
             
-            // This function is defined in the polygon_management.js file
-            return window.dash_clientside.clientside.updateMapWithPolygons(mapState, appState);
+            return updateMapWithPolygonsResults;
         }
         """,
         [
             Output('year-range-container', 'style', allow_duplicate=True),
             Output('geojson-layer', 'data', allow_duplicate=True),
             Output('geojson-layer', 'hideout', allow_duplicate=True),
-            Output('debug-output', 'children', allow_duplicate=True),
             Output("current_geojson", "data", allow_duplicate=True),
         ],
         Input("map-state", "data"),
         State("app-state", "data"),
+    )
+    
+    app.clientside_callback(
+        """
+        function(n_clicks) {
+            if (!n_clicks) return window.dash_clientside.no_update;
+            
+            // The actual toggling is handled by the visualization_enhancements.js
+            // This callback just updates the button text
+            const visualizationArea = document.getElementById('visualization-area');
+            if (visualizationArea.classList.contains('viz-floating')) {
+                return "Dock Visualization";
+            } else {
+                return "Make Floating";
+            }
+        }
+        """,
+        Output("float-toggle-button", "children"),
+        Input("float-toggle-button", "n_clicks"),
+        prevent_initial_call=True
     )
