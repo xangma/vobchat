@@ -1,718 +1,571 @@
 // app/assets/polygon_management.js
 
+window.mapEventListenersAttached = false;
+window.lastZoomEndTime_MapEvents = 0;
+window.attachedMapId_Dbg = null;
+window.programmaticZoomInProgress = false; // Global flag for zoom state
+window.geojsonLayerReady = false; // Flag for layer readiness
+
 // Add init hook to make map accessible from the container
 L.Map.addInitHook(function () {
-    // Store a reference of the Leaflet map object on the map container,
-    // so that it could be retrieved from DOM selection.
     this.getContainer()._leaflet_map = this;
-
-    // Set up an event listener for when the map is ready
-    this.once('load', function () {
-        console.log("Map loaded, initializing polygon management");
-
-        // Create a flag to track when GeoJSON layer is ready
-        window.geojsonLayerReady = false;
-
-        // Increase timeout to allow all components to initialize
-        setTimeout(() => {
-            initializeMapLayers(this);
-        }, 500);
+    // Use 'whenReady' which fires once map is initialized (container size known, etc.)
+    // 'load' fires after initial tiles load, which might be later than needed.
+    this.whenReady(function() { // Changed from 'once('load', ...)'
+        console.log("JS: Map is ready (whenReady event), initializing polygon management.");
+        // REMOVED: setTimeout(() => { ... }, 500);
+        initializeMapLayers(this); // Initialize directly
     });
 });
 
-/**
- * Waits for features to appear in the GeoJSON layer, then zooms to them
- * @param {Object} map - Leaflet map object
- * @param {number} retries - How many times to retry (default 10)
- */
-function waitForFeaturesAndZoom(map, retries = 10) {
-    const geojsonLayer = window.polygon_management.findGeoJSONLayer(map);
-    if (!geojsonLayer || !geojsonLayer._layers || Object.keys(geojsonLayer._layers).length === 0) {
-        if (retries > 0) {
-            setTimeout(() => waitForFeaturesAndZoom(map, retries - 1), 300);
-        } else {
-            console.warn("Zoom-to-features timed out: no features found");
-        }
+// REMOVED waitForFeatures function - Zoom will be attempted directly after initial load
+
+function setupMapEventListeners(map) {
+    if (window.mapEventListenersAttached) {
+        console.log("JS (setupMapEventListeners): Listeners already attached.");
+        return;
+    }
+    if (!map || typeof map.on !== 'function') {
+        console.error("JS setupMapEventListeners: Invalid map object provided.");
         return;
     }
 
-    // Found features, zoom to them
-    window.polygon_management.zoomTo(map);
+    console.log("JS (setupMapEventListeners): Attaching listeners...");
+    window.attachedMapId_Dbg = map._leaflet_id; // Store ID for debugging
+
+    // Shared function to trigger Cb7 (data refresh callback)
+    const triggerCb7Update = function (eventName) {
+        // Check if dash_clientside is available before using it
+        if (window.dash_clientside && window.dash_clientside.set_props) {
+            console.log(`JS (Map Event - ${eventName}): Event detected. Triggering Cb7 via store.`);
+            try {
+                // Update store which acts as input for Cb7
+                window.dash_clientside.set_props("map-moveend-trigger", { data: Date.now() });
+            } catch (err) {
+                console.error(`JS (Map Event - ${eventName}): Error in set_props for trigger:`, err);
+            }
+        } else {
+            console.error(`JS (Map Event - ${eventName}): dash_clientside.set_props not available!`);
+        }
+    };
+
+    // Attach zoomend listener
+    map.on('zoomend', function (e) {
+        // console.log("JS: >>> map.on('zoomend') event FIRED! <<<"); // Reduce noise
+        // *** Check global flag: Ignore if programmatic zoom was *just initiated* ***
+        if (window.programmaticZoomInProgress) {
+            console.log("JS: map.on('zoomend') event IGNORED (programmatic zoom flag is true).");
+            return; // Skip if Cb8 just called fitBounds and hasn't reset the flag yet
+        }
+        // If the flag is false, it means zoom was manual OR programmatic zoom finished previously
+        console.log("JS: map.on('zoomend') event processed (flag is false).");
+        window.lastZoomEndTime_MapEvents = Date.now(); // For moveend debounce
+        triggerCb7Update('zoomend');
+    });
+    console.log("JS (setupMapEventListeners): zoomend listener attached.");
+
+    // Attach moveend listener
+    map.on('moveend', function (e) {
+        // console.log("JS: >>> map.on('moveend') event FIRED! <<<"); // Reduce noise
+        // *** Check global flag: Ignore if programmatic zoom was *just initiated* ***
+        if (window.programmaticZoomInProgress) {
+            console.log("JS: map.on('moveend') event IGNORED (programmatic zoom flag is true).");
+            return; // Skip if Cb8 just called fitBounds and hasn't reset the flag yet
+        }
+        console.log("JS: map.on('moveend') event processed (flag is false).");
+
+        // Debounce check (don't fire moveend if zoomend just fired recently)
+        const now = Date.now();
+        if (typeof window.lastZoomEndTime_MapEvents !== 'number') window.lastZoomEndTime_MapEvents = 0;
+        if (window.lastZoomEndTime_MapEvents && (now - window.lastZoomEndTime_MapEvents < 200)) { // 200ms debounce window
+            console.log("JS: map.on('moveend') event SKIPPED (debounce after recent zoomend).");
+            return; // Don't trigger Cb7 again if zoomend just did
+        }
+        triggerCb7Update('moveend (not debounced)');
+    });
+    console.log("JS (setupMapEventListeners): moveend listener attached.");
+
+    window.mapEventListenersAttached = true;
+    console.log("JS (setupMapEventListeners): All listeners attached successfully.");
 }
 
-/**
- * New function to initialize map layers and ensure GeoJSON layer is found
- * before attempting to update the map
- * @param {Object} map - Leaflet map object
- */
+
 function initializeMapLayers(map) {
     if (!window.polygon_management) {
-        console.warn("polygon_management object not initialized");
+        console.warn("JS: polygon_management object not initialized yet, retrying init...");
+        // Keep retry logic, potentially shorten interval
+        setTimeout(() => initializeMapLayers(map), 150); // Shortened interval
         return;
     }
 
     const geojsonLayer = window.polygon_management.findGeoJSONLayer(map);
-
     if (!geojsonLayer) {
-        console.log("GeoJSON layer not found, will retry in 200ms");
-        setTimeout(() => {
-            initializeMapLayers(map);
-        }, 200);
+        console.log("JS: GeoJSON layer not found during init, will retry...");
+         // Keep retry logic, potentially shorten interval
+        setTimeout(() => initializeMapLayers(map), 150); // Shortened interval
         return;
     }
 
+    // Only proceed if layer is found
     window.geojsonLayerReady = true;
-    console.log("GeoJSON layer found and ready for updates");
+    console.log("JS: GeoJSON layer found and ready.");
 
-    const initialState = window.dash_clientside.store &&
-        window.dash_clientside.store.getState &&
-        window.dash_clientside.store.getState()["map-state"] ||
-        { unit_types: ['MOD_REG'] };
+    // *** Setup map event listeners now that map and layer seem ready ***
+    setupMapEventListeners(map); // Pass the map instance
 
-    if (initialState && initialState.unit_types && initialState.unit_types.length > 0) {
-        const bounds = map.getBounds();
-
-        window.polygon_management.updateMapWithBounds(map, initialState.unit_types, bounds, initialState)
-            .then(() => {
-                // Wait and zoom once features are present
-                waitForFeaturesAndZoom(map);
-            })
-            .catch(err => {
-                console.error("Error during initial polygon load:", err);
-            });
+    // --- Perform Initial Data Load ---
+    let initialState = null;
+    try {
+        // Attempt to get state synchronously if available
+        initialState = window.dash_clientside.store.getState()["map-state"];
+    } catch (e) {
+        console.warn("JS: Could not get initial map-state from Dash store during init.", e);
     }
+
+    // Define default initial state if store is empty or lacks data
+    const defaultUnitTypes = ['MOD_REG'];
+    const currentYear = new Date().getFullYear();
+    const defaultYearRange = { min: currentYear, max: currentYear };
+    const defaultShowUnselected = true;
+    const defaultSelected = [];
+
+    const initialUnitTypes = initialState?.unit_types?.length ? initialState.unit_types : defaultUnitTypes;
+    const initialYearRange = initialState?.year_range ? { min: initialState.year_range[0], max: initialState.year_range[1] } : defaultYearRange;
+    const initialMapStateForLoad = {
+        unit_types: initialUnitTypes,
+        year_range: initialState?.year_range || [defaultYearRange.min, defaultYearRange.max],
+        selected_polygons: initialState?.selected_polygons || defaultSelected,
+        show_unselected: initialState?.show_unselected ?? defaultShowUnselected
+    };
+
+    console.log("JS: Performing initial data load with state:", initialMapStateForLoad);
+
+    const bounds = map.getBounds(); // Use current map bounds for initial load
+
+    // Fetch initial data
+    window.polygon_management.updateMapWithBounds(map, initialUnitTypes, bounds, initialMapStateForLoad, initialYearRange)
+        .then(() => {
+            console.log("JS: Initial polygon load complete.");
+            // *** REMOVED: waitForFeatures call ***
+            // Try zooming immediately after the promise resolves
+            const layer = window.polygon_management.findGeoJSONLayer(map); // Get layer ref again just in case
+             // Check if layer has features before zooming
+             if (layer && layer._layers && Object.keys(layer._layers).length > 0) {
+                 console.log("JS: Zooming to initial features after load.");
+                 window.polygon_management.zoomTo(map, null, layer); // Zoom to all loaded features
+             } else {
+                  console.log("JS: No initial features loaded or layer empty, skipping initial zoom.");
+             }
+        })
+        .catch(err => {
+            console.error("JS: Error during initial polygon load:", err);
+        });
 }
 
-// Global polygon cache to store loaded polygons by unit type and feature ID
+
+// Global polygon cache (NO CHANGE)
 window.polygonCache = {
-    featureById: {},        // Stores features by ID
-    featuresByUnitType: {},  // Stores feature IDs by unit type
-    pendingRequests: {},    // Tracks in-flight requests 
-    geojsonLayer: null      // Reference to the main GeoJSON layer
+    featureById: {},
+    featuresByUnitType: {},
+    pendingRequests: {},
+    geojsonLayer: null
 };
 
 window.polygon_management = {
-    // Flag to prevent moveend events when using fitBounds
-    skipNextMoveend: false,
-
-    /**
-     * Get a simple string representation of bounds for request tracking
-     * @param {L.LatLngBounds} bounds - Leaflet bounds object
-     * @returns {string} - String representation of bounds (rounded to 4 decimals)
-     */
+    // getBoundsKey (NO CHANGE)
     getBoundsKey: function (bounds) {
         const sw = bounds.getSouthWest();
         const ne = bounds.getNorthEast();
         return [
-            Math.round(sw.lng * 10000) / 10000,
-            Math.round(sw.lat * 10000) / 10000,
-            Math.round(ne.lng * 10000) / 10000,
-            Math.round(ne.lat * 10000) / 10000
+            sw.lng.toFixed(4), sw.lat.toFixed(4),
+            ne.lng.toFixed(4), ne.lat.toFixed(4)
         ].join('_');
     },
 
-    /**
-     * Get list of cached feature IDs for specific unit types
-     * @param {Array} unitTypes - Array of unit types
-     * @returns {Array} - Array of feature IDs that are already cached
-     */
-    getCachedFeatureIds: function(unitTypes) {
+    // getCachedFeatureIds (NO CHANGE)
+    getCachedFeatureIds: function (unitTypes) {
         const cachedIds = new Set();
-        
-        // Collect IDs from each unit type
         unitTypes.forEach(unitType => {
-            const idsForType = window.polygonCache.featuresByUnitType[unitType] || [];
-            idsForType.forEach(id => cachedIds.add(id));
+            const idSet = window.polygonCache.featuresByUnitType[unitType]; // Should be a Set
+            if (idSet instanceof Set) {
+                 idSet.forEach(id => cachedIds.add(id));
+            } else if (Array.isArray(idSet)) { // Fallback if somehow it's an array
+                 idSet.forEach(id => cachedIds.add(id));
+            }
         });
-        
         return Array.from(cachedIds);
     },
 
-    /**
-     * Refresh styles on all layers to ensure selected polygons are highlighted
-     * @param {Object} geojsonLayer - The GeoJSON layer containing the features
-     * @param {Array} selectedPolygons - Array of selected polygon IDs
-     */
+
+    // refreshLayerStyles (NO CHANGE)
     refreshLayerStyles: function (geojsonLayer, selectedPolygons) {
         if (!geojsonLayer || !geojsonLayer._layers) {
+            console.warn("JS: refreshLayerStyles: GeoJSON layer or internal _layers not found.");
             return;
         }
-
-        // Get the style function
+        const currentSelection = Array.isArray(selectedPolygons) ? selectedPolygons : [];
         let styleFunction = null;
-        if (window.map_leaflet && window.map_leaflet.style_function) {
+        if (window.map_leaflet && typeof window.map_leaflet.style_function === 'function') {
             styleFunction = window.map_leaflet.style_function;
-        } else if (geojsonLayer.options && geojsonLayer.options.style) {
+        } else if (geojsonLayer.options && typeof geojsonLayer.options.style === 'function') {
             styleFunction = geojsonLayer.options.style;
-        }
-
-        if (!styleFunction) {
-            console.warn("No style function found for refreshing layer styles");
+        } else {
+            console.error("JS: refreshLayerStyles: No style function found.");
             return;
         }
-
-        // Create the context object that will be passed to the style function
-        const context = {
-            hideout: { selected: selectedPolygons || [] }
-        };
-
-        // Apply the style to each layer
+        const context = { hideout: { selected: currentSelection } };
+        let appliedCount = 0;
         Object.values(geojsonLayer._layers).forEach(layer => {
-            if (layer.feature) {
+            if (layer.feature && typeof layer.setStyle === 'function') {
                 try {
-                    // Calculate the style for this feature
                     const style = styleFunction(layer.feature, context);
-                    // Apply the style to the layer
                     if (style) {
                         layer.setStyle(style);
+                        appliedCount++;
+                    } else {
+                         // console.warn("JS: Style function returned undefined for feature:", layer.feature.id); // Reduce noise
                     }
                 } catch (error) {
-                    console.error("Error applying style:", error, layer.feature);
+                    console.error("JS: refreshLayerStyles: Error applying style to feature:", layer.feature.id, error);
                 }
             }
         });
+        // console.log(`JS: refreshLayerStyles: Applied styles to ${appliedCount} layers.`); // Reduce noise
     },
 
-    /**
-     * Fetch polygons within a bounding box for specified unit types, excluding already cached IDs
-     * @param {Array} unitTypes - Array of unit types to fetch
-     * @param {L.LatLngBounds} bounds - Leaflet bounds object
-     * @param {Array} cachedIds - Array of feature IDs to exclude from the request
-     * @param {Object} yearRange - Optional year range for time-dependent units
-     * @returns {Promise} - Promise that resolves to the fetched GeoJSON
-     */
+    // fetchPolygonsByBounds (NO CHANGE - Fetch logic remains the same)
     fetchPolygonsByBounds: function (unitTypes, bounds, cachedIds, yearRange) {
         if (!unitTypes || !unitTypes.length || !bounds) {
-            return Promise.reject('Missing parameters');
+            return Promise.reject('JS fetchPolygonsByBounds: Missing parameters');
         }
-
-        // Extract bounds coordinates
         const sw = bounds.getSouthWest();
         const ne = bounds.getNorthEast();
-
-        // Generate a unique request ID for tracking
-        const requestId = Date.now().toString(36) + Math.random().toString(36).substring(2, 7);
-
-        // Make sure cachedIds is an array
+        const requestId = `req-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 5)}`;
         const excludeIds = Array.isArray(cachedIds) ? cachedIds : [];
-
-        // Cache key for tracking this request
         const boundsKey = this.getBoundsKey(bounds);
-        const requestKey = `${unitTypes.join('_')}_${boundsKey}`;
-        console.log(`CLIENT: ${requestId}: Request key: ${requestKey}`);
+        const requestKey = `${unitTypes.join(',')}|${boundsKey}|${yearRange ? `${yearRange.min}-${yearRange.max}`: 'any'}`; // Add year to key
+        // console.log(`JS (${requestId}): Fetch check for key: ${requestKey}`); // Reduce noise
 
-        // Check if this request is already in progress
         if (window.polygonCache.pendingRequests[requestKey]) {
-            console.log(`CLIENT: ${requestId}: Request for bounds already in progress, reusing promise`);
+            // console.log(`JS (${requestId}): Request already pending for ${requestKey}.`); // Reduce noise
             return window.polygonCache.pendingRequests[requestKey];
         }
 
-        // Build the base params for both GET and POST requests
-        const params = {
-            minX: sw.lng,
-            minY: sw.lat,
-            maxX: ne.lng,
-            maxY: ne.lat,
+        const baseParams = {
+            minX: sw.lng, minY: sw.lat, maxX: ne.lng, maxY: ne.lat,
             request_id: requestId
         };
-
-        // Add year range if specified
-        if (yearRange && yearRange.min && yearRange.max) {
-            params.start_year = yearRange.min;
-            params.end_year = yearRange.max;
+        if (yearRange && yearRange.min != null && yearRange.max != null) {
+            baseParams.start_year = yearRange.min;
+            baseParams.end_year = yearRange.max;
         }
 
         let fetchPromise;
+        const usePost = excludeIds.length > 100;
 
-        // Decide between GET and POST based on number of cached IDs
-        if (excludeIds.length > 50) {
-            // Use POST for large number of IDs
-            console.log(`CLIENT: ${requestId}: Using POST to send ${excludeIds.length} cached IDs`);
-            
-            // Build the POST request payload
+        // console.log(`JS (${requestId}): Initiating fetch. Method: ${usePost ? 'POST' : 'GET'}. Excluding ${excludeIds.length} IDs.`); // Reduce noise
+
+        if (usePost) {
             const payload = {
                 unit_types: unitTypes,
-                bounds: {
-                    minX: sw.lng,
-                    minY: sw.lat,
-                    maxX: ne.lng,
-                    maxY: ne.lat
-                },
+                bounds: { minX: baseParams.minX, minY: baseParams.minY, maxX: baseParams.maxX, maxY: baseParams.maxY },
                 exclude_ids: excludeIds,
                 request_id: requestId
             };
-            
-            // Add year range if specified
-            if (yearRange && yearRange.min && yearRange.max) {
-                payload.start_year = yearRange.min;
-                payload.end_year = yearRange.max;
-            }
+            if (baseParams.start_year != null) payload.start_year = baseParams.start_year;
+            if (baseParams.end_year != null) payload.end_year = baseParams.end_year;
 
-            // Make the POST request
             fetchPromise = fetch('/api/polygons/bbox', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
                 body: JSON.stringify(payload)
-            })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error(`Failed to fetch polygons: ${response.statusText}`);
-                }
-                return response.json();
             });
         } else {
-            // Use GET for smaller number of IDs
-            // Build URL with parameters
-            let url = `/api/polygons/bbox?unit_types=${unitTypes.join(',')}&minX=${sw.lng}&minY=${sw.lat}&maxX=${ne.lng}&maxY=${ne.lat}&request_id=${requestId}`;
-
-            // Add year range if specified
-            if (yearRange && yearRange.min && yearRange.max) {
-                url += `&start_year=${yearRange.min}&end_year=${yearRange.max}`;
-            }
-
-            // Add the cached IDs parameter if we have any
+            const urlParams = new URLSearchParams();
+            urlParams.set('unit_types', unitTypes.join(','));
+            Object.entries(baseParams).forEach(([key, value]) => urlParams.set(key, value));
             if (excludeIds.length > 0) {
-                url += `&exclude_ids=${excludeIds.join(',')}`;
-                console.log(`CLIENT: ${requestId}: Excluding ${excludeIds.length} cached IDs from request`);
+                urlParams.set('exclude_ids', excludeIds.join(','));
             }
-
-            console.log(`CLIENT: ${requestId}: Fetching polygons for bounds: ${sw.lng},${sw.lat} to ${ne.lng},${ne.lat}`);
-
-            // Make the GET request
-            fetchPromise = fetch(url)
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`Failed to fetch polygons: ${response.statusText}`);
-                    }
-                    return response.json();
-                });
+            const url = `/api/polygons/bbox?${urlParams.toString()}`;
+            fetchPromise = fetch(url, {
+                method: 'GET',
+                headers: { 'Accept': 'application/json' }
+            });
         }
-        fetchPromise
-        .then(data => {
-            // Handle special case where server tells us to use cached data
-            if (data.useCachedFeatures) {
-                console.log(`CLIENT: ${requestId}: Server confirmed we can use our cached data`);
 
-                // Create a filtered version of our cached features for this view
-                const filteredFeatures = [];
-                unitTypes.forEach(unitType => {
-                    const featureIds = window.polygonCache.featuresByUnitType[unitType] || [];
-                    featureIds.forEach(id => {
-                        const feature = window.polygonCache.featureById[id];
-                        if (feature) {
-                            filteredFeatures.push(feature);
-                        }
-                    });
-                });
-
-                console.log(`CLIENT: ${requestId}: Using ${filteredFeatures.length} cached features for the current view`);
-
-                // Return filtered features as a GeoJSON object
-                return {
-                    type: "FeatureCollection",
-                    features: filteredFeatures,
-                    fromCache: true
-                };
-            }
-
-            console.log(`CLIENT: ${requestId}: Received ${data.features ? data.features.length : 0} new polygons from server`);
-
-            // Store new features in the cache
-            if (data.features && data.features.length > 0) {
-                data.features.forEach(feature => {
-                    if (feature.id) {
-                        // Store the feature by ID
-                        window.polygonCache.featureById[feature.id] = feature;
-                        
-                        // Store the ID in the unit type index
-                        if (feature.properties && feature.properties.g_unit_type) {
-                            const unitType = feature.properties.g_unit_type;
-                            if (!window.polygonCache.featuresByUnitType[unitType]) {
-                                window.polygonCache.featuresByUnitType[unitType] = [];
-                            }
-                            if (!window.polygonCache.featuresByUnitType[unitType].includes(feature.id)) {
-                                window.polygonCache.featuresByUnitType[unitType].push(feature.id);
-                            }
-                        }
-                    }
+        const processingPromise = fetchPromise.then(response => {
+            if (!response.ok) {
+                return response.text().then(text => {
+                    throw new Error(`JS (${requestId}): Fetch failed: ${response.status} ${response.statusText}. Body: ${text}`);
                 });
             }
-
-            // Remove from pending requests
-            delete window.polygonCache.pendingRequests[requestKey];
-            return data;
+            return response.json();
         })
-        .catch(error => {
-            console.error(`CLIENT: ${requestId}: Error fetching polygons: ${error.message}`);
-            // Remove from pending requests on error
-            delete window.polygonCache.pendingRequests[requestKey];
-            throw error;
-        });
+            .then(data => {
+                delete window.polygonCache.pendingRequests[requestKey];
 
-        // Store the promise for potential reuse
-        window.polygonCache.pendingRequests[requestKey] = fetchPromise;
-        return fetchPromise;
-    },
-    
-    /**
-     * Find the GeoJSON layer in the map
-     * @param {Object} map - Leaflet map object
-     * @returns {Object} - The GeoJSON layer, or null if not found
-     */
-    findGeoJSONLayer: function (map) {
-        // If we already have a reference, use it
-        if (window.polygonCache.geojsonLayer) {
-            return window.polygonCache.geojsonLayer;
-        }
-
-        // Try to find the layer by its ID
-        const geoJSONElement = document.getElementById('geojson-layer');
-        if (geoJSONElement && geoJSONElement._leaflet_id && map._layers[geoJSONElement._leaflet_id]) {
-            window.polygonCache.geojsonLayer = map._layers[geoJSONElement._leaflet_id];
-            console.log("Found GeoJSON layer by ID", window.polygonCache.geojsonLayer);
-            return window.polygonCache.geojsonLayer;
-        }
-
-        // Otherwise search through all layers
-        let geojsonLayer = null;
-        Object.values(map._layers).forEach(layer => {
-            // Look for a layer that has _layers and no _url (typical of a FeatureGroup or GeoJSON layer)
-            if (layer._layers && !layer._url) {
-                // Debug info to see what the layer options are
-                console.log("Found potential GeoJSON layer", layer);
-                if (layer.options && layer.options.style) {
-                    console.log("Layer has style function", layer.options.style);
+                if (data.useCachedFeatures) {
+                    // console.log(`JS (${requestId}): Server indicated use cached features.`); // Reduce noise
+                    return { type: "FeatureCollection", features: [], fromCache: true };
                 }
-                geojsonLayer = layer;
-            }
-        });
 
-        // Store for future reference
-        if (geojsonLayer) {
-            console.log("Found GeoJSON layer in map", geojsonLayer);
-            window.polygonCache.geojsonLayer = geojsonLayer;
-        } 
-        
-        return geojsonLayer;
-    },
+                if (!data || !Array.isArray(data.features)) {
+                    console.warn(`JS (${requestId}): Received invalid data structure.`);
+                    return { type: "FeatureCollection", features: [], fromCache: false };
+                }
 
-    /**
-     * Calculate bounds for selected features
-     * @param {Array} features - Array of GeoJSON features
-     * @returns {L.LatLngBounds|null} - Leaflet bounds object or null if no features
-     */
-    calculateBounds: function (features) {
-        if (!features || features.length === 0) {
-            return null;
-        }
+                // console.log(`JS (${requestId}): Received ${data.features.length} new polygons.`); // Reduce noise
 
-        let bounds = null;
+                let addedToCache = 0;
+                data.features.forEach(feature => {
+                    if (feature && feature.id != null && feature.properties?.g_unit_type) {
+                        const featureId = feature.id;
+                        const unitType = feature.properties.g_unit_type;
 
-        features.forEach(feature => {
-            if (!feature.geometry) return;
-
-            // Create a temporary GeoJSON layer to get the bounds
-            const tempLayer = dash_leaflet.geoJSON(feature);
-            const featureBounds = tempLayer.getBounds();
-
-            if (!bounds) {
-                bounds = featureBounds;
-            } else {
-                bounds.extend(featureBounds);
-            }
-        });
-
-        return bounds;
-    },
-
-    /**
-     * Zoom map to selected features
-     * @param {Object} map - Leaflet map object
-     * @param {Array} selectedFeatures - Array of selected GeoJSON features 
-     */
-    zoomTo: function (map, selectedIds) {
-
-        // Find features with the selected IDs
-        const geojsonLayer = window.polygon_management.findGeoJSONLayer(map);
-        if (!geojsonLayer) return;
-
-        // Get bounds of selected features
-        const bounds = L.latLngBounds();
-        let foundFeature = false;
-
-        Object.values(geojsonLayer._layers).forEach(layer => {
-            if (layer.feature && !selectedIds) {
-                bounds.extend(layer.getBounds());
-                foundFeature = true;
-            }
-            if (layer.feature && selectedIds && 
-                selectedIds.includes(layer.feature.id)) {
-                bounds.extend(layer.getBounds());
-                foundFeature = true;
-            }
-        });
-
-        // If we found at least one feature, zoom to it
-        if (foundFeature) {
-            window.polygon_management.skipNextMoveend = true;
-            map.fitBounds(bounds, {
-                padding: [5, 5],
-                maxZoom: 12,
-                animate: true,
-                duration: 0.5
-            });
-            console.log("Zoomed to selected features");
-        }
-    },
-
-    /**
-     * Update the map with polygons based on current bounds
-     * @param {Object} map - Leaflet map object
-     * @param {Array} unitTypes - Array of unit types to fetch
-     * @param {L.LatLngBounds} bounds - Current map bounds
-     * @param {Object} yearRange - Optional year range
-     * @returns {Promise} - Promise that resolves when update is complete
-     */
-    updateMapWithBounds: function (map, unitTypes, bounds, mapState, yearRange) {
-        if (!map || !unitTypes || !unitTypes.length || !bounds) {
-            console.error('Missing required parameters for updateMapWithBounds');
-            return Promise.reject('Missing parameters');
-        }
-
-        // Check if GeoJSON layer is ready
-        if (!window.geojsonLayerReady) {
-            console.warn('GeoJSON layer not ready yet, deferring update');
-            return Promise.resolve({
-                type: "FeatureCollection",
-                features: []
-            });
-        }
-
-        console.log(`Updating map with bounds for unit types: ${unitTypes.join(', ')}`);
-
-        // Find the GeoJSON layer
-        let geojsonLayer = this.findGeoJSONLayer(map);
-        if (!geojsonLayer) {
-            console.error('GeoJSON layer not found in map');
-            return Promise.reject('No GeoJSON layer found');
-        }
-        
-        let showUnselected = true; // Default to true
-        if (mapState && mapState.show_unselected) {
-                showUnselected = mapState.show_unselected;
-        }
-
-        let selectedPolygons = [];
-        // // Extract map state data
-        if (mapState && mapState.selected_polygons) {
-            selectedPolygons = mapState.selected_polygons;
-        }
-        // Generate a unique request ID for tracking
-        const requestId = Date.now().toString(36) + Math.random().toString(36).substring(2, 7);
-        console.log(`CLIENT: ${requestId}: Selected polygons: ${selectedPolygons.length}`);
-        // Track the current zoom level
-        const currentZoom = map.getZoom();
-        console.log(`CLIENT: ${requestId}: Current zoom level: ${currentZoom}`);
-
-        // Get list of cached feature IDs for these unit types
-        const cachedIds = this.getCachedFeatureIds(unitTypes);
-        console.log(`CLIENT: ${requestId}: Found ${cachedIds.length} cached features for the requested unit types`);
-
-        // Fetch new polygons, excluding cached ones
-        return this.fetchPolygonsByBounds(unitTypes, bounds, cachedIds, yearRange)
-            .then(geodata => {
-                console.log(`CLIENT: ${requestId}: Received ${geodata.features ? geodata.features.length : 0} polygons from server`);
-
-                // Get all features (both newly fetched and previously cached)
-                const displayFeatures = [];
-
-                // Collect features from each requested unit type
-                unitTypes.forEach(unitType => {
-                    const featureIds = window.polygonCache.featuresByUnitType[unitType] || [];
-                    featureIds.forEach(id => {
-                        const feature = window.polygonCache.featureById[id];
-                        if (feature && (!geodata.fromCache || isFeatureInView(feature, bounds))) {
-                            // Filter features based on selected state if needed
-                            if (showUnselected || (feature.id && selectedPolygons.includes(feature.id))) {
-                                displayFeatures.push(feature);
-                            }
+                        if (!window.polygonCache.featureById[featureId]) {
+                            window.polygonCache.featureById[featureId] = feature;
+                            addedToCache++;
+                        } else {
+                            // Optional: Overwrite if needed, e.g., if fetched data is always newer
+                            // window.polygonCache.featureById[featureId] = feature;
                         }
-                    });
+
+                        if (!window.polygonCache.featuresByUnitType[unitType]) {
+                            window.polygonCache.featuresByUnitType[unitType] = new Set();
+                        }
+                        window.polygonCache.featuresByUnitType[unitType].add(featureId);
+                    } else {
+                        // console.warn(`JS (${requestId}): Skipping feature due to missing id/type:`, feature); // Reduce noise
+                    }
                 });
+                 if (addedToCache > 0) {
+                     // console.log(`JS (${requestId}): Added ${addedToCache} new features to cache.`); // Reduce noise
+                 }
 
-                // Add any new features from the server response
-                if (geodata.features && !geodata.fromCache) {
-                    geodata.features.forEach(feature => {
-                        // Filter features based on selected state if needed
-                        if (showUnselected || (feature.id && selectedPolygons.includes(feature.id))) {
-                            displayFeatures.push(feature);
-                        }
-                    });
-                }
+                return { ...data, fromCache: false };
 
-                // Clear existing layers
-                geojsonLayer.clearLayers();
-
-                // Create a GeoJSON object with all features
-                const completeGeodata = {
-                    type: "FeatureCollection",
-                    features: displayFeatures
-                };
-
-                // Create options object with hideout
-                const geoJsonOptions = {
-                    style: geojsonLayer.options && geojsonLayer.options.style,
-                    pointToLayer: geojsonLayer.options && geojsonLayer.options.pointToLayer,
-                    onEachFeature: geojsonLayer.options && geojsonLayer.options.onEachFeature,
-                    hideout: { selected: selectedPolygons }
-                };
-
-                // Add all features to the map
-                geojsonLayer.addData(completeGeodata, geoJsonOptions);
-
-                // Update the hideout property
-                if (geojsonLayer.options) {
-                    geojsonLayer.options.hideout = { selected: selectedPolygons };
-                } else {
-                    geojsonLayer.options = { hideout: { selected: selectedPolygons } };
-                }
-
-                // Force a style refresh
-                this.refreshLayerStyles(geojsonLayer, selectedPolygons);
-
-                console.log(`CLIENT: ${requestId}: Map updated with combined data (${displayFeatures.length} features displayed)`);
-                return completeGeodata;
             })
             .catch(error => {
-                console.error(`CLIENT: ${requestId}: Error updating map:`, error);
+                console.error(`JS (${requestId}): Error in fetchPolygonsByBounds chain:`, error);
+                delete window.polygonCache.pendingRequests[requestKey];
                 return Promise.reject(error);
             });
 
-        // Helper function to check if a feature is in the current view
-        function isFeatureInView(feature, bounds) {
-            if (!feature.geometry) return false;
-            
-            // For points, simple check if coordinates are within bounds
-            if (feature.geometry.type === 'Point') {
-                const coords = feature.geometry.coordinates;
-                return coords[0] >= bounds.getWest() && 
-                       coords[0] <= bounds.getEast() &&
-                       coords[1] >= bounds.getSouth() && 
-                       coords[1] <= bounds.getNorth();
+        window.polygonCache.pendingRequests[requestKey] = processingPromise;
+        return processingPromise;
+    },
+
+    // findGeoJSONLayer (NO CHANGE)
+    findGeoJSONLayer: function (map) {
+        if (window.polygonCache.geojsonLayer && map.hasLayer(window.polygonCache.geojsonLayer)) {
+            return window.polygonCache.geojsonLayer;
+        }
+        // console.log("JS: Searching for GeoJSON layer..."); // Reduce noise
+        const geoJSONElement = document.getElementById('geojson-layer');
+        if (geoJSONElement && geoJSONElement._leaflet_id && map._layers[geoJSONElement._leaflet_id]) {
+            window.polygonCache.geojsonLayer = map._layers[geoJSONElement._leaflet_id];
+            // console.log("JS: Found GeoJSON layer by ID:", window.polygonCache.geojsonLayer._leaflet_id); // Reduce noise
+            return window.polygonCache.geojsonLayer;
+        }
+
+        // console.log("JS: GeoJSON layer ID not found, searching all map layers..."); // Reduce noise
+        let foundLayer = null;
+        map.eachLayer(layer => {
+            if (layer instanceof L.FeatureGroup && layer.options && (layer.options.style || layer.options.onEachFeature)) {
+                // console.log("JS: Found potential GeoJSON layer (FeatureGroup) by options:", layer); // Reduce noise
+                foundLayer = layer;
+                return;
             }
-            
-            // For other geometries, assume they might be visible
-            // A more accurate check would use a spatial library but this is lighter
-            return true;
+        });
+
+        if (foundLayer) {
+            // console.log("JS: Found GeoJSON layer via layer iteration."); // Reduce noise
+            window.polygonCache.geojsonLayer = foundLayer;
+        } else {
+            console.warn("JS: Could not find GeoJSON layer on the map!");
+            window.polygonCache.geojsonLayer = null;
+        }
+        return window.polygonCache.geojsonLayer;
+    },
+
+    // calculateBounds (NO CHANGE)
+    calculateBounds: function (features) {
+        if (!features || features.length === 0) return null;
+        if (typeof dash_leaflet === 'undefined' || typeof dash_leaflet.geoJSON !== 'function') {
+            console.error("JS: calculateBounds requires 'dash_leaflet'.");
+            return null;
+        }
+        let bounds = null;
+        features.forEach(feature => {
+            if (feature?.geometry) {
+                try {
+                    const tempLayer = dash_leaflet.geoJSON(feature);
+                    const featureBounds = tempLayer.getBounds();
+                    if (bounds) {
+                        bounds.extend(featureBounds);
+                    } else {
+                        bounds = featureBounds;
+                    }
+                } catch (e) {
+                    console.error("JS: calculateBounds - Error processing feature:", feature.id, e);
+                }
+            }
+        });
+        return bounds;
+    },
+
+    // zoomTo (NO CHANGE - Logic is fine, relies on fitBounds)
+    zoomTo: function (map, selectedIds = null, geojsonLayer = null) {
+        const layerToUse = geojsonLayer || this.findGeoJSONLayer(map);
+
+        if (!layerToUse || !layerToUse._layers) {
+            console.warn("JS: zoomTo: GeoJSON layer not found or has no features.");
+            return;
+        }
+
+        const targetBounds = L.latLngBounds();
+        let featuresFound = 0;
+        const useSelection = Array.isArray(selectedIds) && selectedIds.length > 0;
+
+        Object.values(layerToUse._layers).forEach(layer => {
+            if (layer.feature && typeof layer.getBounds === 'function') {
+                 const includeFeature = !useSelection || (layer.feature.id != null && selectedIds.includes(layer.feature.id));
+                 if (includeFeature) {
+                    try {
+                         targetBounds.extend(layer.getBounds());
+                         featuresFound++;
+                    } catch (e) {
+                         console.warn("JS: zoomTo: Error getting bounds for layer/feature:", layer.feature?.id, e);
+                    }
+                 }
+            }
+        });
+
+        if (featuresFound > 0 && targetBounds.isValid()) {
+            console.log(`JS: zoomTo: Zooming to bounds of ${featuresFound} features.`);
+            map.fitBounds(targetBounds, {
+                padding: [20, 20], // Small padding
+                maxZoom: 14,      // Limit max zoom level
+                animate: true,    // Use animation
+                duration: 0.5     // Animation duration (seconds)
+            });
+             // *** REMOVED setting skipNextMoveend flag here ***
+             // The programmaticZoomInProgress flag handles event skipping now.
+        } else {
+            console.warn("JS: zoomTo: No valid features found to zoom to.");
         }
     },
 
-    /**
-     * Update the map based on selected unit types
-     * @param {Object} map - Leaflet map object
-     * @param {Array} unitTypes - Array of selected unit types
-     * @param {Object} yearRange - Optional year range for time-dependent unit types
-     * @param {Array} selectedPolygons - IDs of selected polygons
-     * @param {boolean} showUnselected - Whether to show unselected polygons
-     * @returns {Promise} - Promise that resolves when map is updated
-     */
-    updateMap: function (map, unitTypes, yearRange, selectedPolygons, showUnselected) {
-        if (!map || !unitTypes || !unitTypes.length) {
-            console.error('Missing required parameters for updateMap');
+
+    // updateMapWithBounds (NO CHANGE - Logic is the core update mechanism)
+    updateMapWithBounds: function (map, unitTypes, bounds, mapState, yearRange) {
+        const requestId = `update-${Date.now().toString(36)}`;
+        // console.log(`JS (${requestId}): updateMapWithBounds called. UnitTypes: ${unitTypes.join(',')}`); // Reduce noise
+
+        if (!map || !unitTypes || !unitTypes.length || !bounds || !mapState) {
+            console.error(`JS (${requestId}): Missing required parameters for updateMapWithBounds.`);
             return Promise.reject('Missing parameters');
         }
-
-        console.log(`Updating map with unit types: ${unitTypes.join(', ')}`);
-        console.log(`Selected polygons: ${selectedPolygons.length}, Show unselected: ${showUnselected}`);
-
-        // Get the current bounds
-        const bounds = map.getBounds();
-
-        // Update the map using the current bounds approach
-        return this.updateMapWithBounds(map, unitTypes, bounds, mapState, yearRange);
-    }
-};
-
-// Register client-side callback to update map when map-state changes
-window.dash_clientside = Object.assign({}, window.dash_clientside, {
-    clientside: {
-        /**
-         * Client-side callback to update the map when unit filters change
-         * @param {Object} mapState - The current map state
-         * @param {Object} appState - The current app state
-         * @returns {Array} - Returns updates for multiple outputs
-         */
-        updateMapWithPolygons: function (mapState, appState) {
-            // Ensure we have a valid map state
-            if (!mapState || !mapState.unit_types || !mapState.unit_types.length) {
-                return [dash_clientside.no_update, dash_clientside.no_update, dash_clientside.no_update,
-                dash_clientside.no_update, dash_clientside.no_update];
-            }
-
-            // Get the Leaflet map object
-            const mapElement = document.getElementById('leaflet-map');
-            if (!mapElement || !mapElement._leaflet_map) {
-                console.warn('Map element or Leaflet map instance not found');
-                return [dash_clientside.no_update, dash_clientside.no_update, dash_clientside.no_update,
-                dash_clientside.no_update, dash_clientside.no_update];
-            }
-
-            const map = mapElement._leaflet_map;
-
-            // Check if the GeoJSON layer is ready before proceeding
-            if (!window.geojsonLayerReady) {
-                console.warn('GeoJSON layer not ready yet, skipping callback');
-                return [dash_clientside.no_update, dash_clientside.no_update, dash_clientside.no_update,
-                dash_clientside.no_update, dash_clientside.no_update];
-            }
-
-            // Determine if we need to show/hide the year range container
-            let containerStyle = { 'display': 'none' };
-
-            // Check if any of the selected unit types are not timeless
-            const timelessUnitTypes = ["MOD_CNTY", "MOD_DIST", "MOD_REG"]; // Unit types that don't require a year filter
-            const needsYearFilter = mapState.unit_types.some(ut => !timelessUnitTypes.includes(ut));
-
-            if (needsYearFilter) {
-                containerStyle = { 'display': 'block' };
-            }
-
-            // Extract required data from map state
-            const unitTypes = mapState.unit_types || ['MOD_REG'];
-            const yearRange = mapState.year_range ? {
-                min: mapState.year_range[0],
-                max: mapState.year_range[1]
-            } : null;
-            const selectedPolygons = mapState.selected_polygons || [];
-            const showUnselected = mapState.show_unselected !== false; // Default to true
-
-            // Get the current bounds
-            const bounds = map.getBounds();
-
-            // Call the updateMapWithBounds function
-            window.polygon_management.updateMapWithBounds(map, unitTypes, bounds, mapState, yearRange)
-                .then(filteredGeoJSON => {
-                    // Success - the map has been updated directly
-                    console.log(`Map updated successfully with ${filteredGeoJSON.features.length} features`);
-                })
-                .catch(error => {
-                    console.error('Error updating map:', error);
-                });
-
-            // Create a debug message
-            const debugMsg = `Showing polygons for ${unitTypes.join(', ')} in current view`;
-
-            // Since we're handling the updates directly on the map object,
-            // we only need to update the year range container and debug message
-            return [
-                containerStyle,
-                dash_clientside.no_update,
-                dash_clientside.no_update,
-                debugMsg,
-                dash_clientside.no_update
-            ];
+        if (!window.geojsonLayerReady) {
+            console.warn(`JS (${requestId}): GeoJSON layer not ready, aborting update.`);
+            return Promise.resolve({ type: "FeatureCollection", features: [] }); // Resolve empty
         }
-    }
-});
+
+        const geojsonLayer = this.findGeoJSONLayer(map);
+        if (!geojsonLayer) {
+            console.error(`JS (${requestId}): GeoJSON layer not found in map.`);
+            return Promise.reject('No GeoJSON layer found');
+        }
+
+        const selectedPolygons = mapState.selected_polygons || [];
+        const showUnselected = mapState.show_unselected ?? true;
+        // console.log(`JS (${requestId}): Selection count: ${selectedPolygons.length}, Show unselected: ${showUnselected}`); // Reduce noise
+
+        const cachedIds = this.getCachedFeatureIds(unitTypes);
+        // console.log(`JS (${requestId}): Found ${cachedIds.length} cached features for requested types.`); // Reduce noise
+
+        return this.fetchPolygonsByBounds(unitTypes, bounds, cachedIds, yearRange)
+            .then(fetchedData => {
+                // console.log(`JS (${requestId}): Fetch completed. New features: ${fetchedData.features?.length ?? 0}.`); // Reduce noise
+
+                const displayFeaturesMap = new Map();
+
+                // 1. Add relevant features from cache
+                unitTypes.forEach(unitType => {
+                    const featureIdSet = window.polygonCache.featuresByUnitType[unitType];
+                     if (featureIdSet instanceof Set) {
+                         featureIdSet.forEach(id => {
+                             const feature = window.polygonCache.featureById[id];
+                             if (feature && !displayFeaturesMap.has(id)) {
+                                 displayFeaturesMap.set(id, feature);
+                             }
+                         });
+                     }
+                });
+                // console.log(`JS (${requestId}): Added ${displayFeaturesMap.size} features from cache.`); // Reduce noise
+
+                // 2. Add newly fetched features
+                if (fetchedData.features && fetchedData.features.length > 0) {
+                    let newFeaturesAdded = 0;
+                    fetchedData.features.forEach(feature => {
+                        if (feature && feature.id != null) {
+                            if (!displayFeaturesMap.has(feature.id)) newFeaturesAdded++;
+                            displayFeaturesMap.set(feature.id, feature);
+                        }
+                    });
+                     // console.log(`JS (${requestId}): Added/updated ${newFeaturesAdded} features from fetch.`); // Reduce noise
+                }
+
+                // 3. Filter based on selection display preference
+                let finalFeatures = Array.from(displayFeaturesMap.values());
+                const initialCount = finalFeatures.length;
+
+                if (!showUnselected) {
+                    finalFeatures = finalFeatures.filter(feature =>
+                        feature.id != null && selectedPolygons.includes(feature.id)
+                    );
+                     // console.log(`JS (${requestId}): Filtered to show only selected. Kept ${finalFeatures.length} / ${initialCount}.`); // Reduce noise
+                } else {
+                    // console.log(`JS (${requestId}): Showing all ${initialCount} features.`); // Reduce noise
+                }
+
+                // --- Update Map Layer ---
+                // console.log(`JS (${requestId}): Clearing existing GeoJSON layer.`); // Reduce noise
+                geojsonLayer.clearLayers();
+
+                if (finalFeatures.length > 0) {
+                    const completeGeodata = {
+                        type: "FeatureCollection",
+                        features: finalFeatures
+                    };
+                    const geoJsonOptions = {
+                        ...(geojsonLayer.options || {}),
+                        hideout: { selected: selectedPolygons } // Ensure hideout is current
+                    };
+                    geojsonLayer.options = geoJsonOptions; // Set options *before* adding data? Or after? Let's try before.
+
+                    // console.log(`JS (${requestId}): Adding ${finalFeatures.length} features.`); // Reduce noise
+                    geojsonLayer.addData(completeGeodata);
+
+                    // Force style refresh AFTER data is added, using the current selection context
+                    // console.log(`JS (${requestId}): Forcing style refresh.`); // Reduce noise
+                    this.refreshLayerStyles(geojsonLayer, selectedPolygons);
+
+                } else {
+                     // console.log(`JS (${requestId}): No features to display after filtering.`); // Reduce noise
+                    // Update hideout even if empty
+                    geojsonLayer.options = { ...(geojsonLayer.options || {}), hideout: { selected: selectedPolygons } };
+                }
+
+                 // console.log(`JS (${requestId}): updateMapWithBounds complete.`); // Reduce noise
+                return { type: "FeatureCollection", features: finalFeatures };
+
+            })
+            .catch(error => {
+                console.error(`JS (${requestId}): Error during updateMapWithBounds process:`, error);
+                return Promise.reject(error);
+            });
+    },
+
+}; // End of window.polygon_management

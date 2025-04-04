@@ -50,4 +50,13 @@ def create_stores():
         dcc.Store(id="thread-id", data=None),
         dcc.Store(id="retrigger-chat", data=None),
         dcc.Store(id="counts-store", data={}),
+        dcc.Store(id='current-year-store'),
+        dcc.Store(id='ctrl-listener-attached'),
+        dcc.Store(id='moveend-listener-setup'),
+        dcc.Store(id='map-moveend-processed'),
+        dcc.Store(id='refresh-handled'),
+        dcc.Store(id='zoom-handled'),
+        dcc.Store(id='map-resize-debouncer'), 
+        dcc.Store(id='zoomend-listener-setup'),
+        dcc.Store(id='map-event-listener-setup'),
     ])
