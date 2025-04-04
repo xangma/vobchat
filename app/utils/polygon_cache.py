@@ -54,6 +54,65 @@ class PolygonCache:
         gdf['id'] = gdf.index
 
         return gdf
+    
+    def _query_database_by_id(
+        self,
+        unit_type: str,
+        feature_ids: List[str],
+        start_year: Optional[int] = None,
+        end_year: Optional[int] = None
+    ) -> pd.DataFrame:
+        """
+            Query the database for polygons of a specific unit type and feature IDs.
+            Optionally filter by year range for time-dependent unit types.
+        """
+        # Build the date filter if applicable
+        date_filter = ""
+        timeless_unit_types = [k for k, v in UNIT_TYPES.items() if v['timeless']]
+        if unit_type not in timeless_unit_types:
+            if start_year is not None and end_year is not None:
+                date_filter = f"""
+                AND util.get_start_year(g_duration) <= {end_year}
+                AND util.get_end_year(g_duration) >= {start_year}
+                """
+            elif start_year is not None:
+                date_filter = f"""
+                AND util.get_end_year(g_duration) >= {start_year}
+                """
+            elif end_year is not None:
+                date_filter = f"""
+                AND util.get_start_year(g_duration) <= {end_year}
+                """
+        
+        # Create a comma-separated list of feature IDs
+        id_list = "', '".join([str(id).replace("'", "''") for id in feature_ids])
+        id_filter = f"AND g_unit IN ('{id_list}')"
+        logger.debug(f"Added ID filter to include {len(feature_ids)} IDs")
+        # Build the SQL query
+        query = f"""
+        SELECT
+            g_unit, 
+            g_foot_ertslcc,
+            g_unit_type,
+            auo_util.get_unit_name(g_unit) as unit_name, 
+            util.get_start_year(g_duration) as start_year, 
+            util.get_end_year(g_duration) as end_year
+        FROM hgis.g_foot
+        WHERE g_unit_type='{unit_type}'
+        AND use_for_stat_map='Y'
+        {id_filter}
+        {date_filter};
+        """
+        # Execute the query and create a DataFrame
+        try:
+            logger.debug(f"Executing ID query for {unit_type}: {query}")
+            res = self.db.run(query, fetch="cursor")
+            res = list(res.mappings())
+            return pd.DataFrame(res)
+        except Exception as e:
+            logger.error(f"Error executing ID query: {e}", exc_info=True)
+            return pd.DataFrame()
+                
 
     def _query_database_by_bbox(
         self, 
@@ -216,6 +275,66 @@ class PolygonCache:
             
             return gdf
         return gpd.GeoDataFrame()
+    
+    def get_polygons_by_ids(
+        self,
+        unit_type: str,
+        feature_ids: List[str],
+        start_year: Optional[int] = None,
+        end_year: Optional[int] = None
+    ) -> gpd.GeoDataFrame:
+        """
+        Get polygons by feature IDs for a specific unit type.
+        Uses feature ID-based caching to only request new features.
+        """
+        try:
+
+            if unit_type not in UNIT_TYPES:
+                logger.error(f"Invalid unit type: {unit_type}")
+                return gpd.GeoDataFrame()
+
+            # Generate cache key
+            cache_key = self._generate_cache_key(unit_type, start_year)
+            # Check if the cache is valid
+            if cache_key in self._cache and self._is_cache_valid(self._cache[cache_key][1]):
+                return self._convert_to_gdf(self._cache[cache_key][0])
+            # Check if the feature IDs are already cached
+            if all(str(id) in self._features_by_id for id in feature_ids):
+                # Retrieve from cache
+                gdf = gpd.GeoDataFrame(list(self._features_by_id[id] for id in feature_ids))
+                gdf.set_index('g_unit', inplace=True, drop=False)
+                return gdf
+            
+            # Query the database for the specified feature IDs
+            df = self._query_database_by_id(unit_type, feature_ids, start_year, end_year)
+            if df.empty:
+                logger.info(f"No features found for {unit_type} with the specified IDs")
+                return gpd.GeoDataFrame()
+
+            if not df.empty:
+                self._cache[cache_key] = (df, datetime.now())
+                
+                # Convert to GeoDataFrame and save to disk if applicable
+                gdf = self._convert_to_gdf(df)
+                if unit_type in [k for k, v in UNIT_TYPES.items() if v['cache_disk']]:
+                    self._save_to_disk(gdf, cache_key)
+                    
+                # Also cache by feature ID
+                if not unit_type in self._features_by_unit_type:
+                    self._features_by_unit_type[unit_type] = set()
+                    
+                # Cache each feature by ID
+                for feature_id, row in gdf.iterrows():
+                    str_id = str(feature_id)
+                    self._features_by_id[str_id] = row
+                    self._features_by_unit_type[unit_type].add(str_id)
+                
+                return gdf
+
+        except Exception as e:
+            logger.error(f"Error retrieving polygons by IDs for {unit_type}: {str(e)}", exc_info=True)
+            return gpd.GeoDataFrame()
+        
 
     def _disk_file_path(self, cache_key: str) -> str:
         """Return the file path for a given cache key."""

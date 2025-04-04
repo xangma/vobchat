@@ -1,7 +1,7 @@
 # app/api/polygon_routes.py
 
 from flask import jsonify, request
-from typing import Optional
+from typing import Optional, List
 import logging
 
 # Import polygon cache and other utilities
@@ -56,4 +56,40 @@ def register_polygon_routes(server):
             
         except Exception as e:
             logger.error(f"Error retrieving polygons for {unit_type}: {str(e)}", exc_info=True)
+            return jsonify({"error": str(e)}), 500
+        
+    def get_polygons_by_ids(unit_type: str, ids: List[str] = None):
+        """
+        API endpoint to fetch polygons by IDs for a specific unit type.
+        
+        Args:
+            unit_type (str): The unit type to fetch polygons for (e.g., 'MOD_REG', 'MOD_DIST')
+            ids (List[str], optional): List of polygon IDs to fetch
+            
+        Returns:
+            JSON: GeoJSON representation of the polygons
+        """
+        try:
+            # Validate unit type
+            if unit_type not in UNIT_TYPES:
+                return jsonify({"error": f"Invalid unit type: {unit_type}"}), 400
+                
+            # Get optional IDs parameter
+            # ids = ids.split(',') if ids else []
+            
+            # Get polygons from the cache
+            gdf = polygon_cache.get_polygons_by_ids(unit_type, ids)
+            
+            # Convert to GeoJSON
+            if gdf.empty:
+                geojson = {"type": "FeatureCollection", "features": []}
+            else:
+                geojson = gdf.__geo_interface__
+                
+            logger.info(f"Returned {len(geojson['features'])} polygons for {unit_type} with IDs: {ids}")
+            
+            return jsonify(geojson)
+            
+        except Exception as e:
+            logger.error(f"Error retrieving polygons by IDs for {unit_type}: {str(e)}", exc_info=True)
             return jsonify({"error": str(e)}), 500
