@@ -85,8 +85,9 @@ class PolygonCache:
                 """
         
         # Create a comma-separated list of feature IDs
-        id_list = "', '".join([str(id).replace("'", "''") for id in feature_ids])
-        id_filter = f"AND g_unit IN ('{id_list}')"
+        # id_list = "', '".join([str(id).replace("'", "''") for id in feature_ids])
+        
+        id_filter = f"AND g_unit IN ('{feature_ids}')"
         logger.debug(f"Added ID filter to include {len(feature_ids)} IDs")
         # Build the SQL query
         query = f"""

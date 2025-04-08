@@ -49,14 +49,6 @@ def create_visualization_layout():
                                     id="clear-plot-button",
                                     color="secondary"
                                 ),
-                                # New button to toggle floating mode
-                                dbc.Button(
-                                    "Make Floating",
-                                    id="float-toggle-button",
-                                    color="primary",
-                                    outline=True,
-                                    className="ms-2"
-                                )
                             ]
                         )
                     ]

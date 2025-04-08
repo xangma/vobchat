@@ -54,7 +54,7 @@ def create_app():
                     html.Div(className="resizable-panel", id="visualization-panel", children=[
                         create_visualization_layout()
                     ],
-                    style={"display": "none"}),  # Initially hidden
+                    style={"display": "flex"}),  # Initially hidden
                 ]),
             ]),
         ]),

@@ -10,6 +10,7 @@ map_state_data = {
     "selected_polygons_unit_types": [],
     "show_unselected": True,
     "zoom_to_selection": False,
+    "programmatic_unit_change_pending": None,
 }
 
 place_state_data = {
@@ -28,7 +29,7 @@ app_state_data = {
     "button_options": [],
     "selection_idx": None,
     "retrigger_chat": False,
-    "show_visualization": False,  # Ensure this is False by default
+    "show_visualization": False,
 }
 
 def create_stores():

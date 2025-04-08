@@ -5,12 +5,6 @@ document.addEventListener('DOMContentLoaded', function() {
     console.log("DOM loaded, initializing visualization enhancements");
     initializeVisualizationEnhancements();
     
-    // Add click handler for the float toggle button
-    const floatToggleButton = document.getElementById('float-toggle-button');
-    if (floatToggleButton) {
-        floatToggleButton.addEventListener('click', toggleFloatingMode);
-    }
-    
     // Set up a mutation observer to watch for visualization area being added to the DOM
     const bodyObserver = new MutationObserver(function(mutations) {
         mutations.forEach(function(mutation) {
@@ -126,15 +120,6 @@ function createVisualizationControls() {
     if (maximizeButton) maximizeButton.addEventListener('click', maximizeVisualization);
     if (closeButton) closeButton.addEventListener('click', closeVisualization);
     
-    // Add a listener for the float toggle button if it exists
-    const floatToggleButton = document.getElementById('float-toggle-button');
-    if (floatToggleButton) {
-        // Remove existing event listeners to prevent duplicates
-        floatToggleButton.removeEventListener('click', toggleFloatingMode);
-        // Add the event listener
-        floatToggleButton.addEventListener('click', toggleFloatingMode);
-        console.log("Float toggle button handler attached");
-    }
 }
 
 function makeVisualizationDraggable() {
@@ -593,71 +578,4 @@ function closeVisualization() {
     // Trigger the clear visualization event 
     const clearButton = document.getElementById('clear-plot-button');
     if (clearButton) clearButton.click();
-}
-
-// Helper function to convert visualization to floating mode
-function toggleFloatingMode() {
-    const visualizationArea = document.getElementById('visualization-area');
-    const floatToggleButton = document.getElementById('float-toggle-button');
-    
-    if (!visualizationArea.classList.contains('viz-floating')) {
-        // Save current state before floating
-        visualizationArea.dataset.savedStyle = JSON.stringify({
-            position: visualizationArea.style.position,
-            top: visualizationArea.style.top,
-            left: visualizationArea.style.left,
-            width: visualizationArea.style.width,
-            height: visualizationArea.style.height
-        });
-        
-        // Get current position and size
-        const rect = visualizationArea.getBoundingClientRect();
-        
-        // Convert to floating mode
-        visualizationArea.style.position = 'fixed';
-        visualizationArea.style.top = rect.top + 'px';
-        visualizationArea.style.left = rect.left + 'px';
-        visualizationArea.style.width = rect.width + 'px';
-        visualizationArea.style.height = rect.height + 'px';
-        visualizationArea.style.zIndex = '1000';
-        visualizationArea.classList.add('viz-floating');
-        
-        // Update button text
-        if (floatToggleButton) {
-            floatToggleButton.textContent = "Dock Visualization";
-        }
-        
-        // Show resize handles
-        const resizeHandles = visualizationArea.querySelector('.viz-resize-handles');
-        if (resizeHandles) resizeHandles.style.display = '';
-    } else {
-        // Restore previous state
-        if (visualizationArea.dataset.savedStyle) {
-            const savedStyle = JSON.parse(visualizationArea.dataset.savedStyle);
-            visualizationArea.style.position = savedStyle.position;
-            visualizationArea.style.top = savedStyle.top;
-            visualizationArea.style.left = savedStyle.left;
-            visualizationArea.style.width = savedStyle.width;
-            visualizationArea.style.height = savedStyle.height;
-        } else {
-            // Restore to original position if no saved style
-            const originalPosition = JSON.parse(visualizationArea.dataset.originalPosition);
-            visualizationArea.style.position = originalPosition.position;
-            visualizationArea.style.top = originalPosition.top;
-            visualizationArea.style.left = originalPosition.left;
-            visualizationArea.style.width = originalPosition.width;
-            visualizationArea.style.height = originalPosition.height;
-        }
-        
-        visualizationArea.style.zIndex = '';
-        visualizationArea.classList.remove('viz-floating');
-        
-        // Update button text
-        if (floatToggleButton) {
-            floatToggleButton.textContent = "Make Floating";
-        }
-    }
-    
-    // Trigger a window resize event to ensure plots are properly sized
-    window.dispatchEvent(new Event('resize'));
 }

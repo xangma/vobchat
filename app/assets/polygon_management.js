@@ -51,35 +51,79 @@ function setupMapEventListeners(map) {
 
     // Attach zoomend listener
     map.on('zoomend', function (e) {
-        // console.log("JS: >>> map.on('zoomend') event FIRED! <<<"); // Reduce noise
-        // *** Check global flag: Ignore if programmatic zoom was *just initiated* ***
+        // console.log("JS: >>> map.on('zoomend') event FIRED! <<<"); // Optional logging
+
+        // --- Check for Programmatic Zoom Completion ---
         if (window.programmaticZoomInProgress) {
-            console.log("JS: map.on('zoomend') event IGNORED (programmatic zoom flag is true).");
-            return; // Skip if Cb8 just called fitBounds and hasn't reset the flag yet
+            console.log("JS: map.on('zoomend') - Detected programmatic zoom completion.");
+
+            // Reset the global flag FIRST to allow subsequent actions
+            window.programmaticZoomInProgress = false;
+            console.log("JS: map.on('zoomend') - Global programmaticZoomInProgress RESET to false.");
+            return;
         }
-        // If the flag is false, it means zoom was manual OR programmatic zoom finished previously
-        console.log("JS: map.on('zoomend') event processed (flag is false).");
-        window.lastZoomEndTime_MapEvents = Date.now(); // For moveend debounce
-        triggerCb7Update('zoomend');
+        //     // Check if a unit change is pending
+        //     let currentMapState = null;
+        //     let unitChangePending = null;
+        //     try {
+        //         currentMapState = window.dash_clientside.store.getState()["map-state"];
+        //         unitChangePending = currentMapState?.programmatic_unit_change_pending;
+        //     } catch (err) {
+        //         console.warn("JS: map.on('zoomend') - Error getting map state:", err);
+        //     }
+
+        //     // If a unit change was pending, execute it now
+        //     if (unitChangePending && currentMapState) {
+        //         console.log(`JS: map.on('zoomend') - Applying pending unit type change to: ${unitChangePending}`);
+        //         let newState = JSON.parse(JSON.stringify(currentMapState));
+
+        //         newState.unit_types = [unitChangePending]; // Set the new unit type
+        //         delete newState.programmatic_unit_change_pending; // Clear the pending flag
+
+        //         // Ensure zoom_to_selection is false/deleted after zoom finishes
+        //         delete newState.zoom_to_selection;
+
+        //         try {
+        //             // This state update triggers Cb9 to refresh data
+        //             window.dash_clientside.set_props("map-state", { data: newState });
+        //             console.log("JS: map.on('zoomend') - Set props to change unit type.");
+        //         } catch (err) {
+        //             console.error(`JS: map.on('zoomend') - Error setting props for unit type change:`, err);
+        //         }
+        //     } else {
+        //         console.log("JS: map.on('zoomend') - Programmatic zoom finished, but no unit change was pending.");
+        //         // Optionally trigger Cb7 if no unit change was needed,
+        //         // although Cb9 will likely run anyway due to the flag reset in Cb8's state update
+        //         // triggerCb7Update('zoomend (programmatic, no unit change)');
+        //     }
+
+        //     return; // IMPORTANT: Prevent Cb7 trigger immediately after programmatic zoom
+        // }
+        // // --- End Programmatic Zoom Handling ---
+
+        // --- Handle Manual Zooms (existing logic) ---
+    console.log("JS: map.on('zoomend') event processed (manual zoom or unrelated).");
+    window.lastZoomEndTime_MapEvents = Date.now(); // For moveend debounce
+    triggerCb7Update('zoomend'); // Trigger Cb7 for manual zooms
     });
+
     console.log("JS (setupMapEventListeners): zoomend listener attached.");
 
-    // Attach moveend listener
+    // Attach moveend listener (Keep existing logic, including programmaticZoomInProgress check)
     map.on('moveend', function (e) {
-        // console.log("JS: >>> map.on('moveend') event FIRED! <<<"); // Reduce noise
-        // *** Check global flag: Ignore if programmatic zoom was *just initiated* ***
-        if (window.programmaticZoomInProgress) {
-            console.log("JS: map.on('moveend') event IGNORED (programmatic zoom flag is true).");
-            return; // Skip if Cb8 just called fitBounds and hasn't reset the flag yet
-        }
-        console.log("JS: map.on('moveend') event processed (flag is false).");
+        // console.log("JS: >>> map.on('moveend') event FIRED! <<<"); // Optional logging
+        // if (window.programmaticZoomInProgress) {
+        //     console.log("JS: map.on('moveend') event IGNORED (programmatic zoom flag is true).");
+        //     return;
+        // }
+        // console.log("JS: map.on('moveend') event processed (flag is false)."); // Optional logging
 
-        // Debounce check (don't fire moveend if zoomend just fired recently)
+        // Debounce check (keep existing logic)
         const now = Date.now();
         if (typeof window.lastZoomEndTime_MapEvents !== 'number') window.lastZoomEndTime_MapEvents = 0;
-        if (window.lastZoomEndTime_MapEvents && (now - window.lastZoomEndTime_MapEvents < 200)) { // 200ms debounce window
-            console.log("JS: map.on('moveend') event SKIPPED (debounce after recent zoomend).");
-            return; // Don't trigger Cb7 again if zoomend just did
+        if (window.lastZoomEndTime_MapEvents && (now - window.lastZoomEndTime_MapEvents < 200)) {
+            // console.log("JS: map.on('moveend') event SKIPPED (debounce after recent zoomend)."); // Optional logging
+            return;
         }
         triggerCb7Update('moveend (not debounced)');
     });
@@ -355,6 +399,137 @@ window.polygon_management = {
         window.polygonCache.pendingRequests[requestKey] = processingPromise;
         return processingPromise;
     },
+
+    fetchPolygonsByIds: function (map, mapState, unitType, ids, yearRange = null) { // Added map parameter
+        const requestId = `req-id-${Date.now().toString(36)}`;
+        console.log(`JS (${requestId}): Fetching polygons by ID. UnitType: ${unitType}, Count: ${ids.length}`);
+
+        if (!map) {
+            console.error(`JS (${requestId}): Invalid map object provided to fetchPolygonsByIds.`);
+            return Promise.reject('Invalid map object');
+        }
+        if (!unitType || !ids || ids.length === 0) {
+            console.warn(`JS (${requestId}): Missing unitType or ids for fetchPolygonsByIds.`);
+            return Promise.resolve({ type: "FeatureCollection", features: [] });
+        }
+
+        const featuresToAdd = [];
+        const idsToActuallyFetch = [];
+
+        // Check cache first and prepare list of IDs that *really* need fetching
+        ids.forEach(id => {
+            const cachedFeature = window.polygonCache.featureById[id];
+            if (cachedFeature) {
+                featuresToAdd.push(cachedFeature); // Add from cache
+            } else {
+                idsToActuallyFetch.push(id); // Needs fetching
+            }
+        });
+
+        let fetchPromise;
+        if (idsToActuallyFetch.length === 0) {
+            console.log(`JS (${requestId}): All requested IDs found in cache.`);
+            fetchPromise = Promise.resolve({ type: "FeatureCollection", features: [], fromCache: true }); // Nothing new to fetch from API
+        } else {
+            // --- Prepare API Call ---
+            const urlParams = new URLSearchParams();
+            urlParams.set('ids', idsToActuallyFetch.join(','));
+            urlParams.set('unit_type', unitType);
+            if (yearRange && yearRange.min != null && yearRange.max != null) {
+                urlParams.set('start_year', yearRange.min);
+                urlParams.set('end_year', yearRange.max);
+            }
+            const url = `/api/polygons/ids?${urlParams.toString()}`;
+
+            console.log(`JS (${requestId}): Calling API for ${idsToActuallyFetch.length} IDs: ${url}`);
+            fetchPromise = fetch(url, {
+                method: 'GET',
+                headers: { 'Accept': 'application/json' }
+            })
+                .then(response => {
+                    if (!response.ok) {
+                        return response.text().then(text => {
+                            throw new Error(`JS (${requestId}): Fetch by ID failed: ${response.status} ${response.statusText}. Body: ${text}`);
+                        });
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (!data || !Array.isArray(data.features)) {
+                        console.warn(`JS (${requestId}): Received invalid data structure from ID fetch.`);
+                        return { type: "FeatureCollection", features: [], fromCache: false };
+                    }
+                    console.log(`JS (${requestId}): Received ${data.features.length} polygons from ID fetch API call.`);
+                    return { ...data, fromCache: false }; // Pass fetched data downstream
+                });
+        }
+
+        // Chain processing after fetch (or immediately if all cached)
+        return fetchPromise.then(fetchedData => {
+            // --- Update Cache with newly fetched data ---
+            if (!fetchedData.fromCache && fetchedData.features.length > 0) {
+                let addedToCacheCount = 0;
+                fetchedData.features.forEach(feature => {
+                    if (feature && feature.id != null && feature.properties?.g_unit_type) {
+                        const featureId = feature.id;
+                        const featUnitType = feature.properties.g_unit_type;
+                        if (!window.polygonCache.featureById[featureId]) {
+                            window.polygonCache.featureById[featureId] = feature;
+                            addedToCacheCount++;
+                        }
+                        if (!window.polygonCache.featuresByUnitType[featUnitType]) {
+                            window.polygonCache.featuresByUnitType[featUnitType] = new Set();
+                        }
+                        window.polygonCache.featuresByUnitType[featUnitType].add(featureId);
+                        featuresToAdd.push(feature); // Add newly fetched to our list
+                    }
+                });
+                if (addedToCacheCount > 0) {
+                    console.log(`JS (${requestId}): Added ${addedToCacheCount} new features to cache from ID fetch.`);
+                }
+            }
+
+            // --- Add Features to Map Layer ---
+            const geojsonLayer = this.findGeoJSONLayer(map);
+            if (!geojsonLayer) {
+                console.error(`JS (${requestId}): GeoJSON layer not found, cannot add fetched features.`);
+                return Promise.reject('GeoJSON layer not found');
+            }
+
+            const featuresActuallyAddedToLayer = [];
+            if (featuresToAdd.length > 0) {
+                // Filter out features already on the layer to avoid duplicates
+                const currentLayerIds = new Set(Object.values(geojsonLayer._layers).map(l => l.feature?.id).filter(id => id != null));
+                const featuresToAddFiltered = featuresToAdd.filter(f => f.id != null && !currentLayerIds.has(f.id));
+
+                if (featuresToAddFiltered.length > 0) {
+                    console.log(`JS (${requestId}): Adding ${featuresToAddFiltered.length} features (cached + fetched) to map layer.`);
+                    const geoJsonData = { type: "FeatureCollection", features: featuresToAddFiltered };
+                    geojsonLayer.addData(geoJsonData);
+                    featuresActuallyAddedToLayer.push(...featuresToAddFiltered);
+                }
+            }
+            //         // Refresh styles for the whole layer after adding
+            //         const currentMapState = window.dash_clientside.store.getState()["map-state"];
+            //         const selectedPolygons = currentMapState?.selected_polygons || [];
+            //         this.refreshLayerStyles(geojsonLayer, selectedPolygons);
+            //         console.log(`JS (${requestId}): Refreshed styles after adding features by ID.`);
+            //     } else {
+            //         console.log(`JS (${requestId}): All requested/fetched features were already on the layer.`);
+            //     }
+            // } else {
+            //     console.log(`JS (${requestId}): No features (cached or fetched) to add to layer.`);
+            // }
+
+            // Return only the features that were actually added in this run
+            return { type: "FeatureCollection", features: featuresActuallyAddedToLayer };
+        })
+            .catch(error => {
+                console.error(`JS (${requestId}): Error in fetchPolygonsByIds processing:`, error);
+                return Promise.resolve({ type: "FeatureCollection", features: [], error: true }); // Resolve empty on error
+            });
+    },
+
 
     // findGeoJSONLayer (NO CHANGE)
     findGeoJSONLayer: function (map) {

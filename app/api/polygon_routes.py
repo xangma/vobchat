@@ -57,8 +57,9 @@ def register_polygon_routes(server):
         except Exception as e:
             logger.error(f"Error retrieving polygons for {unit_type}: {str(e)}", exc_info=True)
             return jsonify({"error": str(e)}), 500
-        
-    def get_polygons_by_ids(unit_type: str, ids: List[str] = None):
+    
+    @server.route('/api/polygons/ids', methods=['GET'])
+    def get_polygons_by_ids_route():
         """
         API endpoint to fetch polygons by IDs for a specific unit type.
         
@@ -70,6 +71,11 @@ def register_polygon_routes(server):
             JSON: GeoJSON representation of the polygons
         """
         try:
+            unit_type = request.args.get('unit_type')
+            ids = request.args.get('ids')
+            start_year = request.args.get('start_year')
+            end_year = request.args.get('end_year')
+            
             # Validate unit type
             if unit_type not in UNIT_TYPES:
                 return jsonify({"error": f"Invalid unit type: {unit_type}"}), 400

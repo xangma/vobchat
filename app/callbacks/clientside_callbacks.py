@@ -393,11 +393,6 @@ def register_clientside_callbacks(app: Dash):
                 // console.log("Client (Cb7): Skipping (no trigger data or mapState)."); // Reduce noise
                 return window.dash_clientside.no_update;
             }
-            // Check if programmatic zoom is flagged (should already be handled by listeners, but as safety)
-             if (window.programmaticZoomInProgress) {
-                 console.log("Client (Cb7): Skipping update because programmatic zoom is marked as in progress.");
-                 return window.dash_clientside.no_update;
-             }
 
 
             const mapElement_Cb7 = document.getElementById('leaflet-map');
@@ -448,75 +443,118 @@ def register_clientside_callbacks(app: Dash):
             }
 
             // --- Condition: Act ONLY on zoom_to_selection flag ---
-            if (!mapState.zoom_to_selection || !mapState.selected_polygons || mapState.selected_polygons.length === 0) {
-                // console.log("Client (Cb8 - Zoom Init): No zoom flag or selection, skipping.");
-                return window.dash_clientside.no_update; // Not a zoom request this callback should handle
+            if (!mapState.zoom_to_selection) {
+                return window.dash_clientside.no_update; // Not a zoom request
             }
 
-            // --- Prerequisites for Zoom ---
+            // --- Prerequisites ---
             const mapElement = document.getElementById('leaflet-map');
             const map = mapElement?._leaflet_map;
             const polygonManagement = window.polygon_management;
 
-            if (!map || !polygonManagement || !polygonManagement.zoomTo || !window.geojsonLayerReady) {
-                console.warn("Client (Cb8 - Zoom Init): Prerequisites not met for zoom (map/pm/zoomTo/layerReady).");
-                // Consider resetting state flag here if zoom cannot be attempted, to prevent infinite loops
+            if (!map || !polygonManagement || !polygonManagement.fetchPolygonsByIds || !polygonManagement.zoomTo || !window.geojsonLayerReady) {
+                console.warn("Client (Cb8 - Fetch/Zoom): Prerequisites not met (map/pm/fetchByIds/zoomTo/layerReady).");
+                // Reset state flags if cannot proceed
                 try {
                     let newState = JSON.parse(JSON.stringify(mapState));
                     delete newState.zoom_to_selection;
+                    delete newState.programmatic_unit_change_pending;
                     window.dash_clientside.set_props("map-state", {data: newState});
-                    console.warn("Client (Cb8 - Zoom Init): Resetting zoom flag as prerequisites failed.");
-                } catch(e){}
+                    console.warn("Client (Cb8 - Fetch/Zoom): Resetting state flags as prerequisites failed.");
+                } catch(e){ console.error("Client (Cb8 - Fetch/Zoom): Error resetting state flags on prerequisite failure:", e); }
                 return window.dash_clientside.no_update;
             }
 
-            // --- Initiate Zoom ---
-            if (window.programmaticZoomInProgress) {
-                console.log("Client (Cb8 - Zoom Init): Zoom flag detected, but programmatic zoom already in progress. Ignoring.");
-                return window.dash_clientside.no_update; // Avoid potential race conditions/loops
-            }
+            // --- Fetch Data by ID First ---
+            const idsToFetch = mapState.selected_polygons || [];
+            const unitTypesForFetch = mapState.selected_polygons_unit_types || [];
+            const unitType = unitTypesForFetch.length > 0 ? unitTypesForFetch[0] : null; // Assuming single type for fetch by ID call, adjust if needed
 
-            console.log("Client (Cb8 - Zoom Init): Zoom flag detected. Initiating zoom process.");
-            window.programmaticZoomInProgress = true; // SET JS flag
-            console.log("Client (Cb8 - Zoom Init): Global programmaticZoomInProgress SET to true.");
-
-            const geojsonLayer = polygonManagement.findGeoJSONLayer(map);
-            if (geojsonLayer) {
-                polygonManagement.zoomTo(map, mapState.selected_polygons, geojsonLayer); // Call fitBounds
-
-                // Reset the zoom_to_selection flag in the main state store immediately
-                // This will trigger inputs for Cb8 and Cb9 again.
-                let newStateWithoutZoomFlag = JSON.parse(JSON.stringify(mapState));
-                delete newStateWithoutZoomFlag.zoom_to_selection;
-                try {
-                    window.dash_clientside.set_props("map-state", {data: newStateWithoutZoomFlag});
-                    console.log("Client (Cb8 - Zoom Init): Reset state zoom flag via set_props.");
-                } catch (e) { console.error("Client (Cb8 - Zoom Init): Error resetting state flag:", e); }
-
-                // Reset global JS flag IMMEDIATELY AFTER initiating zoom & state reset
-                window.programmaticZoomInProgress = false; // RESET JS flag
-                console.log("Client (Cb8 - Zoom Init): Global programmaticZoomInProgress RESET to false.");
-
-            } else {
-                console.warn("Client (Cb8 - Zoom Init): GeoJSON layer not found for zoomTo.");
-                window.programmaticZoomInProgress = false; // Reset JS flag if layer not found
-                // Also reset state flag if zoom fails
+            if (idsToFetch.length === 0 || !unitType) {
+                console.warn("Client (Cb8 - Fetch/Zoom): No IDs or unit type provided for fetch/zoom.");
+                    // Reset state flags if cannot proceed
                 try {
                     let newState = JSON.parse(JSON.stringify(mapState));
                     delete newState.zoom_to_selection;
+                    delete newState.programmatic_unit_change_pending;
                     window.dash_clientside.set_props("map-state", {data: newState});
-                    console.warn("Client (Cb8 - Zoom Init): Resetting zoom flag as GeoJSON layer was not found.");
-                } catch(e){}
+                    console.warn("Client (Cb8 - Fetch/Zoom): Resetting state flags due to missing IDs/unit type.");
+                } catch(e){ console.error("Client (Cb8 - Fetch/Zoom): Error resetting state flags:", e); }
+                return window.dash_clientside.no_update;
             }
 
-            // Cb8's only job (initiating zoom) is done.
+            console.log(`Client (Cb8 - Fetch/Zoom): Fetching ${idsToFetch.length} polygons by ID for unit type ${unitType}.`);
+            const yearRange = mapState.year_range ? { min: mapState.year_range[0], max: mapState.year_range[1] } : null;
+            const unitChangePending = mapState.programmatic_unit_change_pending; // Store pending change
+
+            // Set the flag *before* starting the async fetch/zoom process
+            window.programmaticZoomInProgress = true;
+            console.log("Client (Cb8 - Fetch/Zoom): Global programmaticZoomInProgress SET to true.");
+
+            polygonManagement.fetchPolygonsByIds(map, mapState, unitType, idsToFetch, yearRange)
+                .then(fetchedGeoJson => {
+                    console.log("Client (Cb8 - Fetch/Zoom): Fetch by ID completed.");
+                        // Optional: Add fetched data directly to layer here if needed,
+                        // though updateMapWithBounds should handle cache update
+                        // const layer = polygonManagement.findGeoJSONLayer(map);
+                        // if (layer && fetchedGeoJson.features.length > 0) {
+                        //    layer.addData(fetchedGeoJson);
+                        //    console.log("Client (Cb8 - Fetch/Zoom): Added fetched features to layer.");
+                        //    polygonManagement.refreshLayerStyles(layer, mapState.selected_polygons);
+                        // }
+
+                    // --- Initiate Zoom AFTER fetch completes ---
+                    const geojsonLayer = polygonManagement.findGeoJSONLayer(map); // Get layer ref again
+                    if (geojsonLayer) {
+                        polygonManagement.zoomTo(map, idsToFetch, geojsonLayer); // Call fitBounds
+                        console.log("Client (Cb8 - Fetch/Zoom): Zoom initiated.");
+
+                        // Update state: remove trigger, keep pending change
+                        let newState = JSON.parse(JSON.stringify(mapState));
+                        delete newState.zoom_to_selection;
+                        newState.programmatic_unit_change_pending = unitChangePending; // Ensure pending change is still there
+                            try {
+                            window.dash_clientside.set_props("map-state", {data: newState});
+                            console.log("Client (Cb8 - Fetch/Zoom): Updated state (removed zoom trigger, kept pending change).");
+                            } catch(e) {
+                                console.error("Client (Cb8 - Fetch/Zoom): Error updating state after zoom initiation:", e);
+                                // Reset flag on error
+                                window.programmaticZoomInProgress = false;
+                            }
+                        // DO NOT reset programmaticZoomInProgress here. zoomend handler does it.
+                    } else {
+                        console.warn("Client (Cb8 - Fetch/Zoom): GeoJSON layer not found after fetch, cannot zoom.");
+                        window.programmaticZoomInProgress = false; // Reset flag if zoom fails
+                            // Also reset state flags fully if zoom fails
+                        try {
+                            let newState = JSON.parse(JSON.stringify(mapState));
+                            delete newState.zoom_to_selection;
+                            delete newState.programmatic_unit_change_pending;
+                            window.dash_clientside.set_props("map-state", {data: newState});
+                        } catch(e){}
+                    }
+                })
+                .catch(error => {
+                    console.error("Client (Cb8 - Fetch/Zoom): Error during fetchPolygonsByIds:", error);
+                    window.programmaticZoomInProgress = false; // Reset flag on fetch error
+                    // Also reset state flags fully on error
+                    try {
+                        let newState = JSON.parse(JSON.stringify(mapState));
+                        delete newState.zoom_to_selection;
+                        delete newState.programmatic_unit_change_pending;
+                        window.dash_clientside.set_props("map-state", {data: newState});
+                    } catch(e){}
+                });
+
+            // Callback finishes here, async operations continue
             return window.dash_clientside.no_update;
         }
         """,
         Output('zoom-handled', 'data'), # Dummy output
         Input("map-state", "data"),
-        prevent_initial_call=True # Only run on changes
+        prevent_initial_call=True
     )
+
 
 
     # NEW Callback #9: Handles Refresh for Non-Zoom State Changes
