@@ -36,7 +36,8 @@ def create_chat_layout():
                             id="chat-input",
                             placeholder="Type your message here...",
                             type="text",
-                            className="mb-2"
+                            className="mb-2",
+                            debounce=True,
                         ),
                         html.Div(
                             className="d-flex justify-content-between",

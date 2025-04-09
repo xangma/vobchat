@@ -344,3 +344,14 @@ def register_chat_callbacks(app, compiled_workflow):
             return True
         else:
             return dash.no_update
+        
+    @app.callback(
+        Output("send-button", "n_clicks"),
+        Input("chat-input", "n_submit"),
+        State("send-button", "n_clicks"),
+        prevent_initial_call=True
+    )
+    def trigger_send_on_enter(n_submit, current_n_clicks):
+        if n_submit:
+            return (current_n_clicks or 0) + 1
+        raise PreventUpdate
