@@ -341,9 +341,11 @@ def get_all_themes():
     "T_REL"	"Roots & Religion"
     "T_SOC"	"Social Structure"
     "T_WK"	"Work & Poverty"
+    
+    # More text on themes: select * from hgis.g_text where dds_theme='T_IND';
     """
     query = f"""
-    SELECT ent_id, labl FROM hgis.g_data_ent where ent_type='T'
+    SELECT ent_id, labl, text FROM hgis.g_data_ent where ent_type='T'
     ORDER BY labl
     """
     dbtool = QuerySQLDataBaseTool(db=db)

@@ -39,7 +39,8 @@ from .tools import (
     find_cubes_for_unit_theme,
     find_units_by_postcode,
     find_themes_for_unit,
-    find_places_by_name
+    find_places_by_name,
+    get_all_themes
 )
 
 from .utils.redis_checkpoint import RedisSaver

@@ -5,6 +5,7 @@ UNIT_TYPES = {
               'MOD_CNTY': {'long_name': 'Modern County', 'color': 'purple', 'timeless': True, 'cache_disk': True},
               'MOD_DIST': {'long_name': 'Modern District', 'color': 'brown', 'timeless': True, 'cache_disk': True},
               'MOD_REG': {'long_name': 'Modern Region', 'color': 'blue', 'timeless': True, 'cache_disk': True},
+              'MOD_WARD': {'long_name': 'Modern Ward', 'color': 'darkgreen', 'timeless': False, 'cache_disk': False},
               }
 
 UNIT_THEMES = {"T_LAND": "Agriculture & Land Use", 
