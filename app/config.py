@@ -1,7 +1,6 @@
 # app/config.py
 from configparser import ConfigParser
 import os
-from sshtunnel import SSHTunnelForwarder
 from langchain_community.utilities import SQLDatabase
 
 localdb = False
@@ -33,6 +32,7 @@ def load_config(filename=os.path.join(BASE_DIR, "database.ini"), section='postgr
 def get_db(config):
     # If using an SSH tunnel
     if use_tunnel and not localdb:
+        from sshtunnel import SSHTunnelForwarder
         ssh_config = load_config(
             filename=os.path.join(BASE_DIR, "database.ini"),
             section='sshtunnel'
