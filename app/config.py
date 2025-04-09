@@ -1,18 +1,18 @@
 # app/config.py
 from configparser import ConfigParser
 import os
+from sshtunnel import SSHTunnelForwarder
 from langchain_community.utilities import SQLDatabase
 
-localdb = True
+localdb = False
+use_tunnel = False  # New flag for using SSH tunnel
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
 
 def load_config(filename=os.path.join(BASE_DIR, "database.ini"), section='postgresql'):
     parser = ConfigParser()
     parser.read(filename)
 
-    # get section, default to postgresql
     config = {}
     if parser.has_section(section):
         params = parser.items(section)
@@ -20,21 +20,49 @@ def load_config(filename=os.path.join(BASE_DIR, "database.ini"), section='postgr
             config[param[0]] = param[1]
         config['password'] = os.environ.get('VOB_PASS')
     else:
-        raise Exception('Section {0} not found in the {1} file'.format(section, filename))
+        raise Exception(f'Section {section} not found in {filename}')
+    
     if localdb:
         config['host'] = 'localhost'
         config['user'] = 'postgres'
         config['password'] = os.environ.get('POSTGRES_PASS')
+
     return config
 
 
 def get_db(config):
-    dburi = f"postgresql://{config['user']}:{config['password']}@{config['host']}:5432/{config['dbname']}"
+    # If using an SSH tunnel
+    if use_tunnel and not localdb:
+        ssh_config = load_config(
+            filename=os.path.join(BASE_DIR, "database.ini"),
+            section='sshtunnel'
+        )
+        tunnel = SSHTunnelForwarder(
+            ssh_address_or_host=ssh_config['host'],
+            ssh_username=ssh_config['user'],
+            allow_agent=True,
+            ssh_pkey=os.path.expanduser(ssh_config['pkey']),
+            ssh_password=os.environ.get('UOP_PASS'),
+            ssh_private_key_password=os.environ.get('UOP_PASS'),
+            remote_bind_address=(ssh_config['remote_bind_address'], int(ssh_config['remote_bind_port'])),
+            local_bind_address=(ssh_config['local_bind_address'],),
+        )
+        tunnel.start()
+        config['host'] = 'localhost'
+        config['port'] = tunnel.local_bind_port
+    else:
+        config['port'] = 5432
+
+    dburi = f"postgresql://{config['user']}:{config['password']}@{config['host']}:{config['port']}/{config['dbname']}"
     db = SQLDatabase.from_uri(dburi, schema=config['schema'])
-    # Set the connection to read-only mode
     db.run("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;")
+
+    if use_tunnel and not localdb:
+        db.tunnel = tunnel  # Store tunnel on the db object for later teardown
+
     return db
 
-if __name__ == '__main__':
-    config = load_config()
-    print(config)
+
+def close_db(db):
+    if hasattr(db, 'tunnel'):
+        db.tunnel.stop()
