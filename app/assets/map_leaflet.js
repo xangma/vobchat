@@ -9,7 +9,8 @@ window.map_leaflet = Object.assign({}, window.map_leaflet, {
             'LG_DIST': 'orange',
             'MOD_CNTY': 'purple',
             'MOD_DIST': 'brown',
-            'MOD_REG': 'blue'
+            'MOD_REG': 'blue',
+            'MOD_WARD': 'darkgreen'
         };
 
         let unitType = feature.properties.g_unit_type || 'MOD_REG';

@@ -37,25 +37,30 @@ def create_app():
     app.layout = html.Div([
         create_stores(),
         html.Div(className="resizable-container", children=[
-            html.Div(className="resizable-horizontal", style={"flex": "1"}, children=[
-                # Chat panel on the left
+            html.Div(className="resizable-horizontal", style={"display": "flex", "width": "100%", "height": "100%"}, children=[
+                # 1. Chat panel on the left
                 html.Div(className="resizable-panel", id="chat-panel", children=[
                     create_chat_layout()
-                ]),
-                # Horizontal resize handle
-                html.Div(className="resize-handle-horizontal"),
-                # Right side: map on top, visualization below
-                html.Div(className="resizable-vertical", children=[
-                    html.Div(className="resizable-panel", id="map-panel", children=[
-                        create_map_layout(assets_folder)
-                    ]),
-                    # Vertical resize handle (for toggling visualization)
-                    html.Div(className="resize-handle-vertical", id="vertical-resize-handle", style={"display": "none"}),
-                    html.Div(className="resizable-panel", id="visualization-panel", children=[
-                        create_visualization_layout()
-                    ],
-                    style={"display": "flex"}),  # Initially hidden
-                ]),
+                ], style={"flex": "0 0 30%"}), # Initial width 30%
+
+                # First Horizontal resize handle
+                html.Div(className="resize-handle-horizontal", id="resize-handle-1"),
+
+                # 2. Visualization panel in the middle
+                html.Div(className="resizable-panel", id="visualization-panel-container", children=[
+                     # Wrap the viz component to control its container's visibility/style
+                    create_visualization_layout()
+                ], style={
+                       "flex": "0 0 0%",  # Start collapsed
+                       "display": "none",
+                       }), # Initial width 0%, initially hidden
+                # Second Horizontal resize handle
+                html.Div(className="resize-handle-horizontal", id="resize-handle-2", style={"display": "flex"}), # Initially shown (or controlled by callback)
+
+                # 3. Map panel on the right
+                html.Div(className="resizable-panel", id="map-panel", children=[
+                    create_map_layout(assets_folder)
+                ], style={"flex": "1 1 30%"}), # Initial width 30% (flex-grow: 1 allows it to take remaining space initially)
             ]),
         ]),
     ],
