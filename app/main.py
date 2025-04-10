@@ -19,6 +19,20 @@ from .api.bounding_box_routes import register_bounding_box_routes
 
 logger = logging.getLogger(__name__)
 
+from dash import DiskcacheManager, CeleryManager
+
+if 'REDIS_URL' in os.environ:
+    # Use Redis & Celery if REDIS_URL set as an env variable
+    from celery import Celery
+    celery_app = Celery(__name__, broker=os.environ['REDIS_URL'], backend=os.environ['REDIS_URL'])
+    background_callback_manager = CeleryManager(celery_app)
+
+else:
+    # Diskcache for non-production apps when developing locally
+    import diskcache
+    cache = diskcache.Cache("./cache")
+    background_callback_manager = DiskcacheManager(cache)
+
 def create_app():
     """Initialize and configure the Dash app."""
     config = load_config()
@@ -27,7 +41,8 @@ def create_app():
     assets_folder = os.path.join(os.path.dirname(__file__), 'assets')
     
     app = DashProxy(transforms=[CycleBreakerTransform()], external_stylesheets=[
-                    dbc.themes.BOOTSTRAP], url_base_pathname=os.getenv("DASH_URL_BASE", None), suppress_callback_exceptions=True)
+                    dbc.themes.BOOTSTRAP], url_base_pathname=os.getenv("DASH_URL_BASE", None), suppress_callback_exceptions=True,
+                    background_callback_manager=background_callback_manager,)
 
     # initial_gdf = polygon_cache.get_polygons('MOD_REG')
     date_ranges_df = get_date_ranges_by_type()

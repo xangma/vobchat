@@ -4,7 +4,7 @@ import os
 from langchain_community.utilities import SQLDatabase
 
 localdb = False
-use_tunnel = False  # New flag for using SSH tunnel
+use_tunnel = True  # New flag for using SSH tunnel
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 

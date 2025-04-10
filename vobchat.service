@@ -8,6 +8,7 @@ Group=yourgroup
 WorkingDirectory=~/repos/vobchat
 # activate a conda environment
 Environment="PATH=/home/youruser/miniconda3/envs/vobchat/bin"
+Environment="REDIS_URL=redis://127.0.0.1:6379"
 ExecStart=gunicorn -c gunicorn.conf.py app:server
 Restart=always
 

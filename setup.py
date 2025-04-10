@@ -29,6 +29,8 @@ setup(
         "dash-leaflet",
         "grandalf",
         "redis",
+        "celery",
+        "diskcache",
     ],
     include_package_data=True,
     classifiers=[
