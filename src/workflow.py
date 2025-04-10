@@ -9,7 +9,7 @@ import pandas as pd
 from typing_extensions import TypedDict
 import logging
 # Constant definitions for themes
-from .utils.constants import UNIT_TYPES, UNIT_THEMES
+from utils.constants import UNIT_TYPES, UNIT_THEMES
 
 # -------------------------------
 # Import Pydantic for data validation and models
@@ -34,8 +34,8 @@ from langchain_core.runnables.graph import MermaidDrawMethod
 # -------------------------------
 # Import local modules (configuration, DB setup, tools, etc.)
 # -------------------------------
-from .config import load_config, get_db
-from .tools import (
+from config import load_config, get_db
+from tools import (
     find_cubes_for_unit_theme,
     find_units_by_postcode,
     find_themes_for_unit,
@@ -43,8 +43,9 @@ from .tools import (
     get_all_themes
 )
 
-from .utils.redis_checkpoint import RedisSaver
-from redis import Redis
+from utils.redis_checkpoint import RedisSaver, AsyncRedisSaver
+from redis.asyncio import Redis
+import asyncio
 
 
 # -------------------------------
@@ -942,7 +943,7 @@ def create_workflow(lg_state):
     try:
         conn = Redis(host="localhost", port=6379, db=0)
         
-        checkpointer = RedisSaver(conn)
+        checkpointer = AsyncRedisSaver(conn)
 
         compiled_workflow = workflow.compile(checkpointer=checkpointer)
         logger.info("Workflow compilation successful.")

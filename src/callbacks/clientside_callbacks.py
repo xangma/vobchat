@@ -3,7 +3,7 @@
 import json
 from dash import Dash, Input, Output, State, ALL, ClientsideFunction, dcc, html
 from dash.dependencies import ALL
-from ..utils.constants import UNIT_TYPES
+from utils.constants import UNIT_TYPES
 
 # Pass constants to JavaScript
 js_unit_types = json.dumps(UNIT_TYPES)

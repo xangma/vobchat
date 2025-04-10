@@ -5,7 +5,7 @@ from dash import html, dcc
 from dash_extensions.javascript import Namespace, assign
 from datetime import datetime
 import json
-from ..utils.constants import UNIT_TYPES
+from utils.constants import UNIT_TYPES
 
 color_dict = {k: v['color'] for k, v in UNIT_TYPES.items()}
 

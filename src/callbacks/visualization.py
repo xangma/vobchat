@@ -7,7 +7,7 @@ import plotly.express as px
 from dash import no_update
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
-from ..tools import get_all_cube_data, get_cube_data # Make sure get_cube_data is imported if used, or remove if not
+from tools import get_all_cube_data, get_cube_data # Make sure get_cube_data is imported if used, or remove if not
 
 # This file contains all the callbacks for data visualization
 def register_visualization_callbacks(app, compiled_workflow):
@@ -40,7 +40,7 @@ def register_visualization_callbacks(app, compiled_workflow):
 
         try:
             config = {"configurable": {"thread_id": thread_id}}
-            state = compiled_workflow.get_state(config)
+            state = compiled_workflow.aget_state(config)
             cubes = place_state.get("cubes", [])
             if not cubes:
                  # Hide both if no cubes

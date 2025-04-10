@@ -2,20 +2,19 @@ import logging, os
 from dash_extensions.enrich import DashProxy, CycleBreakerTransform, ServersideOutputTransform
 import dash_bootstrap_components as dbc
 from dash import html
-from .config import load_config, get_db
-from .workflow import create_workflow, lg_State
-from .tools import get_date_ranges_by_type
-from .stores import create_stores
-from .utils.polygon_cache import polygon_cache
-from .components.chat import create_chat_layout
-from .components.map import create_map_layout
-from .components.visualization import create_visualization_layout
-from .callbacks.chat import register_chat_callbacks
+from workflow import create_workflow, lg_State
+from tools import get_date_ranges_by_type
+from stores import create_stores
+from utils.polygon_cache import polygon_cache
+from components.chat import create_chat_layout
+from components.map import create_map_layout
+from components.visualization import create_visualization_layout
+from callbacks.chat import register_chat_callbacks
 # from .callbacks.map_leaflet import register_map_leaflet_callbacks
-from .callbacks.visualization import register_visualization_callbacks
-from .callbacks.clientside_callbacks import register_clientside_callbacks
-from .api.polygon_routes import register_polygon_routes
-from .api.bounding_box_routes import register_bounding_box_routes
+from callbacks.visualization import register_visualization_callbacks
+from callbacks.clientside_callbacks import register_clientside_callbacks
+from api.polygon_routes import register_polygon_routes
+from api.bounding_box_routes import register_bounding_box_routes
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +22,7 @@ from dash import DiskcacheManager, CeleryManager
 
 if 'REDIS_URL' in os.environ:
     # Use Redis & Celery if REDIS_URL set as an env variable
+    logging.info("Using Redis & Celery for background callbacks.")
     from celery import Celery
     celery_app = Celery(__name__, broker=os.environ['REDIS_URL'], backend=os.environ['REDIS_URL'])
     background_callback_manager = CeleryManager(celery_app)
@@ -35,8 +35,7 @@ else:
 
 def create_app():
     """Initialize and configure the Dash app."""
-    config = load_config()
-    db = get_db(config)
+
 
     assets_folder = os.path.join(os.path.dirname(__file__), 'assets')
     
@@ -81,7 +80,7 @@ def create_app():
     ],
     id="document")
 
-    register_chat_callbacks(app, compiled_workflow)
+    register_chat_callbacks(app, compiled_workflow, background_callback_manager)
     # register_map_leaflet_callbacks(app, date_ranges_df)
     register_clientside_callbacks(app)
     register_visualization_callbacks(app, compiled_workflow)
@@ -94,6 +93,9 @@ def create_app():
 # Create app and expose `server` for Gunicorn
 app = create_app()
 server = app.server
+
+if 'REDIS_URL' in os.environ:
+    app.register_celery_tasks()
 
 if __name__ == "__main__":
     app.run_server(debug=True)

@@ -10,8 +10,8 @@ from shapely.geometry import box
 import pandas as pd
 
 # Import polygon cache and other utilities
-from ..utils.polygon_cache import polygon_cache
-from ..utils.constants import UNIT_TYPES
+from utils.polygon_cache import polygon_cache
+from utils.constants import UNIT_TYPES
 
 logger = logging.getLogger(__name__)
 
