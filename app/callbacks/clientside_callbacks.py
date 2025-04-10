@@ -478,6 +478,8 @@ def register_clientside_callbacks(app: Dash):
                     delete newState.zoom_to_selection;
                     delete newState.programmatic_unit_change_pending;
                     window.dash_clientside.set_props("map-state", {data: newState});
+                    const layer = polygonManagement.findGeoJSONLayer(map);
+                    polygonManagement.refreshLayerStyles(layer, mapState.selected_polygons);
                     console.warn("Client (Cb8 - Fetch/Zoom): Resetting state flags due to missing IDs/unit type.");
                 } catch(e){ console.error("Client (Cb8 - Fetch/Zoom): Error resetting state flags:", e); }
                 return window.dash_clientside.no_update;
