@@ -156,7 +156,7 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                         # Append the AI message to the history
                         full_ai_response += message
                         # create div with full chat history and full_ai_response
-                        final_ai_message_div = html.Div(f"AI: {full_ai_response}", className="mb-2 text-primary")
+                        final_ai_message_div = html.Div(f"{full_ai_response}", className="speech-bubble ai-bubble")
                         # Update the chat display with the new message
                         set_props("chat-display", {"children": history + [final_ai_message_div]}) # Update with the new message
 
@@ -176,8 +176,9 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                 logger.debug({"event": "workflow_state_after_stream", "state_values": final_state_values})
 
                 # Replace placeholder in the final history
-                final_ai_message_div = html.Div(f"AI: {full_ai_response}", className="mb-2 text-primary")
-                history.append(final_ai_message_div) # Add final message
+                if full_ai_response != "":
+                    final_ai_message_div = html.Div(f"{full_ai_response}", className="speech-bubble ai-bubble")
+                    history.append(final_ai_message_div) # Add final message
 
                 buttons_to_render_async = [] # Reset buttons
 
@@ -191,9 +192,9 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                         if interrupt_value:
                             logger.debug({"event": "processing_interrupt", "interrupt_value": interrupt_value})
                             # update the workflow state with the interrupt data
+                            interrupt_message = None
                             await compiled_workflow.aupdate_state(
                                 config=config, values=interrupt_value)
-                            new_history = []
                             # Multiple choice "options" interrupt
                             if interrupt_value.get("options", []):
                                 logger.debug("Interrupt with multiple button options")
@@ -227,15 +228,12 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                                 prompt_text = interrupt_value.get(
                                     "message", "Please choose:")
                                 interrupt_message = html.Div(
-                                    f"AI: {prompt_text}", className="mb-2 text-primary")
+                                    f"{prompt_text}", className="speech-bubble.ai-bubble")
 
                                 # Mark that we are waiting for user selection
                                 app_state_async.update({
                                     "button_options": options,
-                                })
-                                new_history = history[:] + [interrupt_message]
-                                
-
+                                })                                
 
                             # Map selection
                             if interrupt_value.get("current_node") == "select_unit_on_map":
@@ -268,8 +266,7 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                                 prompt_text = interrupt_value.get(
                                     "message")
                                 interrupt_message = html.Div(
-                                    f"AI: {prompt_text}", className="mb-2 text-primary")
-                                new_history = history[:] + [interrupt_message]
+                                    f"{prompt_text}", className="speech-bubble ai-bubble")
                                 app_state_async.update({"show_visualization": True})
 
                             elif interrupt_value.get("assistant_message"):
@@ -277,31 +274,29 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                                 assistant_message = interrupt_value.get(
                                     "message")
                                 interrupt_message = html.Div(
-                                    f"AI: {assistant_message}", className="mb-2 text-primary")
-                                new_history = history[:] + [interrupt_message]
-                            
+                                    f"{assistant_message}", className="speech-bubble ai-bubble")
+
                             # Otherwise it's a "text input" interrupt
                             else:
                                 logger.debug("Text input interrupt")
                                 prompt_text = interrupt_value.get(
                                     "message", "Please provide input.")
                                 interrupt_message = html.Div(
-                                    f"AI: {prompt_text}", className="mb-2 text-primary")
+                                    f"{prompt_text}", className="speech-bubble ai-bubble")
 
                                 if user_input:
                                     # We already have a user input, so we update the node
                                     await compiled_workflow.aupdate_state(
                                         config=config, values={"messages": [("user", user_input)]})
-                                else:
-                                    # We need to prompt the user
-                                    new_history = history[:] + [interrupt_message]
 
                             if interrupt_value.get("current_place_index") is not None:
                                 await compiled_workflow.aupdate_state(
                                     config=config, values={"current_node": interrupt_value['current_node'], "selection_idx": None, "current_place_index": interrupt_value["current_place_index"], "selected_place_g_places": interrupt_value.get("selected_place_g_places"), "selected_place_g_units": interrupt_value.get("selected_place_g_units"), "selected_place_g_unit_types": interrupt_value.get("selected_place_g_unit_types")})
-                        
-                            if new_history:
-                                history = new_history
+
+                            if hasattr(interrupt_message, "children"):
+                                if interrupt_message.children is not None and interrupt_message.children != "":
+                                    # Add the interrupt message to the chat history
+                                    history.append(interrupt_message)
             
                 # Return the final computed states from the async function
                 return history, app_state_async, map_state_async, place_state_async, buttons_to_render_async
@@ -347,9 +342,10 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
        # Add user message immediately if sent (Ensure this doesn't happen on retrigger)
         if user_input and user_input.strip() and "send-button" in ctx_trigger and not is_retrigger_event:
              # Only add user message if it's from the send button, not a retrigger
-             chat_history.append(html.Div(f"You: {user_input}", className="mb-2"))
+             chat_history.append(html.Div(f"You: {user_input}", className="speech-bubble user-bubble"))
              # Avoid set_props here if it causes issues with background callback progress handling
              # Let the async part handle displaying history updates.
+             set_props("chat-display", {"children": chat_history})
 
         # Thread ID and Config setup
         if not thread_id:
