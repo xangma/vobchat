@@ -2,6 +2,7 @@
 import pandas as pd
 import json
 import io
+import asyncio
 import plotly.graph_objects as go
 import plotly.express as px
 from dash import no_update
@@ -40,7 +41,7 @@ def register_visualization_callbacks(app, compiled_workflow):
 
         try:
             config = {"configurable": {"thread_id": thread_id}}
-            state = compiled_workflow.aget_state(config)
+            state = asyncio.run(compiled_workflow.aget_state(config))
             cubes = place_state.get("cubes", [])
             if not cubes:
                  # Hide both if no cubes
