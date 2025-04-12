@@ -31,6 +31,8 @@ setup(
         "redis",
         "celery",
         "diskcache",
+        "dash[diskcache]",
+        "dash[celery]",
     ],
     include_package_data=True,
     classifiers=[

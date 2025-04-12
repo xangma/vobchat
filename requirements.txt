@@ -19,3 +19,5 @@ grandalf
 redis
 celery
 diskcache
+dash[diskcache]
+dash[celery]
