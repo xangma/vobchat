@@ -894,9 +894,39 @@ def get_place_themes_handler(state: lg_State) -> lg_State:
         - If only one theme is available, it selects it automatically.
     - Stores the finally selected theme as JSON in `selected_theme`.
     """
-    logger.info("Handling theme selection...")
+    logger.info("Handling theme selection…")
     state["current_node"] = "get_place_themes_handler"
-    logger.debug({"current_state": state})
+
+    # keep any existing choice
+    current_theme_json = state.get("selected_theme")
+    if current_theme_json:
+        try:
+            cur_df   = pd.read_json(io.StringIO(current_theme_json), orient="records")
+            cur_code = cur_df["ent_id"].iat[0]
+        except Exception:
+            cur_code = None
+    else:
+        cur_code = None
+
+    # ------------------------------------------------------------------
+    # load the freshly fetched theme list for **all** selected units
+    # ------------------------------------------------------------------
+    json_themes = state.get("selected_place_themes")
+    if not json_themes:
+        return state                               # nothing to do
+
+    available_df = pd.read_json(io.StringIO(json_themes), orient="records")
+    if available_df.empty:
+        return state
+
+    # if we already have a theme and it is still in the list → done
+    if cur_code and cur_code in available_df["ent_id"].values:
+        theme_lbl = cur_df["labl"].iat[0]
+        logger.info(f"Theme ‘{theme_lbl}’ still valid – keeping it.")
+        state["messages"].append(
+            AIMessage(content=f"Keeping previously selected theme “{theme_lbl}”.")
+        )
+        return state 
 
     # Clear any previous theme selection before proceeding.
     state["selected_theme"] = None

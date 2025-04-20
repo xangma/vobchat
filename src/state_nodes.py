@@ -117,12 +117,13 @@ def ListThemesForSelection_node(state: lg_State):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def ListAllThemes_node(state: lg_State):
-    df = pd.read_json(io.StringIO(get_all_themes()))
+    df = pd.read_json(io.StringIO(get_all_themes("")), orient="records")
     if df.empty:
         _append_ai(state, "Theme catalogue appears empty.")
         return state
-    listing = "\n".join(f"• {row.labl} ({row.ent_id})" for _, row in df.head(30).iterrows())
-    _append_ai(state, listing + "\n… first 30 shown. Use keywords to narrow.")
+    listing = "\n".join(f"• {row.labl} ({row.ent_id})" for _, row in df.iterrows())
+    _append_ai(state, listing + "\n… all themes shown. Use keywords to narrow.")
+    state["last_intent_payload"] = {}
     return state
 
 # ─────────────────────────────────────────────────────────────────────────────
