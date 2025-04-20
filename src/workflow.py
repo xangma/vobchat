@@ -447,7 +447,7 @@ def process_place_selection(state: lg_State) -> lg_State:
     """
     logger.info("Processing place selection...")
     state["current_node"] = "process_place_selection"
-
+    
     # Load the combined search results DataFrame from the JSON stored in the state.
     try:
         big_df = pd.read_json(io.StringIO(state["multi_place_search_df"]), orient="records")
@@ -488,6 +488,20 @@ def process_place_selection(state: lg_State) -> lg_State:
     # Check if the user has made a selection via an interrupt.
     selection_idx = state.get("selection_idx") # This comes from the frontend callback after button click
 
+    already_waiting = (
+        selection_idx is None               # user hasn’t answered
+        and state.get("options")            # options are already stored
+        and state.get("current_node") == "process_place_selection"
+    )
+
+    if already_waiting:
+        logger.debug("Already waiting for a place choice – skip duplicate prompt.")
+        interrupt(value={
+            "options": state["options"],            # keep the buttons alive
+            "current_node": "process_place_selection",
+            "current_place_index": state.get("current_place_index", 0),
+        })
+
     # If there's more than one match AND the user hasn't made a selection yet, interrupt.
     if selection_idx is None and len(sub_df) > 1:
         logger.info(f"Multiple matches for '{current_place_name}'; prompting user selection.")
@@ -524,13 +538,15 @@ def process_place_selection(state: lg_State) -> lg_State:
     chosen_row_df = None
     if selection_idx is not None: # Check if selection_idx has a value (i.e. user selected)
         try:
-             # Select the row corresponding to the user's choice index.
-             chosen_row_df = pd.DataFrame([sub_df.loc[int(selection_idx)]])
-             logger.info(f"User selected index {selection_idx}.")
+            # Select the row corresponding to the user's choice index.
+            chosen_row_df = pd.DataFrame([sub_df.loc[int(selection_idx)]])
+            state["options"] = []
+            state["selection_idx"] = None
+            logger.info(f"User selected index {selection_idx}.")
         except (KeyError, ValueError, IndexError):
-             logger.error(f"Invalid selection_idx={selection_idx} received for place selection. Defaulting to first option.")
-             # Fallback to the first row if the index is invalid
-             chosen_row_df = pd.DataFrame([sub_df.iloc[0]])
+            logger.error(f"Invalid selection_idx={selection_idx} received for place selection. Defaulting to first option.")
+            # Fallback to the first row if the index is invalid
+            chosen_row_df = pd.DataFrame([sub_df.iloc[0]])
     elif not sub_df.empty: # If no selection needed (only 1 result) or fallback needed
         chosen_row_df = pd.DataFrame([sub_df.iloc[0]])
         logger.info("Defaulting to the first/only place match.")
@@ -641,6 +657,18 @@ def process_unit_selection(state: lg_State) -> lg_State:
     # Check again for user selection via interrupt.
     selection_idx = state.get("selection_idx")
 
+    already_waiting = (
+        selection_idx is None               # user hasn’t answered
+        and state.get("options")            # options are already stored
+        and state.get("current_node") == "process_unit_selection"
+    )
+
+    if already_waiting:
+        logger.debug("Already waiting for a unit choice – skip duplicate prompt.")
+        interrupt(value={
+            "options": state["options"],            # keep the buttons alive
+        })
+
     # If there's more than one unit option AND the user hasn't selected yet, interrupt.
     if selection_idx is None and len(unit_df) > 1:
         logger.info(f"Multiple unit options found for '{current_place_name}'; prompting user selection.")
@@ -675,6 +703,8 @@ def process_unit_selection(state: lg_State) -> lg_State:
         try:
             selected_unit_row = unit_df.iloc[int(selection_idx)]
             logger.info(f"User selected unit index {selection_idx}.")
+            state["options"] = []
+            state["selection_idx"] = None
         except (ValueError, IndexError):
             logger.error(f"Invalid selection_idx={selection_idx} received for unit selection. Defaulting to first option.")
             selected_unit_row = unit_df.iloc[0]
@@ -928,6 +958,21 @@ def get_place_themes_handler(state: lg_State) -> lg_State:
 
     # --- Attempt 2: Use user selection if interrupt occurred ---
     selection_idx = state.get("selection_idx")
+    
+    already_waiting = (
+        selection_idx is None               # user hasn’t answered
+        and state.get("options")            # options are already stored
+        and state.get("current_node") == "get_place_themes_handler"
+    )
+
+    if already_waiting:
+        logger.debug("Already waiting for a theme choice – skip duplicate prompt.")
+        interrupt(value={
+            "options": state["options"],            # keep the buttons alive
+            "current_node": "get_place_themes_handler",
+            "current_place_index": state.get("current_place_index", 0),
+        })
+    
     if not theme_selected and selection_idx is not None:
         logger.info(f"Processing user theme selection with index: {selection_idx}")
         try:
@@ -939,6 +984,8 @@ def get_place_themes_handler(state: lg_State) -> lg_State:
             logger.info(f"Theme selected by user: {theme_label} ({theme_code})")
             state["messages"].append(AIMessage(content=f"Okay, proceeding with theme: '{theme_label}'."))
             theme_selected = True
+            state["options"] = []
+            state["selection_idx"] = None
         except (ValueError, IndexError):
             logger.error(f"Invalid selection_idx={selection_idx} received for theme selection.")
             state["messages"].append(AIMessage(content="Sorry, that selection wasn't valid. Please try again:"))
