@@ -4,6 +4,7 @@
 # Import standard libraries and type hints
 # -------------------------------
 from typing import Annotated, Optional, List
+import io
 import re  # For regular expression operations (e.g., postcode validation)
 import pandas as pd  # For data manipulation, primarily with database results
 from typing_extensions import TypedDict  # For defining the structure of the workflow state
@@ -48,7 +49,15 @@ from tools import (  # Custom functions to interact with the database/data
 from utils.redis_checkpoint import RedisSaver, AsyncRedisSaver
 from redis.asyncio import Redis  # Asynchronous Redis client
 import asyncio  # For running asynchronous operations (like Redis interaction)
-
+from state_nodes import (
+    ShowState_node, ListThemesForSelection_node,
+    ListAllThemes_node, Reset_node,
+    AddPlace_node, RemovePlace_node,
+    AddTheme_node, RemoveTheme_node,
+)
+from agent_routing import agent_node  # Main entry point for user interactions
+from intent_handling import AssistantIntent  # Enum for routing intents
+from state_schema import lg_State  # TypedDict for the workflow state
 
 # -------------------------------
 # Set up logging for debugging and informational messages
@@ -107,58 +116,6 @@ postcode_regex = (
     r"([A-Za-z][A-Ha-hJ-Yj-y][0-9][A-Za-z]?))"  # AA9A, AA9?
     r"))\s?[0-9][A-Za-z]{2})"  # Optional space + 9AA
 )
-
-# ----------------------------------------------------------------------------------------
-# STATE DEFINITION
-# ----------------------------------------------------------------------------------------
-
-# Define the structure of the state object that is passed between nodes in the workflow graph.
-# TypedDict provides type hints for the dictionary keys.
-class lg_State(TypedDict):
-    # `messages`: Stores the conversation history. `add_messages` ensures new messages are appended.
-    messages: Annotated[List[AnyMessage], add_messages]
-    # `selection_idx`: Stores the index of the user's choice when buttons are presented (via interrupt). Cleared after use.
-    selection_idx: Optional[int]
-    # `selected_place`: JSON string representation of the DB row for the initially chosen place (often via postcode). Deprecated by multi-place logic?
-    selected_place: Optional[str]
-    # `selected_place_g_places`: List of unique database identifiers (g_place) for the places selected by the user or workflow.
-    selected_place_g_places: List[Optional[int]]
-    # `selected_place_g_units`: List of unique database identifiers (g_unit) for the geographical units selected for the chosen places.
-    selected_place_g_units: List[Optional[int]]
-    # `selected_place_g_unit_types`: List of unit type codes (e.g., 'LSOA', 'MOD_DIST') corresponding to the selected units.
-    selected_place_g_unit_types: List[Optional[str]]
-    # `selected_place_themes`: JSON string representation of a DataFrame containing themes available for the selected place(s)/unit(s).
-    selected_place_themes: Optional[str]
-    # `selected_theme`: JSON string representation of the specific theme selected by the user or workflow.
-    selected_theme: Optional[str]
-    # `is_postcode`: Boolean flag indicating if a valid UK postcode was detected in the user input.
-    is_postcode: bool
-    # `extracted_postcode`: The validated UK postcode string extracted from the user input.
-    extracted_postcode: Optional[str]
-    # `extracted_theme`: The theme name or description extracted from the initial user query (if any).
-    extracted_theme: Optional[str]
-    # `extracted_place_names`: List of place names extracted from the initial user query.
-    extracted_place_names: List[str]
-    # `extracted_counties`: List of county names/codes extracted from the initial user query (matching places).
-    extracted_counties: List[str]
-    # `current_place_index`: Tracks which place from `extracted_place_names` is currently being processed in the multi-place flow.
-    current_place_index: int
-    # `min_year`: Optional start year for data filtering, extracted from the user query.
-    min_year: Optional[int]
-    # `max_year`: Optional end year for data filtering, extracted from the user query.
-    max_year: Optional[int]
-    # `selected_polygons`: List of unit IDs (g_unit) selected by the user interacting with the map (frontend updates this).
-    selected_polygons: Optional[List[int]]
-    # `selected_polygons_unit_types`: List of unit types corresponding to the map-selected polygons.
-    selected_polygons_unit_types: Optional[List[str]]
-    # `interrupt_state`: Boolean flag set to True by a node when it issues an interrupt, signalling the workflow should pause. Often checked in frontend/callback.
-    interrupt_state: bool
-    # `interrupt_data`: Dictionary containing data needed by the frontend to handle an interrupt (e.g., button options, messages). Set by `interrupt()`.
-    interrupt_data: Optional[dict]
-    # `multi_place_search_df`: JSON string representation of a DataFrame holding combined search results for all extracted place names.
-    multi_place_search_df: Optional[str]
-    # `current_node`: Stores the name of the node that is currently executing or has just finished (useful for resuming after interrupts). Set within nodes.
-    current_node: Optional[str]
 
 # ----------------------------------------------------------------------------------------
 # CHAINS AND PYDANTIC MODELS FOR STRUCTURED OUTPUT
@@ -247,92 +204,92 @@ choose_theme_chain = choose_theme_prompt | model.with_structured_output(
 # or a Command to control graph flow (e.g., Command(goto=...)).
 
 
-def agent_node(state: lg_State) -> lg_State:
-    """
-    A general-purpose node that invokes the LLM assistant for conversational responses or clarifications.
-    It's often used as a fallback or when the workflow needs the LLM's reasoning capabilities beyond structured tasks.
-    It checks the last message and, if it's from the user, invokes the LLM with context.
-    """
-    logger.info("Agent node: consulting assistant...")
-    if state["messages"]:
-        last_msg = state["messages"][-1]
-        # Only invoke the LLM if the last message was from the user (not the AI)
-        if isinstance(last_msg, HumanMessage):
-            query = last_msg.content.strip()
-            logger.info(f"Assistant query detected: {query}")
-            # Invoke the LLM with a system message providing context about the application and the current state.
-            response = model.invoke([
-                    SystemMessage(
-                        content=f"""
-                        You are an expert assistant integrated within the DDME prototype application—a dashboard that combines a chat interface, data retrieval, and dynamic visualization(maps and charts). The overall aim of the program is to engage users in conversation, extract relevant information from their queries(such as place names, postcodes, themes, and year ranges), retrieve corresponding data from a database, and then display this data interactively on maps and visualizations.
+# def agent_node(state: lg_State) -> lg_State:
+#     """
+#     A general-purpose node that invokes the LLM assistant for conversational responses or clarifications.
+#     It's often used as a fallback or when the workflow needs the LLM's reasoning capabilities beyond structured tasks.
+#     It checks the last message and, if it's from the user, invokes the LLM with context.
+#     """
+#     logger.info("Agent node: consulting assistant...")
+#     if state["messages"]:
+#         last_msg = state["messages"][-1]
+#         # Only invoke the LLM if the last message was from the user (not the AI)
+#         if isinstance(last_msg, HumanMessage):
+#             query = last_msg.content.strip()
+#             logger.info(f"Assistant query detected: {query}")
+#             # Invoke the LLM with a system message providing context about the application and the current state.
+#             response = model.invoke([
+#                     SystemMessage(
+#                         content=f"""
+#                         You are an expert assistant integrated within the DDME prototype application—a dashboard that combines a chat interface, data retrieval, and dynamic visualization(maps and charts). The overall aim of the program is to engage users in conversation, extract relevant information from their queries(such as place names, postcodes, themes, and year ranges), retrieve corresponding data from a database, and then display this data interactively on maps and visualizations.
 
-                        The application is structured as a workflow graph with multiple nodes, each responsible for a specific part of the process. You have full access to the global state variable `state`, which tracks conversation history, user selections, and workflow progress.
+#                         The application is structured as a workflow graph with multiple nodes, each responsible for a specific part of the process. You have full access to the global state variable `state`, which tracks conversation history, user selections, and workflow progress.
 
-                        **Important Points for Your Assistance:**
-                        - **State Awareness:** The `state` variable is central to the application’s logic, tracking everything from user messages to selections and workflow progress.
-                        - **User Interruptions:** Several nodes can raise a `interrupt` to pause the automated flow and request user input. When advising on or debugging the system, consider how these interruptions are managed and how user responses update the `state`. The data relevant to the last interrupt (this could be button options presented to the user etc.) is stored in `state['interrupt_data']`.
-                        - **Data Flow:** Each node builds on the previous ones—starting from query extraction to data retrieval and visualization. Understanding this flow is key to providing accurate recommendations.
+#                         **Important Points for Your Assistance:**
+#                         - **State Awareness:** The `state` variable is central to the application’s logic, tracking everything from user messages to selections and workflow progress.
+#                         - **User Interruptions:** Several nodes can raise a `interrupt` to pause the automated flow and request user input. When advising on or debugging the system, consider how these interruptions are managed and how user responses update the `state`. 
+#                         - **Data Flow:** Each node builds on the previous ones—starting from query extraction to data retrieval and visualization. Understanding this flow is key to providing accurate recommendations.
 
-                        Your role is to use this context and the current `state` to offer detailed, actionable insights that help maintain a smooth conversation flow, correctly process user queries, and enhance the overall user experience.
+#                         Your role is to use this context and the current `state` to offer detailed, actionable insights that help maintain a smooth conversation flow, correctly process user queries, and enhance the overall user experience.
 
-                        Here is the current state of the application:
-                        {state}
-                        """),
-                HumanMessage(content=query) # Pass the user's query
-            ])
+#                         Here is the current state of the application:
+#                         {state}
+#                         """),
+#                 HumanMessage(content=query) # Pass the user's query
+#             ])
 
-            # Append the LLM's response to the message history in the state.
-            state["messages"].append(AIMessage(content=response.content))
-    # Return the potentially updated state.
-    return state
+#             # Append the LLM's response to the message history in the state.
+#             state["messages"].append(AIMessage(content=response.content))
+#     # Return the potentially updated state.
+#     return state
 
 
-def extract_initial_query_node(state: lg_State):
-    """
-    Uses the `initial_query_chain` (LLM with structured output) to extract places, counties,
-    theme, and year range from the latest user message. Updates the state with these findings.
-    Returns a Command to branch execution based on whether places were found.
-    """
-    logger.info("Extracting variables from the initial user query...")
-    # Record the current node name in the state (useful for resuming after interrupts)
-    state["current_node"] = "extract_initial_query_node"
-    # Get the last user message content.
-    user_message = state["messages"][-1].content if state["messages"] else ""
-    try:
-        # Invoke the extraction chain.
-        extraction: UserQuery = initial_query_chain.invoke({"text": user_message})
-        logger.debug(f"Extraction result: {extraction}")
-        # Update state with extracted information from the Pydantic model.
-        state["extracted_place_names"] = extraction.places
-        state["extracted_counties"] = extraction.counties
-        state["extracted_theme"] = extraction.theme
-        state["min_year"] = extraction.min_year
-        state["max_year"] = extraction.max_year
-    except Exception as e:
-        # Log errors during extraction.
-        logger.error("Error during initial query extraction", exc_info=True)
-        # Optionally add an error message for the user?
-        # state["messages"].append(AIMessage(content="Sorry, I had trouble understanding that request."))
+# def extract_initial_query_node(state: lg_State):
+#     """
+#     Uses the `initial_query_chain` (LLM with structured output) to extract places, counties,
+#     theme, and year range from the latest user message. Updates the state with these findings.
+#     Returns a Command to branch execution based on whether places were found.
+#     """
+#     logger.info("Extracting variables from the initial user query...")
+#     # Record the current node name in the state (useful for resuming after interrupts)
+#     state["current_node"] = "extract_initial_query_node"
+#     # Get the last user message content.
+#     user_message = state["messages"][-1].content if state["messages"] else ""
+#     try:
+#         # Invoke the extraction chain.
+#         extraction: UserQuery = initial_query_chain.invoke({"text": user_message})
+#         logger.debug(f"Extraction result: {extraction}")
+#         # Update state with extracted information from the Pydantic model.
+#         state["extracted_place_names"] = extraction.places
+#         state["extracted_counties"] = extraction.counties
+#         state["extracted_theme"] = extraction.theme
+#         state["min_year"] = extraction.min_year
+#         state["max_year"] = extraction.max_year
+#     except Exception as e:
+#         # Log errors during extraction.
+#         logger.error("Error during initial query extraction", exc_info=True)
+#         # Optionally add an error message for the user?
+#         # state["messages"].append(AIMessage(content="Sorry, I had trouble understanding that request."))
 
-    # If place names were successfully extracted, proceed to the multi-place tool call.
-    if state.get("extracted_place_names"):
-        # Use Command to explicitly route to the next node and pass updated state values.
-        return Command(
-            goto="multi_place_tool_call",
-            update={ # Pass extracted values explicitly in the update part of the command
-                "extracted_place_names": state["extracted_place_names"],
-                "extracted_counties": state["extracted_counties"],
-                "extracted_theme": state["extracted_theme"],
-                "min_year": state["min_year"],
-                "max_year": state["max_year"]
-            }
-        )
-    else:
-        # If no places were extracted, go to the general agent node for clarification.
-        return Command(
-            goto="agent_node",
-            update={"messages": state["messages"]} # Pass updated messages
-        )
+#     # If place names were successfully extracted, proceed to the multi-place tool call.
+#     if state.get("extracted_place_names"):
+#         # Use Command to explicitly route to the next node and pass updated state values.
+#         return Command(
+#             goto="multi_place_tool_call",
+#             update={ # Pass extracted values explicitly in the update part of the command
+#                 "extracted_place_names": state["extracted_place_names"],
+#                 "extracted_counties": state["extracted_counties"],
+#                 "extracted_theme": state["extracted_theme"],
+#                 "min_year": state["min_year"],
+#                 "max_year": state["max_year"]
+#             }
+#         )
+#     else:
+#         # If no places were extracted, go to the general agent node for clarification.
+#         return Command(
+#             goto="agent_node",
+#             update={"messages": state["messages"]} # Pass updated messages
+#         )
 
 
 def validate_user_input(state: lg_State) -> lg_State:
@@ -447,8 +404,8 @@ def multi_place_tool_call(state: lg_State) -> lg_State:
         county = counties[i] if i < len(counties) else "0" # Handle cases where county list is shorter
         try:
             # Call the database tool to find matches for the place name (and county).
-            df = find_places_by_name(
-                {"place_name": place_name, "county": county})
+            df = pd.read_json(io.StringIO(find_places_by_name(
+                {"place_name": place_name, "county": county})), orient="records")
             # Add a column to the results indicating which original requested place this result corresponds to.
             df["requested_place_index"] = i
             # Add the resulting DataFrame to the list.
@@ -475,7 +432,7 @@ def multi_place_tool_call(state: lg_State) -> lg_State:
     # 'orient="records"' stores it as a list of dictionaries, which is often convenient.
     state["multi_place_search_df"] = big_df.to_json(orient="records")
     # Initialize the index for processing these places one by one.
-    state["current_place_index"] = 0
+    # state["current_place_index"] = 0
     logger.debug(f"Combined place search results stored for {len(place_names)} places.")
     return state
 
@@ -493,7 +450,7 @@ def process_place_selection(state: lg_State) -> lg_State:
 
     # Load the combined search results DataFrame from the JSON stored in the state.
     try:
-        big_df = pd.read_json(state["multi_place_search_df"], orient="records")
+        big_df = pd.read_json(io.StringIO(state["multi_place_search_df"]), orient="records")
     except ValueError: # Handle case where JSON might be invalid or empty
         logger.error("Could not read multi_place_search_df from state.")
         state["messages"].append(AIMessage(content="Error loading place search results."))
@@ -549,7 +506,6 @@ def process_place_selection(state: lg_State) -> lg_State:
         interrupt(value={
             "message": f"Multiple places found matching '{current_place_name}'. Please choose the correct one:", # Prompt message
             "options": button_options, # List of button definitions
-            "interrupt_state": True, # Flag indicating it's an active interrupt
             # Pass relevant current state context needed if resuming *this* node after selection
             "current_place_index": current_index,
             "selected_place_g_places": state.get("selected_place_g_places", []),
@@ -600,11 +556,6 @@ def process_place_selection(state: lg_State) -> lg_State:
         # Increment index to avoid getting stuck? Or route to agent?
         state["current_place_index"] = current_index + 1
 
-
-    # VERY IMPORTANT: Clear the selection index *after* it has been used
-    # so it doesn't interfere with subsequent selections in this node or others.
-    state["selection_idx"] = None
-
     # NOTE: We do NOT increment current_place_index here if a place was successfully selected.
     # The flow moves to the *next node* (process_unit_selection) for the *same place index*.
     # The index is only incremented if no match was found, or after unit processing is complete.
@@ -627,7 +578,7 @@ def process_unit_selection(state: lg_State) -> lg_State:
 
     # Load the search results again.
     try:
-        big_df = pd.read_json(state["multi_place_search_df"], orient="records")
+        big_df = pd.read_json(io.StringIO(state["multi_place_search_df"]), orient="records")
     except ValueError:
         logger.error("Could not read multi_place_search_df from state.")
         state["messages"].append(AIMessage(content="Error loading place search results for unit selection."))
@@ -653,10 +604,7 @@ def process_unit_selection(state: lg_State) -> lg_State:
     # Filter the big DataFrame first by the request index, then by the chosen g_place ID.
     # This isolates the row(s) corresponding to the specific place instance selected previously.
     # Note: In the DB schema used, g_unit/g_unit_type might be lists within the row if a place maps to multiple units.
-    chosen_rows = big_df[
-        (big_df["requested_place_index"] == current_index) &
-        (big_df["g_place"] == chosen_g_place)
-    ].reset_index(drop=True)
+    chosen_rows = big_df[big_df["g_place"] == chosen_g_place].reset_index(drop=True)
 
     if chosen_rows.empty:
         logger.error(f"Consistency Error: No matching rows found in multi_place_search_df for selected g_place {chosen_g_place} at index {current_index}.")
@@ -712,7 +660,6 @@ def process_unit_selection(state: lg_State) -> lg_State:
         interrupt(value={
             "message": f"Several types of geographical units are available for '{current_place_name}'. Please choose one:",
             "options": button_options,
-            "interrupt_state": True,
              # Pass context again
             "selected_place_g_places": state.get("selected_place_g_places", []),
             "selected_place_g_units": state.get("selected_place_g_units", []),
@@ -768,9 +715,6 @@ def process_unit_selection(state: lg_State) -> lg_State:
     state["current_place_index"] = current_index + 1
     logger.info(f"Incremented current_place_index to {state['current_place_index']}")
 
-    # Clear the selection index now that it has been used for this node.
-    state["selection_idx"] = None
-
     return state
 
 
@@ -818,12 +762,11 @@ def select_unit_on_map(state: lg_State) -> lg_State:
             # Issue an interrupt to signal the frontend.
             interrupt(value={
                  # Message might be displayed or just used internally by frontend.
-                "message": f"Please confirm or select the area for '{state['extracted_place_names'][last_processed_index]}' on the map.",
+                # "message": f"Please confirm or select the area for '{state['extracted_place_names'][last_processed_index]}' on the map.",
                  # Pass the current state of selections for context.
                 "selected_place_g_places": state.get("selected_place_g_places", []),
                 "selected_place_g_units": state.get("selected_place_g_units", []),
                 "selected_place_g_unit_types": state.get("selected_place_g_unit_types", []),
-                "interrupt_state": True, # Mark as active interrupt
                  # Pass index and node name for potential resume logic.
                 "current_place_index": state.get("current_place_index"), # Pass the *incremented* index
                 "current_node": "select_unit_on_map"
@@ -870,7 +813,7 @@ def get_place_themes_node(state: lg_State) -> lg_State:
     for unit_id in all_selected_unit_ids:
         try:
             # Call the database tool to get themes available for this specific unit.
-            themes_for_unit_df = find_themes_for_unit(str(unit_id))
+            themes_for_unit_df = pd.read_json(io.StringIO(find_themes_for_unit(str(unit_id))), orient="records")
             # Add the DataFrame to the list if it's not empty.
             if not themes_for_unit_df.empty:
                 themes_df_list.append(themes_for_unit_df)
@@ -928,7 +871,6 @@ def get_place_themes_handler(state: lg_State) -> lg_State:
     # Clear any previous theme selection before proceeding.
     state["selected_theme"] = None
     # Also clear interrupt flag possibly set by previous nodes if not handled.
-    state["interrupt_state"] = False
 
     # Check if themes were successfully retrieved in the previous node.
     json_themes = state.get("selected_place_themes")
@@ -937,121 +879,105 @@ def get_place_themes_handler(state: lg_State) -> lg_State:
         # No themes found message already added in previous node.
         return state # Nothing to do here.
 
-    try:
-        # Load the available themes from JSON into a DataFrame.
-        available_themes_df = pd.read_json(json_themes, orient="records")
-        logger.debug({"available_themes_df": available_themes_df})
+    # Load the available themes from JSON into a DataFrame.
+    available_themes_df = pd.read_json(io.StringIO(json_themes), orient="records")
+    logger.debug({"available_themes_df": available_themes_df})
 
-        if available_themes_df.empty:
-            logger.warning("Loaded theme data is empty.")
-            # Message likely added previously.
-            return state
+    if available_themes_df.empty:
+        logger.warning("Loaded theme data is empty.")
+        # Message likely added previously.
+        return state
 
-        theme_selected = False # Flag to track if a theme has been selected
+    theme_selected = False # Flag to track if a theme has been selected
 
-        # --- Attempt 1: Use LLM if an initial theme was extracted ---
-        extracted_theme_query = state.get("extracted_theme")
-        # Also check if the LLM hasn't already made this choice in a previous loop (if applicable)
-        if extracted_theme_query and not state.get("selected_theme"):
-            logger.info(f"Attempting to match extracted theme query: '{extracted_theme_query}' using LLM.")
-            # Get the original user query that mentioned the theme. Use first message or concatenate?
-            # Assuming first message is sufficient context here.
-            user_question = state["messages"][0].content if state["messages"] else extracted_theme_query
-            try:
-                # Invoke the theme selection chain.
-                decision = choose_theme_chain.invoke({"question": user_question})
-                llm_theme_code = decision.theme_code.strip()
-                logger.info(f"LLM suggested theme code: {llm_theme_code}")
+    # --- Attempt 1: Use LLM if an initial theme was extracted ---
+    extracted_theme_query = state.get("extracted_theme")
+    # Also check if the LLM hasn't already made this choice in a previous loop (if applicable)
+    if extracted_theme_query and not state.get("selected_theme"):
+        logger.info(f"Attempting to match extracted theme query: '{extracted_theme_query}' using LLM.")
+        # Get the original user query that mentioned the theme. Use first message or concatenate?
+        # Assuming first message is sufficient context here.
+        user_question = state["messages"][0].content if state["messages"] else extracted_theme_query
+        try:
+            # Invoke the theme selection chain.
+            decision = choose_theme_chain.invoke({"question": user_question})
+            llm_theme_code = decision.theme_code.strip()
+            logger.info(f"LLM suggested theme code: {llm_theme_code}")
 
-                # Verify that the LLM's chosen theme code is actually available for the selected place(s).
-                available_theme_codes = available_themes_df["ent_id"].unique().tolist()
-                if llm_theme_code in available_theme_codes:
-                    # Filter the DataFrame to get the row for the selected theme.
-                    selected_theme_df = available_themes_df[available_themes_df["ent_id"] == llm_theme_code].iloc[0:1]
-                    # Store the selected theme DataFrame as JSON.
-                    state["selected_theme"] = selected_theme_df.to_json(orient="records")
-                    theme_label = selected_theme_df['labl'].values[0]
-                    logger.info(f"Theme automatically selected based on initial query: {theme_label} ({llm_theme_code})")
-                    state["messages"].append(AIMessage(content=f"Okay, looking for data on '{theme_label}'."))
-                    theme_selected = True
-                else:
-                    logger.info(f"LLM-suggested theme '{llm_theme_code}' is not available in the retrieved themes for this area. Falling back.")
-                    # Add message to user? "I couldn't find '{llm_theme_code}' data, please choose from available options:"
-                    state["messages"].append(AIMessage(content=f"I couldn't find specific data matching '{extracted_theme_query}' for this area. Please choose from the available themes:"))
-
-
-            except Exception as llm_exc:
-                logger.error(f"Error during LLM theme decision: {llm_exc}", exc_info=True)
-                state["messages"].append(AIMessage(content="Sorry, I had trouble choosing a theme automatically. Please select one:"))
-                # Fall through to manual selection below.
-
-        # --- Attempt 2: Use user selection if interrupt occurred ---
-        selection_idx = state.get("selection_idx")
-        if not theme_selected and selection_idx is not None:
-            logger.info(f"Processing user theme selection with index: {selection_idx}")
-            try:
-                # Select the theme row based on the index provided by the user's button click.
-                selected_theme_df = available_themes_df.iloc[[int(selection_idx)]] # Use double brackets to keep DataFrame structure
+            # Verify that the LLM's chosen theme code is actually available for the selected place(s).
+            available_theme_codes = available_themes_df["ent_id"].unique().tolist()
+            if llm_theme_code in available_theme_codes:
+                # Filter the DataFrame to get the row for the selected theme.
+                selected_theme_df = available_themes_df[available_themes_df["ent_id"] == llm_theme_code].iloc[0:1]
+                # Store the selected theme DataFrame as JSON.
                 state["selected_theme"] = selected_theme_df.to_json(orient="records")
                 theme_label = selected_theme_df['labl'].values[0]
-                theme_code = selected_theme_df['ent_id'].values[0]
-                logger.info(f"Theme selected by user: {theme_label} ({theme_code})")
-                state["messages"].append(AIMessage(content=f"Okay, proceeding with theme: '{theme_label}'."))
+                logger.info(f"Theme automatically selected based on initial query: {theme_label} ({llm_theme_code})")
+                state["messages"].append(AIMessage(content=f"Okay, looking for data on '{theme_label}'."))
                 theme_selected = True
-            except (ValueError, IndexError):
-                logger.error(f"Invalid selection_idx={selection_idx} received for theme selection.")
-                state["messages"].append(AIMessage(content="Sorry, that selection wasn't valid. Please try again:"))
-                # selection_idx should be cleared later, so next run might re-interrupt.
+            else:
+                logger.info(f"LLM-suggested theme '{llm_theme_code}' is not available in the retrieved themes for this area. Falling back.")
+                # Add message to user? "I couldn't find '{llm_theme_code}' data, please choose from available options:"
+                state["messages"].append(AIMessage(content=f"I couldn't find specific data matching '{extracted_theme_query}' for this area. Please choose from the available themes:"))
 
 
-        # --- Attempt 3: Interrupt if multiple options and no selection yet ---
-        if not theme_selected and len(available_themes_df) > 1:
-            logger.info("Multiple themes available and none selected yet. Prompting user.")
-            # Prepare button options for the user.
-            button_options = [{
-                "option_type": "theme", # Type identifier
-                "label": row["labl"], # Theme label for the button text
-                'color': '#333', # Optional styling
-                "value": index # Send back the DataFrame index as the value
-                }
-                for index, row in available_themes_df.iterrows() # Create button for each available theme
-            ]
-            logger.debug({"theme_button_options": button_options})
-            # Issue the interrupt.
-            interrupt(value={
-                "message": "Please select a statistical theme for the chosen area(s):",
-                "options": button_options,
-                "interrupt_state": True,
-                # Pass context - index less relevant here, but node name is useful
-                "current_place_index": state.get("current_place_index"),
-                "current_node": "get_place_themes_handler"
-            })
-            # Execution stops here, waits for user selection via button click.
+        except Exception as llm_exc:
+            logger.error(f"Error during LLM theme decision: {llm_exc}", exc_info=True)
+            state["messages"].append(AIMessage(content="Sorry, I had trouble choosing a theme automatically. Please select one:"))
+            # Fall through to manual selection below.
 
-
-        # --- Attempt 4: Auto-select if only one option ---
-        elif not theme_selected and len(available_themes_df) == 1:
-            logger.info("Only one theme available, selecting automatically.")
-            selected_theme_df = available_themes_df.iloc[[0]] # Select the first (only) row
+    # --- Attempt 2: Use user selection if interrupt occurred ---
+    selection_idx = state.get("selection_idx")
+    if not theme_selected and selection_idx is not None:
+        logger.info(f"Processing user theme selection with index: {selection_idx}")
+        try:
+            # Select the theme row based on the index provided by the user's button click.
+            selected_theme_df = available_themes_df.iloc[[int(selection_idx)]] # Use double brackets to keep DataFrame structure
             state["selected_theme"] = selected_theme_df.to_json(orient="records")
             theme_label = selected_theme_df['labl'].values[0]
             theme_code = selected_theme_df['ent_id'].values[0]
-            logger.info(f"Theme automatically selected (only option): {theme_label} ({theme_code})")
-            state["messages"].append(AIMessage(content=f"Found data for theme: '{theme_label}'."))
+            logger.info(f"Theme selected by user: {theme_label} ({theme_code})")
+            state["messages"].append(AIMessage(content=f"Okay, proceeding with theme: '{theme_label}'."))
             theme_selected = True
+        except (ValueError, IndexError):
+            logger.error(f"Invalid selection_idx={selection_idx} received for theme selection.")
+            state["messages"].append(AIMessage(content="Sorry, that selection wasn't valid. Please try again:"))
+            # selection_idx should be cleared later, so next run might re-interrupt.
 
-    except Exception as e:
-        # Catch potential errors during JSON parsing or DataFrame manipulation.
-        logger.error("Error in theme handler logic", exc_info=True)
-        state["messages"].append(
-            AIMessage(content=f"Sorry, an error occurred while processing themes: {str(e)}")
-        )
 
-    # Clear the selection index after it's been processed or if an interrupt was raised.
-    state['selection_idx'] = None
-    # Ensure interrupt flag is false if we are proceeding *from* this node without interrupting again.
-    # Note: if interrupt() was called above, this won't be reached in that run.
-    state['interrupt_state'] = False
+    # --- Attempt 3: Interrupt if multiple options and no selection yet ---
+    if not theme_selected and len(available_themes_df) > 1:
+        logger.info("Multiple themes available and none selected yet. Prompting user.")
+        # Prepare button options for the user.
+        button_options = [{
+            "option_type": "theme", # Type identifier
+            "label": row["labl"], # Theme label for the button text
+            'color': '#333', # Optional styling
+            "value": index # Send back the DataFrame index as the value
+            }
+            for index, row in available_themes_df.iterrows() # Create button for each available theme
+        ]
+        logger.debug({"theme_button_options": button_options})
+        # Issue the interrupt.
+        interrupt(value={
+            "message": "Please select a statistical theme for the chosen area(s):",
+            "options": button_options,
+            "current_place_index": state.get("current_place_index"),
+            "current_node": "get_place_themes_handler"
+        })
+        # Execution stops here, waits for user selection via button click.
+
+
+    # --- Attempt 4: Auto-select if only one option ---
+    elif not theme_selected and len(available_themes_df) == 1:
+        logger.info("Only one theme available, selecting automatically.")
+        selected_theme_df = available_themes_df.iloc[[0]] # Select the first (only) row
+        state["selected_theme"] = selected_theme_df.to_json(orient="records")
+        theme_label = selected_theme_df['labl'].values[0]
+        theme_code = selected_theme_df['ent_id'].values[0]
+        logger.info(f"Theme automatically selected (only option): {theme_label} ({theme_code})")
+        state["messages"].append(AIMessage(content=f"Found data for theme: '{theme_label}'."))
+        theme_selected = True
 
     logger.debug({"updated_state_after_theme_handling": state})
     return state
@@ -1089,17 +1015,14 @@ def find_cubes_node(state: lg_State) -> lg_State:
 
     # Check if cubes have already been fetched and stored (e.g., if resuming after chart interaction).
     # This check depends on whether the frontend clears `selected_cubes` state or if we want re-fetching.
-    # Assuming for now we *don't* refetch if `state['interrupt_data']['cubes']` exists from a previous run.
-    # A more robust check might involve comparing current units/theme to the ones used for existing cubes.
-    if state.get('interrupt_data') and state['interrupt_data'].get('cubes') and state['interrupt_data'].get('current_node') == 'find_cubes_node':
-         logger.info("Cube data already present in interrupt_data, potentially from previous run. Skipping refetch.")
+    if state.get('selected_cubes') and state.get('current_node') == 'find_cubes_node':
+         logger.info("Cube data already present in selected_cubes, potentially from previous run. Skipping refetch.")
          # Ensure interrupt flag is set correctly if we are just passing through
-         state['interrupt_state'] = True # Re-assert interrupt if needed
          return state
 
     try:
         # Parse the selected theme JSON to get the theme ID (e.g., 'T_POP').
-        selected_theme_df = pd.read_json(selected_theme_json, orient="records")
+        selected_theme_df = pd.read_json(io.StringIO(selected_theme_json), orient="records")
         if selected_theme_df.empty or 'ent_id' not in selected_theme_df.columns:
             raise ValueError("Selected theme data is invalid or missing 'ent_id'.")
         theme_id = str(selected_theme_df["ent_id"].values[0])
@@ -1119,8 +1042,9 @@ def find_cubes_node(state: lg_State) -> lg_State:
     for g_unit in all_selected_unit_ids:
         try:
             # Call the database tool to find cubes for this unit and theme.
-            cubes_df = find_cubes_for_unit_theme(
-                {"g_unit": str(g_unit), "theme_id": theme_id})
+            cubes_df = pd.read_json(io.StringIO(find_cubes_for_unit_theme(
+                {"g_unit": str(g_unit), "theme_id": theme_id})), orient="records"
+            )
 
             if cubes_df.empty:
                 logger.debug(f"No cubes found for unit {g_unit}, theme {theme_id}.")
@@ -1165,13 +1089,11 @@ def find_cubes_node(state: lg_State) -> lg_State:
 
         # --- Issue Interrupt for Visualization ---
         # Signal the frontend that data is ready for display.
-        state['interrupt_state'] = True # Mark interrupt active
         interrupt(value={
              # Message to potentially display to the user.
             "message": f"Here is the data for '{theme_label}' across the selected area(s):",
              # The core data payload for the frontend visualization components.
             "cubes": cubes_data_list,
-            "interrupt_state": True, # Redundant? but ensures flag is set in payload
             "current_node": "find_cubes_node" # Identify the interrupting node
         })
         # Execution stops here, waits for frontend to handle the data (e.g., render charts)
@@ -1182,66 +1104,9 @@ def find_cubes_node(state: lg_State) -> lg_State:
         state["messages"].append(
             AIMessage(content=f"Sorry, I couldn't find any data matching '{theme_label}' for the specified criteria and selected area(s).")
         )
-        # Ensure interrupt flag is false if no data found and we are proceeding.
-        state['interrupt_state'] = False
 
     # Return state. If interrupt was called, graph pauses. If not, graph proceeds based on edges.
     return state
-
-
-# ----------------------------------------------------------------------------------------
-# ROUTING NODES (Conditional Edges)
-# ----------------------------------------------------------------------------------------
-# These functions determine the next node to execute based on the current state.
-# They are used in `workflow.add_conditional_edges`.
-
-
-def node_router(state: lg_State) -> str:
-    """
-    Central routing logic after the initial user input validation.
-    Determines the primary path based on extracted information:
-    1. If postcode found -> go to postcode processing.
-    2. If no places/theme extracted -> go back to extraction (maybe user just said "hi").
-    3. If places extracted but not yet searched -> go to multi-place search.
-    4. If places & units fully processed but themes not yet retrieved -> go to theme retrieval.
-    5. Default fallback -> go to the general agent node for conversational handling.
-
-    Returns:
-        str: The name of the next node to execute.
-    """
-    logger.info("Routing: Deciding next node based on state...")
-
-    # Priority 1: Postcode takes precedence if found.
-    if state.get("is_postcode"):
-        logger.info("Router -> postcode_tool_call (Postcode found)")
-        return "postcode_tool_call"
-
-    # Priority 2: If essential info (places/theme) wasn't extracted yet, try extraction again.
-    # This handles cases where the initial message was vague or unrelated.
-    if not state.get("extracted_place_names") and not state.get("extracted_theme"):
-        logger.info("Router -> extract_initial_query_node (No places/theme extracted yet)")
-        return "extract_initial_query_node"
-
-    # Priority 3: If places were extracted but the multi-place search hasn't run yet.
-    if state.get("extracted_place_names") and not state.get("multi_place_search_df"):
-        logger.info("Router -> multi_place_tool_call (Places extracted, need search)")
-        return "multi_place_tool_call"
-
-    # Priority 4: If places were extracted AND units were selected for all of them,
-    # but themes haven't been retrieved yet. Check if unit processing is complete.
-    num_extracted_places = len(state.get("extracted_place_names", []))
-    num_selected_units = len(state.get("selected_place_g_units", []))
-    themes_retrieved = state.get("selected_place_themes") is not None # Check if themes JSON exists
-
-    if num_extracted_places > 0 and num_selected_units == num_extracted_places and not themes_retrieved:
-        logger.info("Router -> get_place_themes_node (All places/units processed, need themes)")
-        return "get_place_themes_node"
-
-    # Fallback: If none of the specific conditions match, go to the agent node.
-    # This could be for follow-up questions, clarifications, or unhandled states.
-    logger.info("Router -> agent_node (Fallback or continuation)")
-    return "agent_node"
-
 
 def should_continue_to_themes(state: lg_State) -> str:
     """
@@ -1272,31 +1137,6 @@ def should_continue_to_themes(state: lg_State) -> str:
         return "process_place_selection" # Loop back to handle the next place.
 
 
-def decide_if_map_selected(state: lg_State) -> str:
-    """
-    DEPRECATED? This router seems less useful with the current flow where map selection
-    primarily happens via interrupt and retrigger. The `node_router` handles the main branching.
-    If kept, it would typically run early in the flow to check if the user *started*
-    by selecting on the map before typing anything.
-
-    Original intent: Decide whether to proceed with standard input validation or skip
-    directly to theme retrieval if map polygons are already selected in the state.
-
-    Returns:
-        str: "get_place_themes_node" if map selection exists, otherwise "validate_user_input".
-    """
-    logger.info("Routing: Checking for pre-existing map selection...")
-    logger.debug({"current_state_for_map_decision": state})
-
-    # Check if the list of selected polygons (from map interaction) has items.
-    selected_polygons = state.get("selected_polygons") or [] # Default to empty list if None
-    if len(selected_polygons) > 0:
-        logger.info("Router -> get_place_themes_node (Map selection detected)")
-        return "get_place_themes_node" # Map selection exists, go get themes for them.
-    else:
-        logger.info("Router -> validate_user_input (No map selection detected, proceed with input validation)")
-        return "validate_user_input" # No map selection, process text input normally.
-
 # ----------------------------------------------------------------------------------------
 # WORKFLOW DEFINITION
 # ----------------------------------------------------------------------------------------
@@ -1322,9 +1162,9 @@ def create_workflow(lg_state: TypedDict):
 
     # --- Add Nodes ---
     # Add each node function defined earlier to the graph, associating it with a unique name.
-    workflow.add_node("extract_initial_query_node", extract_initial_query_node)
+    # workflow.add_node("extract_initial_query_node", extract_initial_query_node)
     workflow.add_node("agent_node", agent_node) # General LLM agent
-    workflow.add_node("validate_user_input", validate_user_input) # Checks for postcode
+    # workflow.add_node("validate_user_input", validate_user_input) # Checks for postcode
     workflow.add_node("postcode_tool_call", postcode_tool_call) # Handles postcode search
     workflow.add_node("multi_place_tool_call", multi_place_tool_call) # Searches multiple places
     workflow.add_node("process_place_selection", process_place_selection) # Handles place disambiguation/selection
@@ -1335,68 +1175,60 @@ def create_workflow(lg_state: TypedDict):
     workflow.add_node("find_cubes_node", find_cubes_node) # Retrieves final data cubes (interrupt)
     # workflow.add_node("interrupt_or_chat_decision", interrupt_or_chat_decision) # Example if needed
 
+    workflow.add_node("ShowState_node", ShowState_node)
+    workflow.add_node("ListThemesForSelection_node", ListThemesForSelection_node)
+    workflow.add_node("ListAllThemes_node", ListAllThemes_node)
+    workflow.add_node("Reset_node", Reset_node)
+    workflow.add_node("AddPlace_node", AddPlace_node)
+    workflow.add_node("RemovePlace_node", RemovePlace_node)
+    workflow.add_node("AddTheme_node", AddTheme_node)
+    workflow.add_node("RemoveTheme_node", RemoveTheme_node)
+
+    # agent‑edge – single mapping
+    workflow.add_conditional_edges(
+        "agent_node",
+        # router
+        lambda s: (s.get("last_intent_payload") or {}).get("intent") or "NO_INTENT",
+        # mapping
+        {
+            **{i.value: f"{i.value}_node"         # the existing intent routes
+            for i in AssistantIntent if i is not AssistantIntent.CHAT},
+            "NO_INTENT": END                      # ← fall through when there’s nothing to do
+        }
+    )
+
+
+    for n in [
+        "ShowState_node", "ListThemesForSelection_node", "ListAllThemes_node",
+        "RemovePlace_node", "AddTheme_node", "RemoveTheme_node"
+        ]:
+        workflow.add_edge(n, "agent_node")
+
     # --- Define Edges (Workflow Logic) ---
 
-    # 1. Entry Point: Start graph execution at the input validation node.
-    # Note: The commented-out edge `decide_if_map_selected` suggests an alternative start.
-    workflow.add_edge(START, "validate_user_input")
-    # workflow.add_conditional_edges(START, decide_if_map_selected, {
-    #     "get_place_themes_node": "get_place_themes_node",
-    #     "validate_user_input": "validate_user_input"
-    # })
+    # START already goes straight to agent_node now
+    workflow.add_edge(START, "agent_node")
 
-
-    # 2. Main Routing: After validation, use `node_router` to decide the main path.
-    workflow.add_conditional_edges(
-        "validate_user_input", # Source node
-        node_router,           # Function that returns the name of the next node
-        {   # Mapping: {return value from node_router: destination node name}
-            "postcode_tool_call": "postcode_tool_call",
-            "extract_initial_query_node": "extract_initial_query_node",
-            "multi_place_tool_call": "multi_place_tool_call",
-            "get_place_themes_node": "get_place_themes_node", # Can route directly if map selection happened before input
-            "agent_node": "agent_node", # Fallback route
-        }
-    )
-
-    # 3. Postcode Path: After postcode search, go directly to retrieving themes for the found unit.
-    workflow.add_edge("postcode_tool_call", "get_place_themes_node")
-
-    # 4. Multi-Place Processing Loop:
-    #    - After searching multiple places -> process the first place.
+    # AddPlace_node sometimes issues Command→multi_place_tool_call or →postcode_tool_call
     workflow.add_edge("multi_place_tool_call", "process_place_selection")
-    #    - After selecting a place -> process its units.
     workflow.add_edge("process_place_selection", "process_unit_selection")
-    #    - After selecting a unit -> trigger map interaction.
     workflow.add_edge("process_unit_selection", "select_unit_on_map")
-    #    - After triggering map interaction -> use `should_continue_to_themes` to decide:
-    #       - If more places remain -> loop back to `process_place_selection` for the next index.
-    #       - If all places processed -> proceed to `get_place_themes_node`.
+
     workflow.add_conditional_edges(
-        "select_unit_on_map", # Source node
-        should_continue_to_themes, # Router function
-        { # Mapping: {return value : destination node}
-            "get_place_themes_node": "get_place_themes_node", # Finished loop
-            "process_place_selection": "process_place_selection" # Continue loop
-        }
+        "select_unit_on_map",
+        should_continue_to_themes,            # unchanged helper
+        {
+            "get_place_themes_node": "get_place_themes_node",
+            "process_place_selection": "process_place_selection",
+        },
     )
+    
+    
 
-    # 5. Theme Path:
-    #    - After retrieving themes -> handle the theme selection logic.
+    workflow.add_edge("postcode_tool_call", "get_place_themes_node")
     workflow.add_edge("get_place_themes_node", "get_place_themes_handler")
-    #    - After handling theme selection -> find the data cubes.
     workflow.add_edge("get_place_themes_handler", "find_cubes_node")
-
-    # 6. Data Retrieval Path:
-    #    - After finding cubes (which likely interrupts for visualization) -> go to the agent node.
-    #      This allows the user to ask follow-up questions about the displayed data.
     workflow.add_edge("find_cubes_node", "agent_node")
-
-    # 7. Agent Node: Edges *from* agent_node are implicitly handled by LangGraph based on
-    #    whether the agent calls tools or just returns a message. If it needs explicit routing
-    #    after agent interaction, add conditional edges here. Currently, it acts as an endpoint
-    #    or a point where the user can redirect the conversation.
-
 
     # --- Compile the workflow ---
     logger.info("Compiling workflow with Redis checkpointer...")

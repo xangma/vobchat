@@ -1,4 +1,70 @@
-# app/callbacks/chat.py (Revised: Sync callback with asyncio.run)
+# src/callbacks/chat.py (Revised: Sync callback with asyncio.run)
+
+# =============================================================================
+#  DDME ‑ Dash Chat ↔ LangGraph Bridge
+#  ---------------------------------------------------------------------------
+#  What this file is
+#  -----------------
+#  • The single entry‑point that wires our Dash UI to the LangGraph workflow
+#    defined in `src/workflow.py`.
+#  • Converts a heterogenous, event‑driven front‑end (buttons, map clicks,
+#    text input) into a **linear stream** of messages + state snapshots that
+#    LangGraph can reason over.
+#
+#  Mental model for an LLM reading this
+#  ------------------------------------
+#  Think of the Dash app as a *dumb* terminal. All real decisions live inside
+#  the workflow.  The callback in this file merely:
+#
+#    1.  Collects the **trigger** that fired (send‑button, dynamic button,
+#        map retrigger, etc.).
+#    2.  Packages the current Dash “stores” into a single `lg_State`‑compatible
+#        dict.
+#    3.  Calls `compiled_workflow.astream(...)`, forwarding streamed
+#        AIMessageChunks back to the UI with progressive updates.
+#    4.  Detects **interrupts** emitted by the workflow and materialises them into Dash widgets:
+#          – multiple‑choice buttons  
+#          – map selection requests  
+#          – cube visualisation signals
+#    5.  Persists / hydrates state on every turn so the graph can be
+#        *paused* by the front‑end and later *resumed* (e.g. after a map click).
+#
+#  Life‑cycle of a user turn
+#  -------------------------
+#   UI event ─▶ `update_chat` (sync shell) ─▶ `_run_async_logic` (async) ─▶
+#   LangGraph stream ─▶ progressive UI updates ─▶ (optional) interrupt
+#
+#  Key invariants this file must uphold
+#  ------------------------------------
+#  • **Exactly one** `background=True` Dash callback updates the chat area.
+#  • `thread_id` stays constant for the life of a conversation so the
+#    check‑pointer can merge incremental state.
+#  • `selection_idx` is written *only* when a dynamic button is clicked and
+#    cleared immediately after the workflow consumes it.
+#  • `retrigger_chat` is the sole “cycle breaker” that lets map‑driven
+#    changes re‑enter the LangGraph loop without creating circular
+#    dependencies.
+#
+#  Place workflow coupling
+#  -----------------------
+#  The callback does **not** implement any place‑selection logic itself;
+#  it merely honours the routing produced by the workflow:
+#
+#      multi_place_tool_call_node ⇢ agent ⇢ process_place_selection ⇢ agent
+#      ⇢ process_unit_selection  ⇢ agent … (loops per place)
+#
+#  All loops are therefore driven by `state.current_place_index`, which
+#  the two `process_*` nodes increment.  The callback must never touch that
+#  counter.
+#
+#  Extending / modifying?
+#  ----------------------
+#  • To add a new interaction modality, fire an interrupt from the workflow
+#    and teach this file how to render it.
+#  • To add a new long‑running tool, no changes here are required—just make
+#    sure the workflow emits ToolMessages so the chat router can spot them.
+# =============================================================================
+
 import json
 import asyncio
 import nest_asyncio
@@ -13,6 +79,7 @@ from uuid import uuid4
 
 # Import application state stores defined elsewhere (presumably in stores.py)
 from stores import app_state_data, map_state_data, place_state_data
+from state_schema import lg_State  # Import the lg_State TypedDict for type hinting
 
 # Import Dash core components and Bootstrap components
 from dash import Input, Output, State, ALL, ctx
@@ -25,7 +92,7 @@ from dash_extensions.enrich import CycleBreakerInput
 # Import LangGraph types for interacting with the workflow
 from langgraph.types import interrupt, Command
 # Import necessary LangChain message types used within the workflow's state
-from langchain_core.messages import AIMessage, HumanMessage, AIMessageChunk
+from langchain_core.messages import AIMessage, HumanMessage, AIMessageChunk, ToolMessage
 
 # Set up logging for this module
 logger = logging.getLogger(__name__)
@@ -113,6 +180,10 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
             streaming responses, and interrupts.
             """
 
+            def dict_without_none(d: dict) -> dict:
+                """Return a shallow copy without keys whose value is None."""
+                return {k: v for k, v in d.items() if v is not None}
+            
             # Make copies of mutable state objects to avoid modifying the outer scope's state directly
             # until the final results are ready. Use slicing for lists.
             history = initial_chat_history[:]
@@ -126,35 +197,34 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
             # we need to synchronize the relevant Dash state back into the persistent LangGraph state
             # stored by the checkpointer (e.g., Redis) before resuming the workflow.
             if is_retrigger and initial_map_state.get('selected_polygons'):
-                 logger.info("Retrigger detected: Syncing map_state to LangGraph state before resuming.")
-                 try:
-                     # Retrieve the latest state snapshot from the LangGraph checkpointer
-                     latest_state = await compiled_workflow.aget_state(current_config)
-                     if latest_state:
-                         # Copy the state values to modify
-                         current_workflow_state_values = latest_state.values.copy()
-                     else:
-                         # Handle defensively if state couldn't be retrieved (shouldn't happen if workflow was interrupted)
-                         current_workflow_state_values = {}
-                         logger.warning("Could not retrieve workflow state before sync on retrigger.")
+                logger.info("Retrigger detected: Syncing map_state to LangGraph state before resuming.")
+                try:
+                    # Retrieve the latest state snapshot from the LangGraph checkpointer
+                    latest_state = await compiled_workflow.aget_state(current_config)
+                    if latest_state:
+                        # Copy the state values to modify
+                        current_workflow_state_values = latest_state.values.copy()
+                    else:
+                        # Handle defensively if state couldn't be retrieved (shouldn't happen if workflow was interrupted)
+                        current_workflow_state_values = {}
+                        logger.warning("Could not retrieve workflow state before sync on retrigger.")
 
-                     # Update the retrieved workflow state values with the latest data from the Dash map_state
-                     # This assumes the workflow state has keys 'selected_polygons' and 'selected_polygons_unit_types'
-                     current_workflow_state_values['selected_polygons'] = initial_map_state['selected_polygons']
-                     current_workflow_state_values['selected_polygons_unit_types'] = initial_map_state['selected_polygons_unit_types']
-                     # Ensure the interrupt flag in the workflow state is cleared, as we are now resuming
-                     # *after* handling the interrupt condition that led to the retrigger (e.g., map selection).
-                     current_workflow_state_values['interrupt_state'] = False
+                    # Update the retrieved workflow state values with the latest data from the Dash map_state
+                    # This assumes the workflow state has keys 'selected_polygons' and 'selected_polygons_unit_types'
+                    current_workflow_state_values['selected_polygons'] = initial_map_state['selected_polygons']
+                    current_workflow_state_values['selected_polygons_unit_types'] = initial_map_state['selected_polygons_unit_types']
+                    # Ensure the interrupt flag in the workflow state is cleared, as we are now resuming
+                    # *after* handling the interrupt condition that led to the retrigger (e.g., map selection).
 
-                     # Persist the updated state back to the checkpointer
-                     await compiled_workflow.aupdate_state(config=current_config, values=current_workflow_state_values)
-                     logger.debug("Successfully updated workflow state with map selection data.")
+                #      # Persist the updated state back to the checkpointer
+                    await compiled_workflow.aupdate_state(config=current_config, values=current_workflow_state_values)
+                    logger.debug("Successfully updated workflow state with map selection data.")
 
-                 except Exception as sync_exc:
-                     logger.error(f"Error syncing map state to workflow state on retrigger: {sync_exc}", exc_info=True)
-                     # Add an error message to the chat history
-                     history.append(html.Div(f"Error syncing map state: {str(sync_exc)}", style={"color": "orange"}))
-                     # Decide whether to stop or continue; currently continues.
+                except Exception as sync_exc:
+                    logger.error(f"Error syncing map state to workflow state on retrigger: {sync_exc}", exc_info=True)
+                    # Add an error message to the chat history
+                    history.append(html.Div(f"Error syncing map state: {str(sync_exc)}", style={"color": "orange"}))
+                    # Decide whether to stop or continue; currently continues.
 
             # --- Prepare inputs for the LangGraph workflow based on how this function was triggered ---
             workflow_input = None
@@ -167,20 +237,20 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
             # Case 2: A dynamic button was clicked (e.g., place/unit/theme selection)
             elif triggered_by_button:
                  # Get the workflow state *before* applying the button selection
-                 state_before_button = await compiled_workflow.aget_state(current_config)
+                state_before_button = await compiled_workflow.aget_state(current_config)
                  # Check if the workflow was indeed waiting for this button click (in an interrupt state)
-                 if state_before_button and state_before_button.values.get('interrupt_state'):
+                if state_before_button:
                      # Copy the current state values
-                     current_values = state_before_button.values.copy()
+                    state_before_button_values = state_before_button.values.copy()
                      # Add the user's selection index (from the clicked button) to the state
-                     current_values["selection_idx"] = current_selection_idx
-                     # Mark the interrupt as handled within the workflow state for this resumption path
-                     current_values["interrupt_state"] = False
+                    state_before_button_values["selection_idx"] = current_selection_idx
                      # Create a LangGraph Command to jump to the correct node and update the state.
                      # This assumes the interrupted node stored its name in 'current_node'.
-                     workflow_input = Command(goto=current_values.get('current_node'), update=current_values)
+                    workflow_input = Command(goto=state_before_button_values.get('current_node'), update={"selection_idx": current_selection_idx})
                      # Conceptually clear the buttons after a click; they will be re-rendered if needed by the next interrupt
-                     buttons_to_render_async = []
+                    buttons_to_render_async = []
+            if not triggered_by_button:
+                await compiled_workflow.aupdate_state(config=current_config, values={"selection_idx": None}) # Clear the selection index in the workflow state
             
             # Case 3: Retriggered (e.g., after map selection) - workflow_input remains None.
             # The `astream` call will resume from the persisted state, which was just updated
@@ -198,68 +268,94 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                 ):
                     # Check if the event contains a message chunk from the AI
                     if msg.content and isinstance(msg, AIMessageChunk):
-                        message_chunk = msg.content
-                        # Append the chunk to the full response
-                        full_ai_response += message_chunk
-                        # Create a temporary Div to show the accumulating response
-                        final_ai_message_div = html.Div(f"{full_ai_response}", className="speech-bubble ai-bubble")
-                        # Update the chat display progressively using the set_progress function from Dash background callback
-                        # This updates the 'progress' Output ("chat-display")
-                        set_props("chat-display", {"children": history + [final_ai_message_div]})
-
+                        full_ai_response += msg.content
+                        if not history or not isinstance(history[-1], html.Div) \
+                        or "ai-bubble" not in history[-1].className:
+                            # first chunk → start a new bubble
+                            history.append(html.Div(full_ai_response,
+                                                    className="speech-bubble ai-bubble"))
+                        else:
+                            # subsequent chunk → update last bubble
+                            history[-1].children = full_ai_response
+                        set_props("chat-display", {"children": history})
                     # Note: Depending on the LangGraph version and stream_mode, you might get
                     # other types of events here containing state updates. This example primarily
                     # focuses on streaming AIMessageChunks for progressive text display.
 
             except Exception as stream_exc:
-                 logger.error(f"Error during workflow stream: {stream_exc}", exc_info=True)
-                 # Add an error message to the chat history
-                 history.append(html.Div(f"Streaming Error: {str(stream_exc)}", style={"color": "orange"}))
-                 # Allow execution to continue to try and fetch the final state
+                logger.error(f"Error during workflow stream: {stream_exc}", exc_info=True)
+                # Add an error message to the chat history
+                history.append(html.Div(f"Streaming Error: {str(stream_exc)}", style={"color": "orange"}))
+                # Allow execution to continue to try and fetch the final state
 
-            # --- Post-Stream State Retrieval and Interrupt Handling ---
+           # --- Post-Stream State Retrieval and Interrupt Handling ---
             try:
-                # After streaming finishes (or errors out), get the final state of the workflow for this thread
+            
+                # Get the final state of the workflow for this thread
                 final_state = await compiled_workflow.aget_state(current_config)
                 final_state_values = final_state.values if final_state else {} # Extract the state dictionary
-                logger.debug({"event": "workflow_state_after_stream", "state_values": final_state_values})
+                logger.debug({"event": "workflow_state_after_stream", "final_state_values": final_state_values})
 
-                # If an AI response was streamed, replace the temporary accumulating div with the final complete message div
-                if full_ai_response != "":
-                    final_ai_message_div = html.Div(f"{full_ai_response}", className="speech-bubble ai-bubble")
-                    history.append(final_ai_message_div) # Add the final, complete AI message to the history
+                # --- *** RECONSTRUCT CHAT HISTORY FROM FINAL WORKFLOW STATE *** ---
+                final_chat_history_components = []
+                all_final_messages = final_state_values.get("messages", [])
 
+                if all_final_messages:
+                    logger.debug(f"Reconstructing chat history from {len(all_final_messages)} final messages in workflow state.")
+                    for i, msg in enumerate(all_final_messages):
+                        component = None
+                        if isinstance(msg, HumanMessage):
+                            component = html.Div(f"{msg.content}", className="speech-bubble user-bubble", key=f"msg-{i}-user")
+                        elif isinstance(msg, (AIMessage, AIMessageChunk)):
+                            # Check content is not empty or just whitespace
+                            if msg.content and msg.content.strip():
+                                component = html.Div(f"{msg.content}", className="speech-bubble ai-bubble", key=f"msg-{i}-ai")
+                        elif isinstance(msg, ToolMessage):
+                            # Decide whether to display tool messages or skip
+                            # component = html.Div(f"[Tool Call: {msg.tool_call.get('name', 'Unknown')}]", className="text-muted small", key=f"msg-{i}-tool")
+                            pass # Skipping ToolMessage display in chat history for now
+                        else:
+                            logger.warning(f"Unhandled message type in final state: {type(msg)}")
+
+                        if component:
+                            final_chat_history_components.append(component)
+                else:
+                    # Fallback if no messages in final state (unlikely)
+                    logger.warning("No messages found in final workflow state to reconstruct history.")
+                    final_chat_history_components = initial_chat_history[:] # Use original history
+
+                    # If an AI response was streamed, replace the temporary accumulating div with the final complete message div
+                    # if full_ai_response != "":
+                        # final_ai_message_div = html.Div(f"{full_ai_response}", className="speech-bubble ai-bubble")
+                        # history.append(final_ai_message_div) # Add the final, complete AI message to the history
+                        # app_state_async["messages"] = history # Update app_state with the reconstructed history
+                history = final_chat_history_components
+                app_state_async["messages"] = history
                 # Reset button rendering list for this turn
                 buttons_to_render_async = []
 
+                interrupt_updates = {}
+                interrupt_message = None
                 # Check if the workflow ended in an interrupted state, requiring user input or action
                 # LangGraph signals interrupts via the `tasks` attribute of the state or potentially custom flags.
                 if final_state and final_state.tasks: # Check if there are pending tasks (interrupts)
-                    interrupt_task = final_state.tasks[0] # Assume one interrupt at a time for now
+                    interrupt_task = final_state.tasks[-1] # Assume one interrupt at a time for now
                     # Check for explicit interrupts or custom flags set by workflow nodes
-                    if interrupt_task.interrupts or final_state_values.get("interrupt_state") or final_state_values.get("interrupt_data"):
+                    if interrupt_task.interrupts:
                         logger.debug("Interrupt detected after stream completion.")
                         # Get the data associated with the interrupt
                         # Prioritize explicit interrupts, fall back to data possibly stored in state by the node
-                        interrupt_value = interrupt_task.interrupts[0].value if interrupt_task.interrupts else final_state_values.get("interrupt_data")
-
-                        if interrupt_value: # Ensure we have interrupt data
-                            logger.debug({"event": "processing_interrupt", "interrupt_value": interrupt_value})
+                        interrupt_updates.update(interrupt_task.interrupts[0].value)
+                        logger.info(f"CALLBACK: Processing interrupt updates: {interrupt_updates}")
+                        if interrupt_updates: # Ensure we have interrupt data
+                            logger.debug({"event": "processing_interrupt", "interrupt_updates": interrupt_updates})
                             
-                            # Persist the interrupt data back into the workflow state. This might seem redundant
-                            # if it came from 'interrupt_data', but ensures consistency if it came from `interrupt_task.interrupts`.
-                            # It also confirms the interrupt is being processed.
-                            await compiled_workflow.aupdate_state(
-                                config=current_config, values=interrupt_value)
-
-                            interrupt_message = None # Placeholder for any message to show the user for the interrupt
-
-                            # --- Handle different types of interrupts based on the interrupt_value content ---
+                            # --- Handle different types of interrupts based on the interrupt_updates content ---
 
                             # 1. Multiple Choice Options Interrupt: Render buttons for user selection
-                            if interrupt_value.get("options", []):
+                            if interrupt_updates.get("options", []):
                                 logger.debug("Interrupt with multiple button options")
-                                options = interrupt_value.get("options", [])
+                                options = interrupt_updates.get("options", [])
 
                                 # Create Dash Bootstrap buttons based on the options provided by the workflow node
                                 buttons_to_render_async = [
@@ -286,7 +382,7 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                                 ]
                                 
                                 # Get the prompt message to display above the buttons
-                                prompt_text = interrupt_value.get("message", "Please choose:")
+                                prompt_text = interrupt_updates.get("message", "Please choose:")
                                 interrupt_message = html.Div(f"{prompt_text}", className="speech-bubble ai-bubble")
 
                                 # Update the Dash app_state to potentially store button info (if needed elsewhere)
@@ -295,11 +391,11 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                                 })
 
                             # 2. Map Selection Interrupt: Update map state to show/select units
-                            elif interrupt_value.get("current_node") == "select_unit_on_map":
+                            elif interrupt_updates.get("current_node") == "select_unit_on_map":
                                 logger.debug("Map selection interrupt")
                                 # Extract necessary data from the interrupt payload
-                                selected_place_g_units = interrupt_value.get("selected_place_g_units", [])
-                                selected_place_g_unit_types = interrupt_value.get("selected_place_g_unit_types", [])
+                                selected_place_g_units = interrupt_updates.get("selected_place_g_units", [])
+                                selected_place_g_unit_types = interrupt_updates.get("selected_place_g_unit_types", [])
                                 
                                 # Update the Dash map_state_async to trigger map changes
                                 # Add the unit IDs and types to the map state's selected polygons list
@@ -311,10 +407,10 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                                         map_state_async.setdefault("selected_polygons_unit_types", []).append(selected_place_g_unit_types[i])
 
                                 # Store unit types and trigger map zoom/update flags
-                                map_state_async["unit_types"] = interrupt_value.get("selected_place_g_unit_types", [])
+                                map_state_async["unit_types"] = interrupt_updates.get("selected_place_g_unit_types", [])
                                 map_state_async["zoom_to_selection"] = True # Flag to tell the map component to zoom
                                 # Flag indicating a programmatic change is pending (might be used by map callbacks)
-                                map_state_async["programmatic_unit_change_pending"] = interrupt_value.get("selected_place_g_unit_types", [])
+                                map_state_async["programmatic_unit_change_pending"] = interrupt_updates.get("selected_place_g_unit_types", [])
                                 
                                 # Set the retrigger flag in app_state. This will be picked up by the
                                 # 'retrigger_chat_callback' which will then trigger this main 'update_chat'
@@ -326,68 +422,74 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                                 })
                                 # Clear any buttons as this interrupt is handled by map interaction + retriggering
                                 buttons_to_render_async = []
+                                
+                                prompt_text = interrupt_updates.get("message", "")
+                                interrupt_message = html.Div(f"{prompt_text}", className="speech-bubble ai-bubble")
 
                             # 3. Cube Data Interrupt: Update place state to display visualizations
-                            elif interrupt_value.get("cubes"):
+                            elif interrupt_updates.get("cubes"):
                                 logger.debug("Cube data interrupt")
-                                cubes = interrupt_value.get("cubes", [])
+                                cubes = interrupt_updates.get("cubes", [])
                                 # Update the Dash place_state_async with the retrieved cube data
                                 place_state_async.update({"cubes": cubes})
                                 # Persist the selected cubes back into the workflow state if needed later
-                                await compiled_workflow.aupdate_state(
-                                    config=current_config, values={"selected_cubes": cubes})
+                                interrupt_updates.update({"selected_cubes": cubes})
 
                                 # Display the message associated with the cube data
-                                prompt_text = interrupt_value.get("message", "Data retrieved.")
+                                prompt_text = interrupt_updates.get("message", "Data retrieved.")
                                 interrupt_message = html.Div(f"{prompt_text}", className="speech-bubble ai-bubble")
                                 # Update app_state to signal UI to show visualization components
                                 app_state_async.update({"show_visualization": True})
-
-                            # 4. Simple Assistant Message Interrupt: Display a message from the workflow
-                            elif interrupt_value.get("assistant_message"):
-                                logger.debug("Assistant message interrupt")
-                                assistant_message = interrupt_value.get("message")
-                                interrupt_message = html.Div(f"{assistant_message}", className="speech-bubble ai-bubble")
-
+                                
                             # 5. Text Input Interrupt: Prompt the user for text input (handled by next user message)
                             else:
                                 # This case assumes the interrupt requires the user to type something
                                 # in the chat input next, rather than click a button or interact with the map.
                                 logger.debug("Text input interrupt")
-                                prompt_text = interrupt_value.get("message", "Please provide input:")
+                                prompt_text = interrupt_updates.get("message", "Please provide input:")
                                 interrupt_message = html.Div(f"{prompt_text}", className="speech-bubble ai-bubble")
 
-                                # This part seems less common for typical interrupts waiting for *new* input.
-                                # Usually, the workflow would wait for the *next* HumanMessage.
-                                # If `user_input` contained the response *to this interrupt*, this logic
-                                # would immediately send it back. This might be intended if the interrupt
-                                # asks for clarification on the *current* input, but needs careful design.
-                                # if user_input:
-                                #     # We already have a user input, so we update the node
-                                #     await compiled_workflow.aupdate_state(
-                                #         config=config, values={"messages": [("user", user_input)]})
+                            if interrupt_updates.get("message"):
+                                # treat as ordinary assistant text
+                                txt = interrupt_updates["message"]
+                                interrupt_message = html.Div(txt, className="speech-bubble ai-bubble")
 
-                            # Persist relevant context from the interrupt (like current place index)
-                            # back into the workflow state. This is important if the interrupt occurred
-                            # mid-way through processing multiple items (like places).
-                            if interrupt_value.get("current_place_index") is not None:
-                                await compiled_workflow.aupdate_state(
-                                    config=current_config,
-                                    values={
-                                        "current_node": interrupt_value.get('current_node'),
-                                        "selection_idx": None, # Clear selection index after processing interrupt context
-                                        "current_place_index": interrupt_value.get("current_place_index"),
-                                        "selected_place_g_places": interrupt_value.get("selected_place_g_places"),
-                                        "selected_place_g_units": interrupt_value.get("selected_place_g_units"),
-                                        "selected_place_g_unit_types": interrupt_value.get("selected_place_g_unit_types")
-                                    }
-                                )
+                                # ① append to visible history
+                                history.append(interrupt_message)
 
-                            # If an interrupt message was created, add it to the chat history
-                            if interrupt_message and hasattr(interrupt_message, "children"):
-                                if interrupt_message.children is not None and interrupt_message.children != "":
-                                    history.append(interrupt_message)
+                                # ② also push it into the workflow state so it survives a retrigger
+                                msgs = final_state_values.get("messages", [])
+                                msgs.append(AIMessage(content=txt))
+                                interrupt_updates["messages"] = msgs          # <- extra field to persist
+
+                                app_state_async["messages"] = history
                 
+                # Persist relevant context from the interrupt (like current place index)
+                # back into the workflow state. This is important if the interrupt occurred
+                # mid-way through processing multiple items (like places).
+
+                if 'show_visualization_signal' in final_state_values:
+                    show_viz = final_state_values['show_visualization_signal']
+                    logger.info(f"Updating app_state show_visualization based on signal: {show_viz}")
+                    app_state_async['show_visualization'] = show_viz
+                    # Remove the signal flag from the state to be persisted
+                    # del final_state_values['show_visualization_signal']
+                    # Update the state in the checkpointer *if necessary*
+                    interrupt_updates.update({"show_visualization_signal": None}) # Or update with the dict minus the key
+
+                # Persist the interrupt data back into the workflow state.
+                await compiled_workflow.aupdate_state(
+                    config=current_config, # Pass the thread configuration
+                    values=interrupt_updates # Update the workflow state with the interrupt data
+                )
+                if 'selected_polygons' in interrupt_updates:
+                    # update map_state with the selected polygons
+                    map_state_async['selected_polygons'] = interrupt_updates['selected_polygons']
+                    map_state_async['selected_polygons_unit_types'] = interrupt_updates['selected_polygons_unit_types']
+                logger.debug("Workflow state updated with interrupt data.")
+
+                logger.info("Async logic completed successfully, returning results.")
+                logger.info("State after async logic: ", interrupt_updates)
                 # Return the final computed states and buttons from the async function
                 return history, app_state_async, map_state_async, place_state_async, buttons_to_render_async
 
@@ -402,13 +504,18 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
         # --- Back in the main synchronous callback function `update_chat` ---
         triggered_input = dash.callback_context.triggered[0] # Get info about what triggered the callback
         ctx_trigger = triggered_input["prop_id"] if dash.callback_context.triggered else "No trigger"
-
+        logger.info(f"Callback triggered by: {ctx_trigger}")
         # Determine if the trigger was the retrigger mechanism (either via CycleBreakerInput or the flag in app_state)
-        is_retrigger_event = "retrigger-chat.data" in ctx_trigger or (app_state and app_state.get("retrigger_chat"))
+        is_retrigger_event = "retrigger-chat_data" in ctx_trigger or (app_state and app_state.get("retrigger_chat"))
 
         # Basic setup and reset logic (remains synchronous)
         logger.debug({"event": "update_chat_start (sync part)", "trigger": ctx_trigger, "is_retrigger": is_retrigger_event})
         chat_history = chat_history or [] # Initialize chat history if empty
+
+        if user_input and user_input.strip() and "send-button" in ctx_trigger and not is_retrigger_event:
+            user_message_div = html.Div(f"{user_input}", className="speech-bubble user-bubble")
+            chat_history.append(user_message_div)
+            set_props("chat-display", {"children": chat_history})
 
         # Handle Reset Button Click
         if "reset-button" in ctx_trigger:
@@ -433,17 +540,6 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                 counts_store,          # Initial counts store
                 thread_id              # Cleared thread ID
             )
-
-       # Add the user's message to the chat history *immediately* if they clicked Send
-       # Avoid doing this on retrigger events, as no new user input was provided.
-        if user_input and user_input.strip() and "send-button" in ctx_trigger and not is_retrigger_event:
-             # Create a div for the user's message
-             user_message_div = html.Div(f"You: {user_input}", className="speech-bubble user-bubble")
-             chat_history.append(user_message_div)
-             # Update the display immediately to show the user's message.
-             # Note: Using set_props here might sometimes interfere with background callback progress updates.
-             # If issues arise, consider only appending to chat_history and letting the async part handle all display updates.
-             set_props("chat-display", {"children": chat_history})
 
         # Conversation Thread ID and LangGraph Configuration Setup
         if not thread_id:
@@ -487,12 +583,12 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                 )
             )
 
+
             # Clear the retrigger flag in the returned app state *after* the async logic has successfully run.
             # This prevents immediate re-triggering in a loop.
             if is_retrigger_event and final_app_state:
-                 final_app_state['retrigger_chat'] = False
-                 logger.debug("Cleared retrigger_chat flag in app_state.")
-
+                final_app_state['retrigger_chat'] = False
+                logger.debug("Cleared retrigger_chat flag in app_state.")
 
             # Return the final results obtained from the async function to update the Dash outputs
             return (

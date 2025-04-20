@@ -1,12 +1,11 @@
 # app/tools.py
-from langgraph.prebuilt import ToolNode
 from langchain_core.runnables import RunnableLambda
 from langchain_core.messages import ToolMessage
 from pydantic import BaseModel, Field
 from langchain.tools import BaseTool, StructuredTool, tool
 from langchain_community.tools import QuerySQLDataBaseTool
 import pandas as pd
-from typing import List, Annotated
+from typing import List, Annotated, Dict
 from config import load_config, get_db
 import io
 from utils.constants import UNIT_TYPES
@@ -32,10 +31,10 @@ def handle_tool_error(state) -> dict:
     }
 
 
-def create_tool_node_with_fallback(tools: list) -> dict:
-    return ToolNode(tools).with_fallbacks(
-        [RunnableLambda(handle_tool_error)], exception_key="error"
-    )
+# def create_tool_node_with_fallback(tools: list) -> dict:
+#     return ToolNode(tools).with_fallbacks(
+#         [RunnableLambda(handle_tool_error)], exception_key="error"
+#     )
 
 
 def _print_event(event: dict, _printed: set, max_length=1500):
@@ -107,7 +106,7 @@ def calculate_center_and_zoom(gdf_filtered):
 def find_cubes_for_unit_theme(
     g_unit: Annotated[str, "unit identifier for the cube"],
     theme_id: Annotated[str, "theme id for the cube"],
-    ) -> pd.DataFrame:
+    ) -> str:
     """
     Find cubes for a given unit and theme.
     """
@@ -134,13 +133,13 @@ def find_cubes_for_unit_theme(
     # Convert column names to match what we expect
     df.columns = ['Cube_ID', 'Cube', 'Start', 'End', 'Count']
     logger.debug(f"[find_cubes_for_unit_theme] Query returned: \n\n{df}")
-    return df
+    return df.to_json(orient='records')
 
 
 @tool
 def find_units_by_postcode(
     postcode: Annotated[str, "postcode to search for"],
-    ) -> pd.DataFrame:
+    ) -> str:
     """
     Find units by postcode.
     """
@@ -160,7 +159,7 @@ def find_units_by_postcode(
     res = dbtool.db._execute(query)
     df = pd.DataFrame(res)
     logger.debug(f"[find_units_by_postcode] Query returned: \n\n{df}")
-    return df
+    return df.to_json(orient='records')
 
 
 @tool
@@ -170,7 +169,7 @@ def find_places_by_name(
     nation: Annotated[str, "Nation code, default is '0'"] = "0",
     domain: Annotated[str, "Domain code, default is '0'"] = "0",
     state: Annotated[str, "State code, default is '0'"] = "0"
-) -> pd.DataFrame:
+) -> str:
     """
     Find place names by provided parameters.
     """
@@ -221,12 +220,12 @@ def find_places_by_name(
     res = dbtool.db._execute(query)
     df = pd.DataFrame(res)
     logger.debug(f"[find_places_by_name] Query returned: \n\n{df}")
-    return df
+    return df.to_json(orient='records')
 
 @tool
 def find_themes_for_unit(
     unit: Annotated[str, "unit identifier for the cube"],
-    ) -> pd.DataFrame:
+    ) -> str:
     """
     Find themes for a given unit.
     """
@@ -242,13 +241,13 @@ def find_themes_for_unit(
     res = dbtool.db._execute(query)
     df = pd.DataFrame(res)
     logger.debug(f"[find_themes_for_unit] Query returned: \n\n{df}")
-    return df
+    return df.to_json(orient='records')
 
 
 @tool
 def data_query(
     unitname: Annotated[str, "unit name to search for"],
-    ) -> pd.DataFrame:
+    ) -> str:
     """
     Query data for a given unit name.
     """
@@ -260,12 +259,12 @@ def data_query(
     dbtool = QuerySQLDataBaseTool(db=db)
     res = dbtool.db._execute(query)
     df = pd.DataFrame(res)
-    return df
+    return df.to_json(orient='records')
 
 @tool
 def get_cube_data(
     cube_id: Annotated[str, "ID of the cube to fetch data for"]
-) -> pd.DataFrame:
+) -> str:
     """
     Fetch the actual data for a given cube ID.
     """
@@ -286,13 +285,13 @@ def get_cube_data(
     dbtool = QuerySQLDataBaseTool(db=db)
     res = dbtool.db._execute(query)
     df = pd.DataFrame(res)
-    return df
+    return df.to_json(orient='records')
 
 @tool
 def get_all_cube_data(
     g_unit: Annotated[str, "unit identifier for the cube"],
     cube_ids: List[str]
-) -> pd.DataFrame:
+) -> str:
     """
     Fetch data for multiple cubes at once.
     """
@@ -323,36 +322,65 @@ def get_all_cube_data(
     
     # Pivot the data to create columns for each cube
     pivot_df = df.pivot(index=['g_name', 'year'], columns='cellref', values='value').reset_index()
-    return pivot_df
+    return pivot_df.to_json(orient='records')
 
 
-def get_all_themes():
+# tool to choose theme from sentence
+
+@tool
+def get_unit_details(unit_ids: List[str]) -> str:
     """
-    Get all themes from the database.
-    
-    Returns:
-    "T_LAND"	"Agriculture & Land Use"
-    "T_HOUS"	"Housing"
-    "T_IND"	"Industry"
-    "T_LEARN"	"Learning & Language"
-    "T_VITAL"	"Life & Death"
-    "T_POL"	"Political Life"
-    "T_POP"	"Population"
-    "T_REL"	"Roots & Religion"
-    "T_SOC"	"Social Structure"
-    "T_WK"	"Work & Poverty"
-    
-    # More text on themes: select * from hgis.g_text where dds_theme='T_IND';
+    Fetch details (name, type) for a list of g_unit IDs.
+    Useful for listing currently selected units.
+    """
+    if not unit_ids:
+        return pd.DataFrame(columns=['g_unit', 'unit_name', 'unit_type', 'long_name']).to_json(orient='records')
+
+    # Ensure IDs are strings and handle potential SQL injection (though less likely with list)
+    safe_unit_ids = [str(uid).replace("'", "''") for uid in unit_ids]
+    unit_ids_str = "','".join(safe_unit_ids)
+
+    query = f"""
+    SELECT
+        u.g_unit,
+        COALESCE(auo_util.get_unit_name(u.g_unit), 'Unknown Name') as unit_name,
+        u.g_unit_type
+    FROM
+        hgis.g_unit u
+    WHERE
+        u.g_unit IN ('{unit_ids_str}');
+    """
+    logger.debug(f"[get_unit_details] Running query:\n{query}")
+    dbtool = QuerySQLDataBaseTool(db=db)
+    try:
+        res = dbtool.db._execute(query)
+        df = pd.DataFrame(res, columns=['g_unit', 'unit_name', 'unit_type'])
+        # Add the long name for display
+        df['long_name'] = df['unit_type'].apply(lambda ut: UNIT_TYPES.get(ut, {}).get('long_name', ut))
+        logger.debug(f"[get_unit_details] Query returned: \n\n{df}")
+        return df.to_json(orient='records')
+    except Exception as e:
+        logger.error(f"[get_unit_details] Error executing query: {e}", exc_info=True)
+        return pd.DataFrame(columns=['g_unit', 'unit_name', 'unit_type', 'long_name']).to_json(orient='records')
+
+
+# Make sure get_all_themes is robust
+@tool
+def get_all_themes() -> str:
+    """
+    Get all available statistical themes from the database.
+    Renamed to avoid conflict with the internal function name.
     """
     query = f"""
     SELECT ent_id, labl, text FROM hgis.g_data_ent where ent_type='T'
     ORDER BY labl
     """
     dbtool = QuerySQLDataBaseTool(db=db)
-    res = dbtool.db._execute(query)
-    df = pd.DataFrame(res)
-    return df
-
-
-
-# tool to choose theme from sentence
+    try:
+        res = dbtool.db._execute(query)
+        df = pd.DataFrame(res, columns=['ent_id', 'labl', 'text'])
+        logger.debug(f"[get_all_themes_tool] Query returned: \n\n{df}")
+        return df.to_json(orient='records')
+    except Exception as e:
+        logger.error(f"[get_all_themes_tool] Error executing query: {e}", exc_info=True)
+        return pd.DataFrame(columns=['ent_id', 'labl', 'text']).to_json(orient='records')

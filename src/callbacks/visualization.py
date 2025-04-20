@@ -58,7 +58,7 @@ def register_visualization_callbacks(app, compiled_workflow):
             for g_unit in g_units:
                  try:
                     # Ensure get_all_cube_data is defined and imported in tools.py
-                    cube_data = get_all_cube_data({"g_unit": str(g_unit), "cube_ids": cube_ids})
+                    cube_data = pd.read_json(get_all_cube_data({"g_unit": str(g_unit), "cube_ids": cube_ids}), orient='records')
                     if not cube_data.empty:
                         cube_list.append(cube_data)
                  except Exception as e:
