@@ -258,6 +258,22 @@ def RemovePlace_node(state: lg_State):
             lst.pop(idx)
         state[key] = lst
 
+    remaining_units = state.get("selected_place_g_units", [])
+    cubes_filtered: pd.DataFrame = pd.DataFrame(columns=["g_unit"]) 
+    if state.get("selected_cubes"):
+        try:
+            df = pd.read_json(state["selected_cubes"], orient="records")
+            if not df.empty and "g_unit" in df.columns:
+                df = df[df["g_unit"].isin(remaining_units)]
+                cubes_filtered = df.to_json(orient="records")
+        except Exception:          # defensive – fallback to clearing
+            cubes_filtered = pd.DataFrame(columns=["g_unit"]).to_json(orient="records")
+
+    if len(cubes_filtered) > 0:
+        show_viz = True
+    else:
+        show_viz = False
+
     interrupt(value={
     "message": f"Removed {place} from the selection.",
     "extracted_place_names": place_names,
@@ -266,6 +282,9 @@ def RemovePlace_node(state: lg_State):
     "selected_place_g_places": state.get("selected_place_g_places", []),
     "selected_place_g_units": state.get("selected_place_g_units", []),
     "selected_place_g_unit_types": state.get("selected_place_g_unit_types", []),
+    "cubes": cubes_filtered,            # ↓ front‑end will overwrite its store
+    "selected_cubes": cubes_filtered,   # ↓ persist for future turns
+    "show_visualization_signal": show_viz,
     "selected_polygons": state.get("selected_polygons", []),
     "selected_polygons_unit_types": state.get("selected_polygons_unit_types", []),
     "current_node": "select_unit_on_map",

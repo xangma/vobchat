@@ -1085,7 +1085,7 @@ def find_cubes_node(state: lg_State) -> lg_State:
         logger.info(f"Successfully combined {len(big_cubes_df)} cube rows across {len(all_selected_unit_ids)} units.")
 
         # Convert the combined DataFrame to a list of dictionaries for the interrupt payload.
-        cubes_data_list = big_cubes_df.to_dict("records")
+        cubes_data_list = big_cubes_df.to_json(orient="records")
 
         # --- Issue Interrupt for Visualization ---
         # Signal the frontend that data is ready for display.

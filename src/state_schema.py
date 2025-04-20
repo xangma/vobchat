@@ -26,6 +26,9 @@ class lg_State(TypedDict):
     # theme selection
     selected_place_themes: Optional[str]
     selected_theme: Optional[str]
+    
+    # cube selection
+    selected_cubes: List[Optional[str]]
 
     # extraction results
     extracted_place_names: List[str]

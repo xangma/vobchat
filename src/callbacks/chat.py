@@ -426,12 +426,21 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                                 prompt_text = interrupt_updates.get("message", "")
                                 interrupt_message = html.Div(f"{prompt_text}", className="speech-bubble ai-bubble")
 
+                            # 5. Text Input Interrupt: Prompt the user for text input (handled by next user message)
+                            else:
+                                # This case assumes the interrupt requires the user to type something
+                                # in the chat input next, rather than click a button or interact with the map.
+                                logger.debug("Text input interrupt")
+                                prompt_text = interrupt_updates.get("message", "Please provide input:")
+                                interrupt_message = html.Div(f"{prompt_text}", className="speech-bubble ai-bubble")
+
                             # 3. Cube Data Interrupt: Update place state to display visualizations
-                            elif interrupt_updates.get("cubes"):
+                            if interrupt_updates.get("cubes"):
                                 logger.debug("Cube data interrupt")
                                 cubes = interrupt_updates.get("cubes", [])
                                 # Update the Dash place_state_async with the retrieved cube data
                                 place_state_async.update({"cubes": cubes})
+                                place_state_async.update({"cube_data": cubes}) # Flag to show visualization
                                 # Persist the selected cubes back into the workflow state if needed later
                                 interrupt_updates.update({"selected_cubes": cubes})
 
@@ -441,13 +450,6 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                                 # Update app_state to signal UI to show visualization components
                                 app_state_async.update({"show_visualization": True})
                                 
-                            # 5. Text Input Interrupt: Prompt the user for text input (handled by next user message)
-                            else:
-                                # This case assumes the interrupt requires the user to type something
-                                # in the chat input next, rather than click a button or interact with the map.
-                                logger.debug("Text input interrupt")
-                                prompt_text = interrupt_updates.get("message", "Please provide input:")
-                                interrupt_message = html.Div(f"{prompt_text}", className="speech-bubble ai-bubble")
 
                             if interrupt_updates.get("message"):
                                 # treat as ordinary assistant text

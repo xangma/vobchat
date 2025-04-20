@@ -47,7 +47,7 @@ def register_visualization_callbacks(app, compiled_workflow):
                  # Hide both if no cubes
                  return hidden_container_style, hidden_area_style, [], place_state, "true"
 
-            cubes_df = pd.DataFrame(cubes)
+            cubes_df = pd.read_json(cubes, orient='records')
             cube_ids = cubes_df['Cube_ID'].tolist()
             g_units = state.values.get('selected_place_g_units', [])
             if not g_units:
@@ -58,7 +58,7 @@ def register_visualization_callbacks(app, compiled_workflow):
             for g_unit in g_units:
                  try:
                     # Ensure get_all_cube_data is defined and imported in tools.py
-                    cube_data = pd.read_json(get_all_cube_data({"g_unit": str(g_unit), "cube_ids": cube_ids}), orient='records')
+                    cube_data = pd.read_json(io.StringIO(get_all_cube_data({"g_unit": str(g_unit), "cube_ids": cube_ids})), orient='records')
                     if not cube_data.empty:
                         cube_list.append(cube_data)
                  except Exception as e:
@@ -75,7 +75,7 @@ def register_visualization_callbacks(app, compiled_workflow):
                  {"label": row['Cube'], "value": row['Cube_ID']}
                  for idx, row in cubes_df.iterrows()
             ]
-            place_state['cube_data'] = all_cube_data.to_json(orient='split')
+            place_state['cube_data'] = all_cube_data.to_json(orient='records')
 
             # Return styles to SHOW BOTH container and inner area
             return visible_container_style, visible_area_style, options, place_state, "false"
@@ -89,7 +89,7 @@ def register_visualization_callbacks(app, compiled_workflow):
     @app.callback(
         Output("data-plot", "figure", allow_duplicate=True),
         Input("cube-selector", "value"),
-        State("place-state", "data"),
+        Input("place-state", "data"),
         prevent_initial_call=True
     )
     def update_visualization(selected_cubes, place_state):
@@ -97,9 +97,8 @@ def register_visualization_callbacks(app, compiled_workflow):
              raise PreventUpdate
 
         try:
-            cube_data_dict = json.loads(place_state["cube_data"])
             # Use read_json for potentially better type inference
-            cubes_df = pd.read_json(io.StringIO(place_state["cube_data"]), orient='split')
+            cubes_df = pd.read_json(io.StringIO(place_state["cube_data"]), orient='records')
 
             if not isinstance(selected_cubes, list):
                 selected_cubes = [selected_cubes]
@@ -127,11 +126,11 @@ def register_visualization_callbacks(app, compiled_workflow):
             unpivoted_df = pd.melt(filtered_df, id_vars=['year', 'g_name'], value_vars=value_vars)
 
             # Attempt to map back to cube names for legend (if available)
-            cube_name_map = {row['Cube_ID']: row['Cube'] for idx, row in pd.DataFrame(place_state.get("cubes", [])).iterrows()}
+            cube_name_map = {row['Cube_ID']: row['Cube'] for idx, row in pd.read_json(io.StringIO(place_state.get("cubes", [])), orient='records').iterrows()}
             def get_cube_name_from_variable(variable_str):
-                 # Find the Cube ID whose pattern (e.g., '6080') is in the variable column name
-                 matched_id = next((cid for cid in cube_name_map if cid[2:] in variable_str), None)
-                 return cube_name_map.get(matched_id, variable_str) # Fallback to raw column
+                # Find the Cube ID whose pattern (e.g., '6080') is in the variable column name
+                matched_id = next((cid for cid in cube_name_map if cid[2:] in variable_str), None)
+                return cube_name_map.get(matched_id, variable_str) # Fallback to raw column
 
             unpivoted_df['cube_name'] = unpivoted_df['variable'].apply(get_cube_name_from_variable)
             unpivoted_df['merged_name'] = unpivoted_df['g_name'] + ' - ' + unpivoted_df['cube_name']
