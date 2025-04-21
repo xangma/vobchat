@@ -6,7 +6,9 @@ from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import SystemMessage, HumanMessage, AnyMessage
 from langchain_ollama import ChatOllama
+import logging
 
+logger = logging.getLogger(__name__)
 # -------------------------------------------------------------------------------------
 # 1.  AssistantIntent enum - canonical names routed inside the graph
 # -------------------------------------------------------------------------------------
@@ -28,14 +30,18 @@ class AssistantIntent(str, Enum):
 # 2.  Structured LLM response schema
 # -------------------------------------------------------------------------------------
 
-class AssistantIntentPayload(BaseModel):
-    """Minimal contract returned by agent-LLM before routing."""
-    """ Example: {"intent": "AddPlace", "arguments": {"place": "London"}} """
+# One payload per intent …
+class SingleIntent(BaseModel):
     intent: AssistantIntent = Field(..., description="Name of the intent recognised in the user utterance.")
     arguments: Dict[str, Any] = Field(
         default_factory=dict,
         description="For AddPlace either {'place': str} or {'places': list[str]}",
    )
+class AssistantIntentPayload(BaseModel):
+    """Minimal contract returned by agent-LLM before routing."""
+    """ Example: {"intent": "AddPlace", "arguments": {"place": "London"}} """
+    intents: List[SingleIntent]
+
 
 # -------------------------------------------------------------------------------------
 # 3.  Prompt + chain to extract the intent
@@ -59,7 +65,6 @@ _INTENT_EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
 
         • If the user explicitly asks to add / include a place, use AddPlace and return {{"place": "<name>"}}.  
         • If they ask to remove a place, RemovePlace with {{"place": "<name>"}}.  
-        • If the user names several places, use AddPlace and return {{"places": ["<name1>","<name2>", …]}}.
         • If they ask to remove several places, RemovePlace with {{"places": ["<name1>","<name2>", …]}}.  
         • If they mention a postcode, treat it as AddPlace with {{"postcode": "<code>"}}.  
         • If they request a statistical topic, use AddTheme with {{"theme_query": "<words from user>"}}.
@@ -73,7 +78,10 @@ _INTENT_EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
         • Anything else: Chat.  Set arguments.text to the assistant's normal reply.
 
         Reply **only** with JSON matching this schema:
-        {{"intent": <intent string>, "arguments": <object>}}
+        {{"intents": [
+            {{"intent": <intent string>, "arguments": <object>}},
+            {{"intent": <intent string>, "arguments": <object>}}
+        ]}}
                 
         Previous conversation:
         {history}
@@ -107,10 +115,10 @@ def extract_intent(user_text: str, messages: list[AnyMessage]) -> AssistantInten
     # 3. try JSON → pydantic
     try:
         data = json.loads(raw)
+        logger.info(f"LLM reply: {data}")
         return AssistantIntentPayload.model_validate(data)
     except Exception:
         # fallback: treat entire reply as a free-form assistant answer
         return AssistantIntentPayload(
-            intent=AssistantIntent.CHAT,
-            arguments={"text": raw},
+            intents=[SingleIntent(intent=AssistantIntent.CHAT, arguments={"text": raw})],
         )

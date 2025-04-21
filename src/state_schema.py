@@ -15,6 +15,8 @@ class lg_State(TypedDict):
     # conversation
     messages: Annotated[List[AnyMessage], add_messages]
 
+    intent_queue: List[dict]
+
     # user-choice plumbing
     selection_idx: Optional[int]
 

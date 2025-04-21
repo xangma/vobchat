@@ -200,137 +200,6 @@ choose_theme_prompt = ChatPromptTemplate.from_messages([
 choose_theme_chain = choose_theme_prompt | model.with_structured_output(
     schema=ThemeDecision)
 
-# ----------------------------------------------------------------------------------------
-# NODE DEFINITIONS
-# ----------------------------------------------------------------------------------------
-# These functions represent the individual steps (nodes) in the workflow graph.
-# Each function takes the current state (lg_State) as input and returns the updated state
-# or a Command to control graph flow (e.g., Command(goto=...)).
-
-
-# def agent_node(state: lg_State) -> lg_State:
-#     """
-#     A general-purpose node that invokes the LLM assistant for conversational responses or clarifications.
-#     It's often used as a fallback or when the workflow needs the LLM's reasoning capabilities beyond structured tasks.
-#     It checks the last message and, if it's from the user, invokes the LLM with context.
-#     """
-#     logger.info("Agent node: consulting assistant...")
-#     if state["messages"]:
-#         last_msg = state["messages"][-1]
-#         # Only invoke the LLM if the last message was from the user (not the AI)
-#         if isinstance(last_msg, HumanMessage):
-#             query = last_msg.content.strip()
-#             logger.info(f"Assistant query detected: {query}")
-#             # Invoke the LLM with a system message providing context about the application and the current state.
-#             response = model.invoke([
-#                     SystemMessage(
-#                         content=f"""
-#                         You are an expert assistant integrated within the DDME prototype application—a dashboard that combines a chat interface, data retrieval, and dynamic visualization(maps and charts). The overall aim of the program is to engage users in conversation, extract relevant information from their queries(such as place names, postcodes, themes, and year ranges), retrieve corresponding data from a database, and then display this data interactively on maps and visualizations.
-
-#                         The application is structured as a workflow graph with multiple nodes, each responsible for a specific part of the process. You have full access to the global state variable `state`, which tracks conversation history, user selections, and workflow progress.
-
-#                         **Important Points for Your Assistance:**
-#                         - **State Awareness:** The `state` variable is central to the application's logic, tracking everything from user messages to selections and workflow progress.
-#                         - **User Interruptions:** Several nodes can raise a `interrupt` to pause the automated flow and request user input. When advising on or debugging the system, consider how these interruptions are managed and how user responses update the `state`. 
-#                         - **Data Flow:** Each node builds on the previous ones—starting from query extraction to data retrieval and visualization. Understanding this flow is key to providing accurate recommendations.
-
-#                         Your role is to use this context and the current `state` to offer detailed, actionable insights that help maintain a smooth conversation flow, correctly process user queries, and enhance the overall user experience.
-
-#                         Here is the current state of the application:
-#                         {state}
-#                         """),
-#                 HumanMessage(content=query) # Pass the user's query
-#             ])
-
-#             # Append the LLM's response to the message history in the state.
-#             state["messages"].append(AIMessage(content=response.content))
-#     # Return the potentially updated state.
-#     return state
-
-
-# def extract_initial_query_node(state: lg_State):
-#     """
-#     Uses the `initial_query_chain` (LLM with structured output) to extract places, counties,
-#     theme, and year range from the latest user message. Updates the state with these findings.
-#     Returns a Command to branch execution based on whether places were found.
-#     """
-#     logger.info("Extracting variables from the initial user query...")
-#     # Record the current node name in the state (useful for resuming after interrupts)
-#     state["current_node"] = "extract_initial_query_node"
-#     # Get the last user message content.
-#     user_message = state["messages"][-1].content if state["messages"] else ""
-#     try:
-#         # Invoke the extraction chain.
-#         extraction: UserQuery = initial_query_chain.invoke({"text": user_message})
-#         logger.debug(f"Extraction result: {extraction}")
-#         # Update state with extracted information from the Pydantic model.
-#         state["extracted_place_names"] = extraction.places
-#         state["extracted_counties"] = extraction.counties
-#         state["extracted_theme"] = extraction.theme
-#         state["min_year"] = extraction.min_year
-#         state["max_year"] = extraction.max_year
-#     except Exception as e:
-#         # Log errors during extraction.
-#         logger.error("Error during initial query extraction", exc_info=True)
-#         # Optionally add an error message for the user?
-#         # state["messages"].append(AIMessage(content="Sorry, I had trouble understanding that request."))
-
-#     # If place names were successfully extracted, proceed to the multi-place tool call.
-#     if state.get("extracted_place_names"):
-#         # Use Command to explicitly route to the next node and pass updated state values.
-#         return Command(
-#             goto="multi_place_tool_call",
-#             update={ # Pass extracted values explicitly in the update part of the command
-#                 "extracted_place_names": state["extracted_place_names"],
-#                 "extracted_counties": state["extracted_counties"],
-#                 "extracted_theme": state["extracted_theme"],
-#                 "min_year": state["min_year"],
-#                 "max_year": state["max_year"]
-#             }
-#         )
-#     else:
-#         # If no places were extracted, go to the general agent node for clarification.
-#         return Command(
-#             goto="agent_node",
-#             update={"messages": state["messages"]} # Pass updated messages
-#         )
-
-
-def validate_user_input(state: lg_State) -> lg_State:
-    """
-    Checks the latest user message for a valid UK postcode using the defined regex pattern.
-    Updates the state with `is_postcode` (boolean) and `extracted_postcode` (string) if found.
-    """
-    logger.info("Starting user input validation...")
-    # Recording current node is optional here if it doesn't interrupt, but can be useful for debugging.
-    # state["current_node"] = "validate_user_input"
-    logger.debug({"current_state": state})
-    # Get the content of the last message.
-    if state["messages"]:
-        user_input = state["messages"][-1].content
-    else:
-        user_input = "" # Handle case with no messages
-    logger.debug({"user_input": user_input})
-
-    # Search for the postcode pattern in the input.
-    postcode_match = re.search(postcode_regex, user_input)
-    if postcode_match:
-        # If found, log it and update the state.
-        found_postcode = postcode_match.group(0)
-        logger.info(f"Valid postcode found: {found_postcode}")
-        state["is_postcode"] = True
-        state["extracted_postcode"] = found_postcode
-    else:
-        # If not found, log it and update the state.
-        logger.info("No valid postcode found in input")
-        state["is_postcode"] = False
-        state["extracted_postcode"] = None
-
-    logger.debug({"updated_state": state})
-    # Return the updated state.
-    return state
-
-
 def postcode_tool_call(state: lg_State) -> lg_State:
     """
     If a postcode was previously extracted (`extracted_postcode` is set), this node calls
@@ -1175,7 +1044,8 @@ def find_cubes_node(state: lg_State) -> lg_State:
             "message": f"Here is the data for '{theme_label}' across the selected area(s):",
              # The core data payload for the frontend visualization components.
             "cubes": cubes_data_list,
-            "current_node": "find_cubes_node" # Identify the interrupting node
+            "current_node": "find_cubes_node", # Identify the interrupting node
+            "last_intent_payload": {}
         })
         # Execution stops here, waits for frontend to handle the data (e.g., render charts)
         # and potentially resume the workflow later if needed (e.g., user asks follow-up question).
@@ -1284,7 +1154,7 @@ def create_workflow(lg_state: TypedDict):
     )
 
     for n in [
-        "RemovePlace_node", "AddTheme_node", "RemoveTheme_node"
+        "RemovePlace_node", "RemoveTheme_node"
         ]:
         workflow.add_edge(n, "agent_node")
         
@@ -1306,13 +1176,19 @@ def create_workflow(lg_state: TypedDict):
     workflow.add_edge("process_unit_selection", "select_unit_on_map")
 
     workflow.add_conditional_edges(
-        "select_unit_on_map",
-        should_continue_to_themes,            # unchanged helper
-        {
-            "get_place_themes_node": "get_place_themes_node",
-            "process_place_selection": "process_place_selection",
-        },
+    "select_unit_on_map",
+    lambda s: (
+        "agent_node" if s.get("intent_queue")        # process queued intent
+        else should_continue_to_themes(s)            # original decision
+    ),
+    {
+        "agent_node": "agent_node",
+        "get_place_themes_node": "get_place_themes_node",
+        "process_place_selection": "process_place_selection",
+    },
     )
+    
+    workflow.add_edge("AddTheme_node", "get_place_themes_node")
     
     
 

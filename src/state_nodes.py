@@ -207,14 +207,14 @@ def AddTheme_node(state: lg_State):
         return _maybe_route_to_cubes(state)
 
     # free text query
-    if "theme_query" in args:
+    elif "theme_query" in args:
         q = args["theme_query"].strip()
         state["extracted_theme"] = q
         state["selected_theme"] = None
         _append_ai(state, f"Looking for a theme matching “{q}”…")
-        return Command(goto="get_place_themes_node", update=state)
 
-    _append_ai(state, "AddTheme: no theme_code or theme_query provided.")
+    else:
+        _append_ai(state, "AddTheme: no theme_code or theme_query provided.")
     return state
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -132,8 +132,9 @@ def register_visualization_callbacks(app, compiled_workflow):
                 matched_id = next((cid for cid in cube_name_map if cid[2:] in variable_str), None)
                 return cube_name_map.get(matched_id, variable_str) # Fallback to raw column
 
+            unpivoted_df = unpivoted_df.sort_values(['g_name','year'])
             unpivoted_df['cube_name'] = unpivoted_df['variable'].apply(get_cube_name_from_variable)
-            unpivoted_df['merged_name'] = unpivoted_df['g_name'] + ' - ' + unpivoted_df['cube_name']
+            unpivoted_df['merged_name'] = unpivoted_df['g_name'] + ' - ' + unpivoted_df['variable']
 
             fig = px.line(unpivoted_df, x='year', y='value', color='merged_name',
                           title="Historical Data Visualization")
