@@ -82,7 +82,7 @@ def ShowState_node(state: lg_State):
 
     yrs = (state.get("min_year"), state.get("max_year"))
     if any(yrs):
-        summary.append(f"• years: {yrs[0] or '…'} – {yrs[1] or '…'}")
+        summary.append(f"• years: {yrs[0] or '…'} - {yrs[1] or '…'}")
 
     _append_ai(state, "Current selection:\n" + "\n".join(summary))
     state["last_intent_payload"] = {}
@@ -128,6 +128,7 @@ def ListAllThemes_node(state: lg_State):
     listing = "\n".join(f"• {row.labl} ({row.ent_id})" for _, row in df.iterrows())
     _append_ai(state, listing + "\n… all themes shown. Use keywords to narrow.")
     state["last_intent_payload"] = {}
+    state["needs_clarification"] = False
     return state
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -135,7 +136,7 @@ def ListAllThemes_node(state: lg_State):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def Reset_node(state: lg_State):
-    _append_ai(state, "Starting over – previous selections cleared.")
+    _append_ai(state, "Starting over - previous selections cleared.")
     return Command(goto="START", update=_initial_state())
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -173,7 +174,7 @@ def AddPlace_node(state: lg_State):
     new_idx = len(names) - len(names_to_add)
 
     plural = ", ".join(names_to_add)
-    _append_ai(state, f"Okay – adding {plural}. Let me find them …")
+    _append_ai(state, f"Okay - adding {plural}. Let me find them …")
 
     update = {
         "messages": state["messages"],
@@ -199,7 +200,7 @@ def AddTheme_node(state: lg_State):
     if "theme_code" in args:
         code = args["theme_code"].strip().upper()
         if not code.startswith("T_"):
-            _append_ai(state, f"‘{code}’ doesn’t look like a valid theme code.")
+            _append_ai(state, f"‘{code}' doesn't look like a valid theme code.")
             return state
         state["selected_theme"] = pd.DataFrame({"ent_id": [code], "labl": [code]}).to_json(orient="records")
         _append_ai(state, f"Theme set to {code}.")
@@ -239,7 +240,7 @@ def RemovePlace_node(state: lg_State):
     place: Optional[str] = args.get("place")
 
     if not place:
-        _append_ai(state, "Tell me which place to remove, e.g. ‘remove Oxford’.")
+        _append_ai(state, "Tell me which place to remove, e.g. ‘remove Oxford'.")
         return state
 
     place_names = state.get("extracted_place_names", [])
@@ -249,7 +250,7 @@ def RemovePlace_node(state: lg_State):
     county_names = [c.lower() for c in county_names]
     
     if place not in place_names:
-        _append_ai(state, f"{place} isn’t in your selection.")
+        _append_ai(state, f"{place} isn't in your selection.")
         state["last_intent_payload"] = {} 
         return Command(goto=END)
 
@@ -271,7 +272,7 @@ def RemovePlace_node(state: lg_State):
             if not df.empty and "g_unit" in df.columns:
                 df = df[df["g_unit"].isin(remaining_units)]
                 cubes_filtered = df.to_json(orient="records")
-        except Exception:          # defensive – fallback to clearing
+        except Exception:          # defensive - fallback to clearing
             cubes_filtered = pd.DataFrame(columns=["g_unit"]).to_json(orient="records")
 
     if len(cubes_filtered) > 0:
@@ -314,7 +315,7 @@ def theme_hint_node(state: lg_State):
         code  = df["ent_id"].iat[0]
         label = df["labl"].iat[0]
     except Exception:
-        return state  # malformed – skip
+        return state  # malformed - skip
 
     msg = (
         f"Selected theme: **{label}** ({code}). "
@@ -333,12 +334,12 @@ def DescribeTheme_node(state: lg_State):
     """
     Reply with the definition/metadata of a theme.
     • Works even if *no* theme is currently selected.
-    • Clears last_intent_payload so the router won’t loop.
+    • Clears last_intent_payload so the router won't loop.
     """
 
     payload = state.get("last_intent_payload") or {}
     args    = payload.get("arguments", {})
-    query   = (args.get("theme_query") or "").strip()
+    query   = (args.get("theme") or "").strip()
 
     # 1️⃣ Determine the theme code
     theme_df = None
@@ -357,7 +358,7 @@ def DescribeTheme_node(state: lg_State):
     # c) still nothing → ask a follow-up
     if theme_df is None or theme_df.empty:
         state.setdefault("messages", []).append(
-            AIMessage(content="I’m not sure which theme you mean. "
+            AIMessage(content="I'm not sure which theme you mean. "
                               "Try e.g. “describe Population” or “describe T_POP”.")
         )
         state["last_intent_payload"] = {}
@@ -400,10 +401,10 @@ def ask_followup_node(state: lg_State):
       choice into a fake ``last_intent_payload`` and immediately hand control
       back to the normal intent router in ``agent_node``.
     • If the user would rather *type* a clarification instead of clicking a
-      button that's fine as well – their next text will be handled by the LLM
+      button that's fine as well - their next text will be handled by the LLM
       intent-extract routine as usual.
 
-    The quick-action list is deliberately short and generic – add / change them
+    The quick-action list is deliberately short and generic - add / change them
     as you like.
     """
     
@@ -438,10 +439,10 @@ def ask_followup_node(state: lg_State):
             idx = int(state["selection_idx"])
             chosen_intent = intents[idx]
         except (ValueError, IndexError):
-            # bad index – start over cleanly
+            # bad index - start over cleanly
             state["selection_idx"] = None
             state["options"] = []
-            logger.warning("ask_followup_node: invalid selection_idx – reprompting")
+            logger.warning("ask_followup_node: invalid selection_idx - reprompting")
         else:
             logger.info(f"ask_followup_node: user picked quick action → {chosen_intent}")
             # clear one-shot fields before continuing
@@ -453,7 +454,7 @@ def ask_followup_node(state: lg_State):
             return Command(goto="agent_node", update=state)
 
     # ------------------------------------------------------------------
-    # 2.  First entry – ask for clarification using an interrupt
+    # 2.  First entry - ask for clarification using an interrupt
     # ------------------------------------------------------------------
     logger.info("ask_followup_node: issuing clarification interrupt")
 

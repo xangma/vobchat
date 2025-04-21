@@ -10,25 +10,25 @@ import logging
 
 logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
-#   agent_node – single entry point for every human turn
+#   agent_node - single entry point for every human turn
 # ---------------------------------------------------------------------------
 
-def agent_node(state: lg_State):  # noqa: C901 – complexity fine for single function
+def agent_node(state: lg_State):  # noqa: C901 - complexity fine for single function
     """Parse the latest *HumanMessage* into an intent and either respond
     directly (for free-form Chat) or route to the corresponding handler node.
 
     The recognised intent plus its arguments are stashed in
-    `state["last_intent_payload"]` so downstream nodes don’t need to re-run
+    `state["last_intent_payload"]` so downstream nodes don't need to re-run
     the LLM classification.
     """
 
-    # Safety: no messages in state – nothing to do
+    # Safety: no messages in state - nothing to do
     if not state.get("messages"):
         return state
 
     last_msg = state["messages"][-1]
 
-    # Only trigger on fresh human input – if the last message is AI / Tool we
+    # Only trigger on fresh human input - if the last message is AI / Tool we
     # simply return the state so the graph can proceed along its edges.
     if not isinstance(last_msg, HumanMessage):
         return state
@@ -42,10 +42,10 @@ def agent_node(state: lg_State):  # noqa: C901 – complexity fine for single f
         intent_payload: AssistantIntentPayload = extract_intent(user_text, state["messages"])  # synchronous .invoke under the hood
         logger.info(f"User text: {user_text}")
         logger.info(f"Intent payload: {intent_payload}")
-    except Exception as exc:  # pragma: no cover – defensive
+    except Exception as exc:  # pragma: no cover - defensive
         # Fallback: treat as normal chat
         assistant_err = (
-            "I’m having trouble understanding that – could you rephrase?"
+            "I'm having trouble understanding that - could you rephrase?"
         )
         state["messages"].append(AIMessage(content=assistant_err))
         return state
@@ -66,7 +66,7 @@ def agent_node(state: lg_State):  # noqa: C901 – complexity fine for single f
         assistant_reply = args.get("text", "")
         if assistant_reply:
             state["messages"].append(AIMessage(content=assistant_reply))
-        return state  # no routing – conversation continues
+        return state  # no routing - conversation continues
 
     # ------------------------------------------------------------------
     # 3.  Route to intent-specific node

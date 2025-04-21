@@ -23,9 +23,9 @@
 #    3.  Calls `compiled_workflow.astream(...)`, forwarding streamed
 #        AIMessageChunks back to the UI with progressive updates.
 #    4.  Detects **interrupts** emitted by the workflow and materialises them into Dash widgets:
-#          – multiple-choice buttons  
-#          – map selection requests  
-#          – cube visualisation signals
+#          - multiple-choice buttons  
+#          - map selection requests  
+#          - cube visualisation signals
 #    5.  Persists / hydrates state on every turn so the graph can be
 #        *paused* by the front-end and later *resumed* (e.g. after a map click).
 #

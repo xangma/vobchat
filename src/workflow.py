@@ -230,7 +230,7 @@ choose_theme_chain = choose_theme_prompt | model.with_structured_output(
 #                         The application is structured as a workflow graph with multiple nodes, each responsible for a specific part of the process. You have full access to the global state variable `state`, which tracks conversation history, user selections, and workflow progress.
 
 #                         **Important Points for Your Assistance:**
-#                         - **State Awareness:** The `state` variable is central to the application’s logic, tracking everything from user messages to selections and workflow progress.
+#                         - **State Awareness:** The `state` variable is central to the application's logic, tracking everything from user messages to selections and workflow progress.
 #                         - **User Interruptions:** Several nodes can raise a `interrupt` to pause the automated flow and request user input. When advising on or debugging the system, consider how these interruptions are managed and how user responses update the `state`. 
 #                         - **Data Flow:** Each node builds on the previous ones—starting from query extraction to data retrieval and visualization. Understanding this flow is key to providing accurate recommendations.
 
@@ -493,13 +493,13 @@ def process_place_selection(state: lg_State) -> lg_State:
     selection_idx = state.get("selection_idx") # This comes from the frontend callback after button click
 
     already_waiting = (
-        selection_idx is None               # user hasn’t answered
+        selection_idx is None               # user hasn't answered
         and state.get("options")            # options are already stored
         and state.get("current_node") == "process_place_selection"
     )
 
     if already_waiting:
-        logger.debug("Already waiting for a place choice – skip duplicate prompt.")
+        logger.debug("Already waiting for a place choice - skip duplicate prompt.")
         interrupt(value={
             "options": state["options"],            # keep the buttons alive
             "current_node": "process_place_selection",
@@ -662,13 +662,13 @@ def process_unit_selection(state: lg_State) -> lg_State:
     selection_idx = state.get("selection_idx")
 
     already_waiting = (
-        selection_idx is None               # user hasn’t answered
+        selection_idx is None               # user hasn't answered
         and state.get("options")            # options are already stored
         and state.get("current_node") == "process_unit_selection"
     )
 
     if already_waiting:
-        logger.debug("Already waiting for a unit choice – skip duplicate prompt.")
+        logger.debug("Already waiting for a unit choice - skip duplicate prompt.")
         interrupt(value={
             "options": state["options"],            # keep the buttons alive
         })
@@ -926,7 +926,7 @@ def get_place_themes_handler(state: lg_State) -> lg_State:
     # if we already have a theme and it is still in the list → done
     if cur_code and cur_code in available_df["ent_id"].values:
         theme_lbl = cur_df["labl"].iat[0]
-        logger.info(f"Theme ‘{theme_lbl}’ still valid – keeping it.")
+        logger.info(f"Theme ‘{theme_lbl}' still valid - keeping it.")
         state["messages"].append(
             AIMessage(content=f"Keeping previously selected theme “{theme_lbl}”.")
         )
@@ -994,13 +994,13 @@ def get_place_themes_handler(state: lg_State) -> lg_State:
     selection_idx = state.get("selection_idx")
     
     already_waiting = (
-        selection_idx is None               # user hasn’t answered
+        selection_idx is None               # user hasn't answered
         and state.get("options")            # options are already stored
         and state.get("current_node") == "get_place_themes_handler"
     )
 
     if already_waiting:
-        logger.debug("Already waiting for a theme choice – skip duplicate prompt.")
+        logger.debug("Already waiting for a theme choice - skip duplicate prompt.")
         interrupt(value={
             "options": state["options"],            # keep the buttons alive
             "current_node": "get_place_themes_handler",
@@ -1270,7 +1270,7 @@ def create_workflow(lg_state: TypedDict):
     workflow.add_node("ask_followup_node", ask_followup_node)
 
 
-    # agent-edge – single mapping
+    # agent-edge - single mapping
     workflow.add_conditional_edges(
         "agent_node",
         lambda s: (s.get("last_intent_payload") or {}).get("intent") or "NO_INTENT",
@@ -1284,10 +1284,16 @@ def create_workflow(lg_state: TypedDict):
     )
 
     for n in [
-        "ShowState_node", "ListThemesForSelection_node", "ListAllThemes_node",
         "RemovePlace_node", "AddTheme_node", "RemoveTheme_node"
         ]:
         workflow.add_edge(n, "agent_node")
+        
+    for n in [
+        "ShowState_node", "ListThemesForSelection_node", "ListAllThemes_node",
+        "DescribeTheme_node",
+    ]:
+        workflow.add_edge(n, END)
+
 
     # --- Define Edges (Workflow Logic) ---
 
@@ -1317,8 +1323,6 @@ def create_workflow(lg_state: TypedDict):
     workflow.add_edge("get_place_themes_handler", "theme_hint_node")
     workflow.add_edge("theme_hint_node", "find_cubes_node")
 
-    # The DescribeTheme intent is standalone:
-    workflow.add_edge("DescribeTheme_node", "agent_node")
     workflow.add_edge("ask_followup_node", "agent_node")
 
 

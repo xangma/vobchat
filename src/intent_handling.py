@@ -8,7 +8,7 @@ from langchain_core.messages import SystemMessage, HumanMessage, AnyMessage
 from langchain_ollama import ChatOllama
 
 # -------------------------------------------------------------------------------------
-# 1.  AssistantIntent enum – canonical names routed inside the graph
+# 1.  AssistantIntent enum - canonical names routed inside the graph
 # -------------------------------------------------------------------------------------
 
 class AssistantIntent(str, Enum):
@@ -21,7 +21,7 @@ class AssistantIntent(str, Enum):
     LIST_SELECTION_THEMES = "ListThemesForSelection"
     LIST_ALL_THEMES = "ListAllThemes"
     RESET = "Reset"
-    CHAT = "Chat"  # free-form response – no state mutation
+    CHAT = "Chat"  # free-form response - no state mutation
 
 
 # -------------------------------------------------------------------------------------
@@ -62,7 +62,8 @@ _INTENT_EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
         • If the user names several places, use AddPlace and return {{"places": ["<name1>","<name2>", …]}}.
         • If they ask to remove several places, RemovePlace with {{"places": ["<name1>","<name2>", …]}}.  
         • If they mention a postcode, treat it as AddPlace with {{"postcode": "<code>"}}.  
-        • If they request a statistical topic, use AddTheme with {{"theme_query": "<words from user>"}}.  
+        • If they request a statistical topic, use AddTheme with {{"theme_query": "<words from user>"}}.
+        • If they ask what a theme is, use DescribeTheme with {{"theme": "<name>"}}. 
         • If they ask to clear the current theme, use RemoveTheme.  
         • For state inspection requests ("what have I selected?", "show my current selection") use ShowState.  
         • Listing intents:  
@@ -87,7 +88,7 @@ _INTENT_EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
 def extract_intent(user_text: str, messages: list[AnyMessage]) -> AssistantIntentPayload:
     """
     Call the LLM, read the raw text, then parse / validate it with Pydantic.
-    If the model doesn’t give valid JSON we fall back to the Chat intent.
+    If the model doesn't give valid JSON we fall back to the Chat intent.
     """
     
     # 1. build the prompt (template already has {intent_list} substituted)
@@ -99,7 +100,7 @@ def extract_intent(user_text: str, messages: list[AnyMessage]) -> AssistantInten
         text=user_text,
     )
 
-    # 2. get the LLM’s reply
+    # 2. get the LLM's reply
     llm_reply: AIMessage = _llm.invoke(messages_llm)     # returns AIMessage
     raw = llm_reply.content.strip()
 
