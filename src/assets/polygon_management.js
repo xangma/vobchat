@@ -5,6 +5,7 @@ window.lastZoomEndTime_MapEvents = 0;
 window.attachedMapId_Dbg = null;
 window.programmaticZoomInProgress = false; // Global flag for zoom state
 window.geojsonLayerReady = false; // Flag for layer readiness
+window.programmaticZoomAnimating = false;
 
 // Add init hook to make map accessible from the container
 L.Map.addInitHook(function () {
@@ -18,11 +19,9 @@ L.Map.addInitHook(function () {
     });
 });
 
-// REMOVED waitForFeatures function - Zoom will be attempted directly after initial load
-
 function setupMapEventListeners(map) {
-    if (window.mapEventListenersAttached) {
-        console.log("JS (setupMapEventListeners): Listeners already attached.");
+    if (window.mapEventListenersAttached && window.attachedMapId_Dbg === map._leaflet_id) {
+        // console.log("JS (setupMapEventListeners): Listeners already attached for this map."); // Less verbose
         return;
     }
     if (!map || typeof map.on !== 'function') {
@@ -31,15 +30,18 @@ function setupMapEventListeners(map) {
     }
 
     console.log("JS (setupMapEventListeners): Attaching listeners...");
-    window.attachedMapId_Dbg = map._leaflet_id; // Store ID for debugging
+    window.attachedMapId_Dbg = map._leaflet_id;
+
+    // --- Detach existing listeners first (robustness) ---
+    map.off('zoomend');
+    map.off('moveend');
+    console.log("JS (setupMapEventListeners): Detached any previous listeners.");
 
     // Shared function to trigger Cb7 (data refresh callback)
     const triggerCb7Update = function (eventName) {
-        // Check if dash_clientside is available before using it
         if (window.dash_clientside && window.dash_clientside.set_props) {
-            console.log(`JS (Map Event - ${eventName}): Event detected. Triggering Cb7 via store.`);
+            console.log(`JS (Map Event - ${eventName}): Triggering Cb7 via store.`);
             try {
-                // Update store which acts as input for Cb7
                 window.dash_clientside.set_props("map-moveend-trigger", { data: Date.now() });
             } catch (err) {
                 console.error(`JS (Map Event - ${eventName}): Error in set_props for trigger:`, err);
@@ -49,85 +51,58 @@ function setupMapEventListeners(map) {
         }
     };
 
-    // Attach zoomend listener
     map.on('zoomend', function (e) {
-        // console.log("JS: >>> map.on('zoomend') event FIRED! <<<"); // Optional logging
+        console.log("JS: map.on('zoomend') event FIRED!");
 
-        // --- Check for Programmatic Zoom Completion ---
-        if (window.programmaticZoomInProgress) {
-            console.log("JS: map.on('zoomend') - Detected programmatic zoom completion.");
+        // Check if this zoomend corresponds to the *end* of our programmatic zoom animation
+        if (window.programmaticZoomAnimating) {
+            console.log("JS: map.on('zoomend') - Detected COMPLETION of programmatic zoom animation.");
 
-            // Reset the global flag FIRST to allow subsequent actions
-            window.programmaticZoomInProgress = false;
-            console.log("JS: map.on('zoomend') - Global programmaticZoomInProgress RESET to false.");
+            // Reset the JS flags ONLY
+            window.programmaticZoomAnimating = false;
+            window.programmaticZoomInProgress = false; // Reset general flag too
+            console.log("JS: map.on('zoomend') - Reset JS programmatic zoom flags.");
+
+            // State cleanup is now handled by Callback 10 triggered by Cb8
+            // DO NOT try to access/modify map-state here
+
+            // Prevent default Cb7 trigger after programmatic zoom
             return;
         }
-        //     // Check if a unit change is pending
-        //     let currentMapState = null;
-        //     let unitChangePending = null;
-        //     try {
-        //         currentMapState = window.dash_clientside.store.getState()["map-state"];
-        //         unitChangePending = currentMapState?.programmatic_unit_change_pending;
-        //     } catch (err) {
-        //         console.warn("JS: map.on('zoomend') - Error getting map state:", err);
-        //     }
 
-        //     // If a unit change was pending, execute it now
-        //     if (unitChangePending && currentMapState) {
-        //         console.log(`JS: map.on('zoomend') - Applying pending unit type change to: ${unitChangePending}`);
-        //         let newState = JSON.parse(JSON.stringify(currentMapState));
-
-        //         newState.unit_types = [unitChangePending]; // Set the new unit type
-        //         delete newState.programmatic_unit_change_pending; // Clear the pending flag
-
-        //         // Ensure zoom_to_selection is false/deleted after zoom finishes
-        //         delete newState.zoom_to_selection;
-
-        //         try {
-        //             // This state update triggers Cb9 to refresh data
-        //             window.dash_clientside.set_props("map-state", { data: newState });
-        //             console.log("JS: map.on('zoomend') - Set props to change unit type.");
-        //         } catch (err) {
-        //             console.error(`JS: map.on('zoomend') - Error setting props for unit type change:`, err);
-        //         }
-        //     } else {
-        //         console.log("JS: map.on('zoomend') - Programmatic zoom finished, but no unit change was pending.");
-        //         // Optionally trigger Cb7 if no unit change was needed,
-        //         // although Cb9 will likely run anyway due to the flag reset in Cb8's state update
-        //         // triggerCb7Update('zoomend (programmatic, no unit change)');
-        //     }
-
-        //     return; // IMPORTANT: Prevent Cb7 trigger immediately after programmatic zoom
-        // }
-        // // --- End Programmatic Zoom Handling ---
-
-        // --- Handle Manual Zooms (existing logic) ---
-    console.log("JS: map.on('zoomend') event processed (manual zoom or unrelated).");
-    window.lastZoomEndTime_MapEvents = Date.now(); // For moveend debounce
-    triggerCb7Update('zoomend'); // Trigger Cb7 for manual zooms
+        // --- Handle Manual Zooms ---
+        if (!window.programmaticZoomInProgress && !window.programmaticZoomAnimating) {
+            console.log("JS: map.on('zoomend') - Processing as manual zoom.");
+            window.lastZoomEndTime_MapEvents = Date.now();
+            triggerCb7Update('zoomend (manual)'); // Trigger Cb7 for manual zooms
+        } else {
+            console.log("JS: map.on('zoomend') - Event ignored (flags indicate programmatic zoom still in progress?).");
+        }
     });
+    console.log("JS (setupMapEventListeners): SIMPLIFIED zoomend listener attached.");
 
-    console.log("JS (setupMapEventListeners): zoomend listener attached.");
-
-    // Attach moveend listener (Keep existing logic, including programmaticZoomInProgress check)
+    // --- REVISED moveend listener ---
     map.on('moveend', function (e) {
-        // console.log("JS: >>> map.on('moveend') event FIRED! <<<"); // Optional logging
-        // if (window.programmaticZoomInProgress) {
-        //     console.log("JS: map.on('moveend') event IGNORED (programmatic zoom flag is true).");
-        //     return;
-        // }
-        // console.log("JS: map.on('moveend') event processed (flag is false)."); // Optional logging
+        console.log("JS: map.on('moveend') event FIRED!");
 
-        // Debounce check (keep existing logic)
+        // STRONGER CHECK: Ignore moveend if a programmatic zoom was *just* animating or is marked as in progress
+        if (window.programmaticZoomAnimating || window.programmaticZoomInProgress) {
+            console.log("JS: map.on('moveend') event IGNORED (programmatic zoom flags are true).");
+            return;
+        }
+
+        // Debounce check (keep existing logic, but might be less critical now)
         const now = Date.now();
         if (typeof window.lastZoomEndTime_MapEvents !== 'number') window.lastZoomEndTime_MapEvents = 0;
-        if (window.lastZoomEndTime_MapEvents && (now - window.lastZoomEndTime_MapEvents < 200)) {
-            // console.log("JS: map.on('moveend') event SKIPPED (debounce after recent zoomend)."); // Optional logging
+        if (window.lastZoomEndTime_MapEvents && (now - window.lastZoomEndTime_MapEvents < 250)) { // Slightly increased debounce
+            console.log("JS: map.on('moveend') event SKIPPED (debounce after recent zoomend).");
             return;
         }
-        triggerCb7Update('moveend (not debounced)');
+
+        console.log("JS: map.on('moveend') - Processing event.");
+        triggerCb7Update('moveend (debounced/allowed)');
     });
-    console.log("JS (setupMapEventListeners): moveend listener attached.");
+    console.log("JS (setupMapEventListeners): REVISED moveend listener attached.");
 
     window.mapEventListenersAttached = true;
     console.log("JS (setupMapEventListeners): All listeners attached successfully.");
@@ -590,12 +565,14 @@ window.polygon_management = {
         return bounds;
     },
 
-    // zoomTo (NO CHANGE - Logic is fine, relies on fitBounds)
     zoomTo: function (map, selectedIds = null, geojsonLayer = null) {
         const layerToUse = geojsonLayer || this.findGeoJSONLayer(map);
 
         if (!layerToUse || !layerToUse._layers) {
             console.warn("JS: zoomTo: GeoJSON layer not found or has no features.");
+            // Reset flags if zoom cannot proceed
+            window.programmaticZoomInProgress = false;
+            window.programmaticZoomAnimating = false;
             return;
         }
 
@@ -604,31 +581,41 @@ window.polygon_management = {
         const useSelection = Array.isArray(selectedIds) && selectedIds.length > 0;
 
         Object.values(layerToUse._layers).forEach(layer => {
+            // ... (bounds calculation logic remains the same) ...
             if (layer.feature && typeof layer.getBounds === 'function') {
-                 const includeFeature = !useSelection || (layer.feature.id != null && selectedIds.includes(layer.feature.id));
-                 if (includeFeature) {
+                const includeFeature = !useSelection || (layer.feature.id != null && selectedIds.includes(String(layer.feature.id))); // Ensure string comparison
+                if (includeFeature) {
                     try {
-                         targetBounds.extend(layer.getBounds());
-                         featuresFound++;
+                        targetBounds.extend(layer.getBounds());
+                        featuresFound++;
                     } catch (e) {
-                         console.warn("JS: zoomTo: Error getting bounds for layer/feature:", layer.feature?.id, e);
+                        console.warn("JS: zoomTo: Error getting bounds for layer/feature:", layer.feature?.id, e);
                     }
-                 }
+                }
             }
         });
 
+
         if (featuresFound > 0 && targetBounds.isValid()) {
             console.log(`JS: zoomTo: Zooming to bounds of ${featuresFound} features.`);
+
+            // *** Set animation flag JUST before calling fitBounds ***
+            window.programmaticZoomAnimating = true;
+            console.log("JS: zoomTo: SET programmaticZoomAnimating = true");
+
             map.fitBounds(targetBounds, {
-                padding: [20, 20], // Small padding
-                maxZoom: 14,      // Limit max zoom level
-                animate: true,    // Use animation
-                duration: 0.5     // Animation duration (seconds)
+                padding: [20, 20],
+                maxZoom: 14,
+                animate: true,
+                duration: 0.5
             });
-             // *** REMOVED setting skipNextMoveend flag here ***
-             // The programmaticZoomInProgress flag handles event skipping now.
+            // The zoomend handler will now reset programmaticZoomAnimating = false
+
         } else {
             console.warn("JS: zoomTo: No valid features found to zoom to.");
+            // Reset flags if zoom doesn't happen
+            window.programmaticZoomInProgress = false;
+            window.programmaticZoomAnimating = false;
         }
     },
 

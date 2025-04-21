@@ -432,103 +432,85 @@ def register_clientside_callbacks(app: Dash):
         prevent_initial_call=True
     )
 
-    # REVISED Callback #8: Handles Zoom INITIATION ONLY
+    # REVISED Callback #8: Initiates Fetch/Zoom & Triggers Cleanup Store
     app.clientside_callback(
         """
         function(mapState) {
             const context = dash_clientside.callback_context;
-            // Only run if triggered and mapState exists
             if (!context.triggered || context.triggered.length === 0 || !mapState) {
-                return window.dash_clientside.no_update;
+                return window.dash_clientside.no_update; // No trigger
             }
 
-            // --- Condition: Act ONLY on zoom_to_selection flag ---
             if (!mapState.zoom_to_selection) {
-                return window.dash_clientside.no_update; // Not a zoom request
+                return [window.dash_clientside.no_update, window.dash_clientside.no_update]; // Not a zoom request, return no_update for both outputs
             }
 
-            // --- Prerequisites ---
             const mapElement = document.getElementById('leaflet-map');
             const map = mapElement?._leaflet_map;
             const polygonManagement = window.polygon_management;
+            let cleanupData = window.dash_clientside.no_update; // Default cleanup output
 
             if (!map || !polygonManagement || !polygonManagement.fetchPolygonsByIds || !polygonManagement.zoomTo || !window.geojsonLayerReady) {
-                console.warn("Client (Cb8 - Fetch/Zoom): Prerequisites not met (map/pm/fetchByIds/zoomTo/layerReady).");
-                // Reset state flags if cannot proceed
-                try {
+                console.warn("Client (Cb8 - Fetch/Zoom): Prerequisites not met.");
+                // Reset flags directly in map-state if prereqs fail (this part is okay)
+                 try {
                     let newState = JSON.parse(JSON.stringify(mapState));
                     delete newState.zoom_to_selection;
                     delete newState.programmatic_unit_change_pending;
-                    window.dash_clientside.set_props("map-state", {data: newState});
-                    console.warn("Client (Cb8 - Fetch/Zoom): Resetting state flags as prerequisites failed.");
+                    window.dash_clientside.set_props("map-state", {data: newState}); // Update map-state directly ONLY on error
+                    console.warn("Client (Cb8 - Fetch/Zoom): Reset state flags in map-state as prerequisites failed.");
                 } catch(e){ console.error("Client (Cb8 - Fetch/Zoom): Error resetting state flags on prerequisite failure:", e); }
-                return window.dash_clientside.no_update;
+                return [window.dash_clientside.no_update, window.dash_clientside.no_update]; // Return no_update for dummy output and cleanup trigger
             }
 
-            // --- Fetch Data by ID First ---
             const idsToFetch = mapState.selected_polygons || [];
             const unitTypesForFetch = mapState.selected_polygons_unit_types || [];
-            const unitType = unitTypesForFetch.length > 0 ? unitTypesForFetch[0] : null; // Assuming single type for fetch by ID call, adjust if needed
+            const unitType = unitTypesForFetch.length > 0 ? unitTypesForFetch[0] : mapState.unit_types[0] || null;
 
             if (idsToFetch.length === 0 || !unitType) {
-                console.warn("Client (Cb8 - Fetch/Zoom): No IDs or unit type provided for fetch/zoom.");
-                    // Reset state flags if cannot proceed
-                try {
+                console.warn("Client (Cb8 - Fetch/Zoom): No IDs or unit type provided.");
+                 // Reset flags directly in map-state if nothing to fetch (this is also okay)
+                 try {
                     let newState = JSON.parse(JSON.stringify(mapState));
                     delete newState.zoom_to_selection;
                     delete newState.programmatic_unit_change_pending;
-                    window.dash_clientside.set_props("map-state", {data: newState});
+                    window.dash_clientside.set_props("map-state", {data: newState}); // Update map-state directly ONLY on error
                     const layer = polygonManagement.findGeoJSONLayer(map);
-                    polygonManagement.refreshLayerStyles(layer, mapState.selected_polygons);
+                    if(layer) polygonManagement.refreshLayerStyles(layer, mapState.selected_polygons);
                     console.warn("Client (Cb8 - Fetch/Zoom): Resetting state flags due to missing IDs/unit type.");
                 } catch(e){ console.error("Client (Cb8 - Fetch/Zoom): Error resetting state flags:", e); }
-                return window.dash_clientside.no_update;
+                return [window.dash_clientside.no_update, window.dash_clientside.no_update];
             }
 
             console.log(`Client (Cb8 - Fetch/Zoom): Fetching ${idsToFetch.length} polygons by ID for unit type ${unitType}.`);
             const yearRange = mapState.year_range ? { min: mapState.year_range[0], max: mapState.year_range[1] } : null;
-            const unitChangePending = mapState.programmatic_unit_change_pending; // Store pending change
 
-            // Set the flag *before* starting the async fetch/zoom process
-            window.programmaticZoomInProgress = true;
+            window.programmaticZoomInProgress = true; // Set progress flag
             console.log("Client (Cb8 - Fetch/Zoom): Global programmaticZoomInProgress SET to true.");
 
             polygonManagement.fetchPolygonsByIds(map, mapState, unitType, idsToFetch, yearRange)
                 .then(fetchedGeoJson => {
                     console.log("Client (Cb8 - Fetch/Zoom): Fetch by ID completed.");
-                        // Optional: Add fetched data directly to layer here if needed,
-                        // though updateMapWithBounds should handle cache update
-                        // const layer = polygonManagement.findGeoJSONLayer(map);
-                        // if (layer && fetchedGeoJson.features.length > 0) {
-                        //    layer.addData(fetchedGeoJson);
-                        //    console.log("Client (Cb8 - Fetch/Zoom): Added fetched features to layer.");
-                        //    polygonManagement.refreshLayerStyles(layer, mapState.selected_polygons);
-                        // }
-
-                    // --- Initiate Zoom AFTER fetch completes ---
-                    const geojsonLayer = polygonManagement.findGeoJSONLayer(map); // Get layer ref again
+                    const geojsonLayer = polygonManagement.findGeoJSONLayer(map);
                     if (geojsonLayer) {
-                        polygonManagement.zoomTo(map, idsToFetch, geojsonLayer); // Call fitBounds
+                        polygonManagement.zoomTo(map, idsToFetch, geojsonLayer); // This sets programmaticZoomAnimating = true
                         console.log("Client (Cb8 - Fetch/Zoom): Zoom initiated.");
 
-                        // Update state: remove trigger, keep pending change
-                        let newState = JSON.parse(JSON.stringify(mapState));
-                        delete newState.zoom_to_selection;
-                        newState.programmatic_unit_change_pending = unitChangePending; // Ensure pending change is still there
-                            try {
-                            window.dash_clientside.set_props("map-state", {data: newState});
-                            console.log("Client (Cb8 - Fetch/Zoom): Updated state (removed zoom trigger, kept pending change).");
-                            } catch(e) {
-                                console.error("Client (Cb8 - Fetch/Zoom): Error updating state after zoom initiation:", e);
-                                // Reset flag on error
-                                window.programmaticZoomInProgress = false;
-                            }
-                        // DO NOT reset programmaticZoomInProgress here. zoomend handler does it.
+                        // *** Trigger the cleanup callback INSTEAD of modifying map-state directly ***
+                        // Pass necessary info if needed, or just a timestamp
+                        const triggerPayload = {
+                            timestamp: Date.now(),
+                            triggered_by_cb8: true // Add a flag for clarity
+                        };
+                        console.log("Client (Cb8 - Fetch/Zoom): Updating zoom-cleanup-trigger-store.");
+                        window.dash_clientside.set_props("zoom-cleanup-trigger-store", { data: triggerPayload });
+
                     } else {
                         console.warn("Client (Cb8 - Fetch/Zoom): GeoJSON layer not found after fetch, cannot zoom.");
-                        window.programmaticZoomInProgress = false; // Reset flag if zoom fails
-                            // Also reset state flags fully if zoom fails
-                        try {
+                        window.programmaticZoomInProgress = false;
+                        window.programmaticZoomAnimating = false;
+                        // Reset flags directly in map-state ONLY on error/failure
+                         try {
                             let newState = JSON.parse(JSON.stringify(mapState));
                             delete newState.zoom_to_selection;
                             delete newState.programmatic_unit_change_pending;
@@ -538,9 +520,10 @@ def register_clientside_callbacks(app: Dash):
                 })
                 .catch(error => {
                     console.error("Client (Cb8 - Fetch/Zoom): Error during fetchPolygonsByIds:", error);
-                    window.programmaticZoomInProgress = false; // Reset flag on fetch error
-                    // Also reset state flags fully on error
-                    try {
+                    window.programmaticZoomInProgress = false;
+                    window.programmaticZoomAnimating = false;
+                     // Reset flags directly in map-state ONLY on error/failure
+                     try {
                         let newState = JSON.parse(JSON.stringify(mapState));
                         delete newState.zoom_to_selection;
                         delete newState.programmatic_unit_change_pending;
@@ -548,56 +531,51 @@ def register_clientside_callbacks(app: Dash):
                     } catch(e){}
                 });
 
-            // Callback finishes here, async operations continue
-            return window.dash_clientside.no_update;
+            // This callback now outputs to the dummy 'zoom-handled' and the new trigger store
+            return [window.dash_clientside.no_update, window.dash_clientside.no_update];
         }
         """,
-        Output('zoom-handled', 'data'), # Dummy output
+        Output('zoom-handled', 'data'), # Keep dummy output
+        # *** NEW: Output to the trigger store ***
+        Output("zoom-cleanup-trigger-store", "data"),
         Input("map-state", "data"),
         prevent_initial_call=True
     )
-
-
-
-    # NEW Callback #9: Handles Refresh for Non-Zoom State Changes
+    
+    # REVISED Callback #9: Handles Refresh (Condition slightly simplified)
     app.clientside_callback(
         """
         function(mapState) {
             const context = dash_clientside.callback_context;
-            // Only run if triggered and mapState exists
             if (!context.triggered || context.triggered.length === 0 || !mapState) {
                 return window.dash_clientside.no_update;
             }
 
-            // --- Condition: Act ONLY if zoom flag is NOT set AND zoom is NOT in progress ---
-            // This prevents Cb9 from acting when Cb8 is supposed to act (Run 1 of zoom)
-            // but *allows* it to act on Run 2 (after Cb8 reset flags) and on filter changes.
-            if (mapState.zoom_to_selection || window.programmaticZoomInProgress) {
-                // console.log("Client (Cb9 - Refresh): Skipping update (zoom flag set or zoom in progress).");
-                return window.dash_clientside.no_update;
+            // --- Condition: Act ONLY if zoom flags are NOT set AND zoom animation is NOT in progress ---
+            // Cb10 now handles clearing the flags, so Cb9 runs after that state update.
+            if (mapState.zoom_to_selection || window.programmaticZoomAnimating || window.programmaticZoomInProgress) {
+                 console.log("Client (Cb9 - Refresh): Skipping update (zoom flags/animation/progress still active).");
+                 return window.dash_clientside.no_update;
             }
 
-            // --- Prerequisites for Update ---
+            // --- Prerequisites --- (No change)
             const mapElement = document.getElementById('leaflet-map');
             const map = mapElement?._leaflet_map;
             const polygonManagement = window.polygon_management;
-
             if (!map || !polygonManagement || !polygonManagement.updateMapWithBounds || !window.geojsonLayerReady) {
-                console.warn("Client (Cb9 - Refresh): Prerequisites not met for update (map/pm/updateFunc/layerReady).");
+                console.warn("Client (Cb9 - Refresh): Prerequisites not met.");
                 return window.dash_clientside.no_update;
             }
 
-            // --- Perform Update ---
-            // This runs for filter changes, toggle changes, resets, AND
-            // the second time map-state updates after Cb8 resets the zoom flag.
-            console.log("Client (Cb9 - Refresh): Non-zoom state change detected (or post-zoom flag reset). Calling updateMapWithBounds.");
-            const bounds = map.getBounds(); // Uses bounds *at the time Cb9 runs*
+            // --- Perform Update --- (No change)
+            console.log("Client (Cb9 - Refresh): Conditions met. Calling updateMapWithBounds.");
+            const bounds = map.getBounds();
             const unitTypes = mapState.unit_types || ['MOD_REG'];
             const yearRange = mapState.year_range ? { min: mapState.year_range[0], max: mapState.year_range[1] } : null;
 
             polygonManagement.updateMapWithBounds(map, unitTypes, bounds, mapState, yearRange)
                 .then(result => {
-                    // console.log("Client (Cb9 - Refresh): updateMapWithBounds completed."); // Reduce noise
+                    console.log("Client (Cb9 - Refresh): updateMapWithBounds completed.");
                 })
                 .catch(error => {
                     console.error('Client (Cb9 - Refresh): Error in updateMapWithBounds:', error);
@@ -606,7 +584,90 @@ def register_clientside_callbacks(app: Dash):
             return window.dash_clientside.no_update;
         }
         """,
-        Output('refresh-handled', 'data'), # Dummy output
+        Output('refresh-handled', 'data'),
         Input("map-state", "data"),
-        prevent_initial_call=True # Only run on changes
+        prevent_initial_call=True
     )
+    
+    # *** NEW Callback #10: Performs State Cleanup Triggered by Cb8 ***
+    app.clientside_callback(
+        """
+        function(triggerData, currentMapState) {
+            const context = dash_clientside.callback_context;
+             // Only run if triggered by the store update AND state exists
+            if (!context.triggered || !triggerData || !currentMapState || !triggerData.triggered_by_cb8) {
+                // console.log("Client (Cb10 - Cleanup): Skipping (not triggered by Cb8 or no state).");
+                return window.dash_clientside.no_update;
+            }
+
+            console.log("Client (Cb10 - Cleanup): Triggered by zoom-cleanup-trigger-store.");
+
+            // Check if cleanup is actually needed
+            if (!currentMapState.zoom_to_selection && !currentMapState.programmatic_unit_change_pending) {
+                console.log("Client (Cb10 - Cleanup): Flags already cleared in map-state. No update needed.");
+                return window.dash_clientside.no_update;
+            }
+
+            // Perform the state update: clear the flags
+            let newState = JSON.parse(JSON.stringify(currentMapState));
+            let updated = false;
+            if (newState.zoom_to_selection) {
+                delete newState.zoom_to_selection;
+                console.log("Client (Cb10 - Cleanup): Cleared zoom_to_selection flag.");
+                updated = true;
+            }
+            if (newState.programmatic_unit_change_pending) {
+                delete newState.programmatic_unit_change_pending;
+                console.log("Client (Cb10 - Cleanup): Cleared programmatic_unit_change_pending flag.");
+                 updated = true;
+            }
+
+            if (updated) {
+                 console.log("Client (Cb10 - Cleanup): Returning updated map-state.");
+                 // This state update will trigger Cb9 for the actual map refresh based on the cleaned state
+                 return newState;
+            } else {
+                 console.log("Client (Cb10 - Cleanup): No flags needed clearing.");
+                 return window.dash_clientside.no_update;
+            }
+        }
+        """,
+        Output("map-state", "data", allow_duplicate=True), # Output updates the main map-state
+        Input("zoom-cleanup-trigger-store", "data"), # Triggered by Cb8
+        State("map-state", "data"), # Get the current map-state to modify
+        prevent_initial_call=True
+    )
+    # # Add Clientside Callback for scrolling (optional but good UX)
+    # app.clientside_callback(
+    #     """
+    #     scrollToBottom: function(children) {
+    #     // Debounce mechanism
+    #     if (window.scrollTimeout) {
+    #         clearTimeout(window.scrollTimeout);
+    #     }
+    #     window.scrollTimeout = setTimeout(() => {
+    #         try {
+    #             const chatContainer = document.getElementById('chat-display'); // Or the ID of your scrollable container
+    #             if (chatContainer) {
+    #                  // Check if user is scrolled up significantly
+    #                  const isScrolledUp = chatContainer.scrollHeight - chatContainer.scrollTop > chatContainer.clientHeight + 150; // 150px buffer
+                     
+    #                  if (!isScrolledUp) { // Only scroll if user is near the bottom
+    #                     // Using smooth scroll
+    #                     // chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
+    #                     // Or instant scroll:
+    #                     chatContainer.scrollTop = chatContainer.scrollHeight;
+    #                  }
+    #             }
+    #         } catch (e) {
+    #             console.error("Scroll error:", e);
+    #         }
+    #     }, 100); // Adjust debounce delay (ms) as needed
+    #     return null; // No Dash output needed
+    # }
+    #     """,
+    #     Output('scroll-dummy-output', 'children'),
+    #     Input('chat-display', 'children'), # Triggered by chat display updates
+    #     prevent_initial_call=True
+    
+    # )
