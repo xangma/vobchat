@@ -1,13 +1,13 @@
 """Single source of truth for the LangGraph state shape.
 
-Moving `lg_State` out of `workflow.py` avoids circular‑import headaches when
+Moving `lg_State` out of `workflow.py` avoids circular-import headaches when
 helper modules import it (e.g. state_nodes.py ⇢ workflow.py, while workflow.py
 also imports those helpers).
 """
 
 from typing import Annotated, Optional, List
 from typing_extensions import TypedDict
-from langgraph.graph.message import add_messages  # adds message‑append semantics
+from langgraph.graph.message import add_messages  # adds message-append semantics
 from langchain_core.messages import AnyMessage
 
 
@@ -15,7 +15,7 @@ class lg_State(TypedDict):
     # conversation
     messages: Annotated[List[AnyMessage], add_messages]
 
-    # user‑choice plumbing
+    # user-choice plumbing
     selection_idx: Optional[int]
 
     # place + unit selections
@@ -37,7 +37,7 @@ class lg_State(TypedDict):
     is_postcode: bool
     extracted_postcode: Optional[str]
 
-    # multi‑place machinery
+    # multi-place machinery
     multi_place_search_df: Optional[str]
     current_place_index: int
 
@@ -54,3 +54,4 @@ class lg_State(TypedDict):
     last_intent_payload: Optional[dict]
     options: Optional[List[dict]]
     message: Optional[str]
+    _theme_hint_done: Optional[bool]

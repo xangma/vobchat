@@ -2,7 +2,7 @@ from __future__ import annotations
 import io
 from langgraph.types import interrupt
 from langgraph.graph import END
-"""Intent‑handler nodes (no LLM) for the flexible DDME workflow.
+"""Intent-handler nodes (no LLM) for the flexible DDME workflow.
 Each node is registered under the name `<Intent>_node` to match AssistantIntent.
 """
 
@@ -17,8 +17,11 @@ from intent_handling import AssistantIntent
 from tools import (
     find_themes_for_unit, get_all_themes,
     find_units_by_postcode, find_places_by_name,
+    get_theme_text,
 )
 import logging
+
+logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 # Helper utilities
 # ─────────────────────────────────────────────────────────────────────────────
@@ -82,6 +85,7 @@ def ShowState_node(state: lg_State):
         summary.append(f"• years: {yrs[0] or '…'} – {yrs[1] or '…'}")
 
     _append_ai(state, "Current selection:\n" + "\n".join(summary))
+    state["last_intent_payload"] = {}
     return state
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -283,11 +287,212 @@ def RemovePlace_node(state: lg_State):
     "selected_place_g_places": state.get("selected_place_g_places", []),
     "selected_place_g_units": state.get("selected_place_g_units", []),
     "selected_place_g_unit_types": state.get("selected_place_g_unit_types", []),
-    "cubes": cubes_filtered,            # ↓ front‑end will overwrite its store
+    "cubes": cubes_filtered,            # ↓ front-end will overwrite its store
     "selected_cubes": cubes_filtered,   # ↓ persist for future turns
     "show_visualization_signal": show_viz,
     "selected_polygons": state.get("selected_polygons", []),
     "selected_polygons_unit_types": state.get("selected_polygons_unit_types", []),
     "current_node": "select_unit_on_map",
     })
+
+# ────────────────────────────────────────────────────────────────────────────
+# Node: just hint that the theme has a description
+#    (no longer dumps the full text automatically)
+# ────────────────────────────────────────────────────────────────────────────
+
+def theme_hint_node(state: lg_State):
+    """After a theme is picked, nudge the user that they can ask for details."""
+    if not state.get("selected_theme"):
+        return state  # nothing to do
+
+    # ensure we run only once per theme (idempotent)
+    if state.get("_theme_hint_done"):
+        return state
+
+    try:
+        df = pd.read_json(io.StringIO(state["selected_theme"]), orient="records")
+        code  = df["ent_id"].iat[0]
+        label = df["labl"].iat[0]
+    except Exception:
+        return state  # malformed – skip
+
+    msg = (
+        f"Selected theme: **{label}** ({code}). "
+        "If you'd like the full description just ask “describe theme” or "
+        "“what does that theme mean?”."
+    )
+    state.setdefault("messages", []).append(AIMessage(content=msg))
+    state["_theme_hint_done"] = True  # flag so we don't spam on retriggers
+    return state
+
+# ────────────────────────────────────────────────────────────────────────────
+# Node: fetch & show theme description on demand
+# ────────────────────────────────────────────────────────────────────────────
+
+def DescribeTheme_node(state: lg_State):
+    """
+    Reply with the definition/metadata of a theme.
+    • Works even if *no* theme is currently selected.
+    • Clears last_intent_payload so the router won’t loop.
+    """
+
+    payload = state.get("last_intent_payload") or {}
+    args    = payload.get("arguments", {})
+    query   = (args.get("theme_query") or "").strip()
+
+    # 1️⃣ Determine the theme code
+    theme_df = None
+
+    # a) use already-selected theme (if any)
+    if state.get("selected_theme"):
+        theme_df = pd.read_json(io.StringIO(state["selected_theme"]), orient="records")
+
+    # b) otherwise, fuzzy-match the query against *all* themes
+    if theme_df is None and query:
+        all_df = pd.read_json(io.StringIO(get_all_themes("")), orient="records")
+        mask   = all_df["labl"].str.contains(query, case=False, regex=False)
+        if mask.any():
+            theme_df = all_df[mask].head(1)
+
+    # c) still nothing → ask a follow-up
+    if theme_df is None or theme_df.empty:
+        state.setdefault("messages", []).append(
+            AIMessage(content="I’m not sure which theme you mean. "
+                              "Try e.g. “describe Population” or “describe T_POP”.")
+        )
+        state["last_intent_payload"] = {}
+        return state
+
+    code = theme_df["ent_id"].iat[0]
+    labl = theme_df["labl"].iat[0]
+
+    # 2️⃣ Fetch the long description
+    desc_df = pd.read_json(io.StringIO(get_theme_text(code)), orient="records")
+    text    = desc_df["text"].iat[0] if not desc_df.empty else "(no description available)"
+
+    state.setdefault("messages", []).append(
+        AIMessage(content=f"**{labl}** ({code})\n\n{text}")
+    )
+
+    # 3️⃣ house-keeping
+    state["last_intent_payload"] = {}      # avoid re-routing
+    return state
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Node: ask for clarification when the user message is ambiguous
+# ─────────────────────────────────────────────────────────────────────────────
+
+def ask_followup_node(state: lg_State):
+    """Generic follow-up / clarification node.
+
+    ─────────────────────────────────────────────────────────────────────────────
+    When the router in *agent_node* cannot map the user message to any of the
+    explicit AssistantIntent values it used to jump straight to ``END``.  That
+    was a dead-end for the conversation because the agent never got the chance
+    to *ask* what the user actually wanted.
+
+    This node fixes that:
+    • The first time it runs (``selection_idx`` is *None*) it issues an
+      ``interrupt`` with a small set of "quick-action" buttons plus a generic
+      clarifying question.
+    • When the user clicks one of those buttons the front-end writes
+      ``selection_idx`` back into the state.  On re-entry we translate that
+      choice into a fake ``last_intent_payload`` and immediately hand control
+      back to the normal intent router in ``agent_node``.
+    • If the user would rather *type* a clarification instead of clicking a
+      button that's fine as well – their next text will be handled by the LLM
+      intent-extract routine as usual.
+
+    The quick-action list is deliberately short and generic – add / change them
+    as you like.
+    """
+    
+    already_waiting = (
+        state.get("current_node") == "ask_followup_node"
+        and state.get("options")                 # buttons were persisted by chat.py
+        and state.get("selection_idx") is None   # user hasn't clicked yet
+    )
+    if already_waiting:
+        logger.debug("ask_followup_node: duplicate call → re-issue buttons only.")
+        interrupt(value={
+            "options": state["options"],          # keep the same buttons alive
+            "current_node": "ask_followup_node",
+        })
+        return state  
+
+    # ------------------------------------------------------------------
+    # 0.  Quick-action catalogue (index → intent name)
+    # ------------------------------------------------------------------
+    intents: List[str] = [
+        "AddPlace",
+        "AddTheme",
+        "ShowState",
+        "Reset",
+    ]
+
+    # ------------------------------------------------------------------
+    # 1.  User *has* already clicked a button → we have a selection_idx
+    # ------------------------------------------------------------------
+    if state.get("selection_idx") is not None:
+        try:
+            idx = int(state["selection_idx"])
+            chosen_intent = intents[idx]
+        except (ValueError, IndexError):
+            # bad index – start over cleanly
+            state["selection_idx"] = None
+            state["options"] = []
+            logger.warning("ask_followup_node: invalid selection_idx – reprompting")
+        else:
+            logger.info(f"ask_followup_node: user picked quick action → {chosen_intent}")
+            # clear one-shot fields before continuing
+            state["selection_idx"] = None
+            state["options"] = []
+            # fake a minimal last_intent_payload so the usual router can do its job
+            state["last_intent_payload"] = {"intent": chosen_intent, "arguments": {}}
+            # jump right back to agent_node which will re-enter its routing cycle
+            return Command(goto="agent_node", update=state)
+
+    # ------------------------------------------------------------------
+    # 2.  First entry – ask for clarification using an interrupt
+    # ------------------------------------------------------------------
+    logger.info("ask_followup_node: issuing clarification interrupt")
+
+    quick_buttons = [
+        {
+            "option_type": "intent",
+            "label": "Add a place",
+            "value": 0,  # matches index in *intents* list
+            "color": "#333",
+        },
+        {
+            "option_type": "intent",
+            "label": "Add a theme",
+            "value": 1,
+            "color": "#333",
+        },
+        {
+            "option_type": "intent",
+            "label": "Show current selection",
+            "value": 2,
+            "color": "#333",
+        },
+        {
+            "option_type": "intent",
+            "label": "Reset everything",
+            "value": 3,
+            "color": "#333",
+        },
+    ]
+
+    interrupt(
+        value={
+            "message": "I'm not entirely sure what you need. Choose one of the quick actions below or rephrase your request:",
+            "options": quick_buttons,
+            "current_node": "ask_followup_node",
+        }
+    )
+
+    # Execution pauses here.  Front-end shows the buttons, user picks one, and
+    # the graph will re-enter this node with selection_idx set.
+    return state
 # ─────────────────────────────────────────────────────────────────────────────

@@ -1,13 +1,13 @@
 # src/callbacks/chat.py (Revised: Sync callback with asyncio.run)
 
 # =============================================================================
-#  DDME ‑ Dash Chat ↔ LangGraph Bridge
+#  DDME - Dash Chat ↔ LangGraph Bridge
 #  ---------------------------------------------------------------------------
 #  What this file is
 #  -----------------
-#  • The single entry‑point that wires our Dash UI to the LangGraph workflow
+#  • The single entry-point that wires our Dash UI to the LangGraph workflow
 #    defined in `src/workflow.py`.
-#  • Converts a heterogenous, event‑driven front‑end (buttons, map clicks,
+#  • Converts a heterogenous, event-driven front-end (buttons, map clicks,
 #    text input) into a **linear stream** of messages + state snapshots that
 #    LangGraph can reason over.
 #
@@ -16,20 +16,20 @@
 #  Think of the Dash app as a *dumb* terminal. All real decisions live inside
 #  the workflow.  The callback in this file merely:
 #
-#    1.  Collects the **trigger** that fired (send‑button, dynamic button,
+#    1.  Collects the **trigger** that fired (send-button, dynamic button,
 #        map retrigger, etc.).
-#    2.  Packages the current Dash “stores” into a single `lg_State`‑compatible
+#    2.  Packages the current Dash “stores” into a single `lg_State`-compatible
 #        dict.
 #    3.  Calls `compiled_workflow.astream(...)`, forwarding streamed
 #        AIMessageChunks back to the UI with progressive updates.
 #    4.  Detects **interrupts** emitted by the workflow and materialises them into Dash widgets:
-#          – multiple‑choice buttons  
+#          – multiple-choice buttons  
 #          – map selection requests  
 #          – cube visualisation signals
 #    5.  Persists / hydrates state on every turn so the graph can be
-#        *paused* by the front‑end and later *resumed* (e.g. after a map click).
+#        *paused* by the front-end and later *resumed* (e.g. after a map click).
 #
-#  Life‑cycle of a user turn
+#  Life-cycle of a user turn
 #  -------------------------
 #   UI event ─▶ `update_chat` (sync shell) ─▶ `_run_async_logic` (async) ─▶
 #   LangGraph stream ─▶ progressive UI updates ─▶ (optional) interrupt
@@ -38,16 +38,16 @@
 #  ------------------------------------
 #  • **Exactly one** `background=True` Dash callback updates the chat area.
 #  • `thread_id` stays constant for the life of a conversation so the
-#    check‑pointer can merge incremental state.
+#    check-pointer can merge incremental state.
 #  • `selection_idx` is written *only* when a dynamic button is clicked and
 #    cleared immediately after the workflow consumes it.
-#  • `retrigger_chat` is the sole “cycle breaker” that lets map‑driven
-#    changes re‑enter the LangGraph loop without creating circular
+#  • `retrigger_chat` is the sole “cycle breaker” that lets map-driven
+#    changes re-enter the LangGraph loop without creating circular
 #    dependencies.
 #
 #  Place workflow coupling
 #  -----------------------
-#  The callback does **not** implement any place‑selection logic itself;
+#  The callback does **not** implement any place-selection logic itself;
 #  it merely honours the routing produced by the workflow:
 #
 #      multi_place_tool_call_node ⇢ agent ⇢ process_place_selection ⇢ agent
@@ -61,7 +61,7 @@
 #  ----------------------
 #  • To add a new interaction modality, fire an interrupt from the workflow
 #    and teach this file how to render it.
-#  • To add a new long‑running tool, no changes here are required—just make
+#  • To add a new long-running tool, no changes here are required—just make
 #    sure the workflow emits ToolMessages so the chat router can spot them.
 # =============================================================================
 
@@ -491,7 +491,7 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                 logger.debug("Workflow state updated with interrupt data.")
 
                 logger.info("Async logic completed successfully, returning results.")
-                logger.info("State after async logic: ", interrupt_updates)
+                # logger.info("State after async logic: ", interrupt_updates)
                 # Return the final computed states and buttons from the async function
                 return history, app_state_async, map_state_async, place_state_async, buttons_to_render_async
 

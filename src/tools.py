@@ -384,3 +384,25 @@ def get_all_themes() -> str:
     except Exception as e:
         logger.error(f"[get_all_themes_tool] Error executing query: {e}", exc_info=True)
         return pd.DataFrame(columns=['ent_id', 'labl', 'text']).to_json(orient='records')
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# fetch the long description of a theme
+# ────────────────────────────────────────────────────────────────────────────
+@tool
+def get_theme_text(theme_code: Annotated[str, "Theme code e.g. T_POP"]):
+    """Return labl + text for a theme (hgis.g_data_ent)."""
+    query = f"""
+        SELECT ent_id, labl, text
+        FROM   hgis.g_data_ent
+        WHERE  ent_id = '{theme_code}'
+          AND  ent_type = 'T'
+        LIMIT 1;
+    """
+    dbtool = QuerySQLDataBaseTool(db=db)
+    res    = dbtool.db._execute(query)
+    df     = pd.DataFrame(res, columns=["ent_id", "labl", "text"])
+    if df.empty:
+        return pd.DataFrame(columns=["ent_id", "labl", "text"]).to_json(orient="records")
+    return df.to_json(orient="records")
+# ─────────────────────────────────────────────────────────────────────────────

@@ -54,6 +54,10 @@ from state_nodes import (
     ListAllThemes_node, Reset_node,
     AddPlace_node, RemovePlace_node,
     AddTheme_node, RemoveTheme_node,
+    DescribeTheme_node,
+    theme_hint_node, 
+    ask_followup_node
+    
 )
 from agent_routing import agent_node  # Main entry point for user interactions
 from intent_handling import AssistantIntent  # Enum for routing intents
@@ -1260,20 +1264,24 @@ def create_workflow(lg_state: TypedDict):
     workflow.add_node("RemovePlace_node", RemovePlace_node)
     workflow.add_node("AddTheme_node", AddTheme_node)
     workflow.add_node("RemoveTheme_node", RemoveTheme_node)
+    
+    workflow.add_node("theme_hint_node", theme_hint_node)
+    workflow.add_node("DescribeTheme_node", DescribeTheme_node)
+    workflow.add_node("ask_followup_node", ask_followup_node)
 
-    # agent‑edge – single mapping
+
+    # agent-edge – single mapping
     workflow.add_conditional_edges(
         "agent_node",
-        # router
         lambda s: (s.get("last_intent_payload") or {}).get("intent") or "NO_INTENT",
-        # mapping
         {
-            **{i.value: f"{i.value}_node"         # the existing intent routes
-            for i in AssistantIntent if i is not AssistantIntent.CHAT},
-            "NO_INTENT": END                      # ← fall through when there’s nothing to do
-        }
+            **{i.value: f"{i.value}_node"
+            for i in AssistantIntent
+            if i is not AssistantIntent.CHAT},
+            AssistantIntent.CHAT.value: END, 
+            "NO_INTENT": "ask_followup_node",
+        },
     )
-
 
     for n in [
         "ShowState_node", "ListThemesForSelection_node", "ListAllThemes_node",
@@ -1304,8 +1312,15 @@ def create_workflow(lg_state: TypedDict):
 
     workflow.add_edge("postcode_tool_call", "get_place_themes_node")
     workflow.add_edge("get_place_themes_node", "get_place_themes_handler")
-    workflow.add_edge("get_place_themes_handler", "find_cubes_node")
     workflow.add_edge("find_cubes_node", "agent_node")
+    
+    workflow.add_edge("get_place_themes_handler", "theme_hint_node")
+    workflow.add_edge("theme_hint_node", "find_cubes_node")
+
+    # The DescribeTheme intent is standalone:
+    workflow.add_edge("DescribeTheme_node", "agent_node")
+    workflow.add_edge("ask_followup_node", "agent_node")
+
 
     # --- Compile the workflow ---
     logger.info("Compiling workflow with Redis checkpointer...")

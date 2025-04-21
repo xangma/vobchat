@@ -6,17 +6,19 @@ from langgraph.graph import END
 
 from intent_handling import extract_intent, AssistantIntent, AssistantIntentPayload
 from state_schema import lg_State  # TypedDict from your existing workflow file
+import logging
 
+logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 #   agent_node – single entry point for every human turn
 # ---------------------------------------------------------------------------
 
 def agent_node(state: lg_State):  # noqa: C901 – complexity fine for single function
     """Parse the latest *HumanMessage* into an intent and either respond
-    directly (for free‑form Chat) or route to the corresponding handler node.
+    directly (for free-form Chat) or route to the corresponding handler node.
 
     The recognised intent plus its arguments are stashed in
-    `state["last_intent_payload"]` so downstream nodes don’t need to re‑run
+    `state["last_intent_payload"]` so downstream nodes don’t need to re-run
     the LLM classification.
     """
 
@@ -37,7 +39,9 @@ def agent_node(state: lg_State):  # noqa: C901 – complexity fine for single f
     # 1.  LLM intent extraction (structured output)
     # ------------------------------------------------------------------
     try:
-        intent_payload: AssistantIntentPayload = extract_intent(user_text)  # synchronous .invoke under the hood
+        intent_payload: AssistantIntentPayload = extract_intent(user_text, state["messages"])  # synchronous .invoke under the hood
+        logger.info(f"User text: {user_text}")
+        logger.info(f"Intent payload: {intent_payload}")
     except Exception as exc:  # pragma: no cover – defensive
         # Fallback: treat as normal chat
         assistant_err = (
@@ -65,7 +69,7 @@ def agent_node(state: lg_State):  # noqa: C901 – complexity fine for single f
         return state  # no routing – conversation continues
 
     # ------------------------------------------------------------------
-    # 3.  Route to intent‑specific node
+    # 3.  Route to intent-specific node
     # ------------------------------------------------------------------
     return Command(
         goto=f"{intent.value}_node",  # node names follow the pattern <Intent>_node
