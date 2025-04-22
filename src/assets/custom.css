@@ -75,6 +75,20 @@
     margin-top: -10px;
 }
 
+#chat-display {
+    /* Ensure flex display and reverse the column direction */
+    display: flex;
+    flex-direction: column-reverse;
+
+    /* Keep existing styles for scrolling, border, padding etc. */
+    flex: 1 1 auto;
+    overflow-y: auto;
+    margin-bottom: 10px;
+    border: 1px solid #dee2e6;
+    border-radius: 5px;
+    padding: 10px;
+}
+
 /* Clear floats within the chat display */
 #chat-display::after {
     content: "";

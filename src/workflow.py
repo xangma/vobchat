@@ -830,7 +830,8 @@ def get_place_themes_handler(state: lg_State) -> lg_State:
         logger.info(f"Attempting to match extracted theme query: '{extracted_theme_query}' using LLM.")
         # Get the original user query that mentioned the theme. Use first message or concatenate?
         # Assuming first message is sufficient context here.
-        user_question = state["messages"][0].content if state["messages"] else extracted_theme_query
+        
+        user_question = [ i.content for i in state["messages"][::-1] if i.type == 'human'][0] if state["messages"] else extracted_theme_query
         try:
             # Invoke the theme selection chain.
             decision = choose_theme_chain.invoke({"question": user_question})

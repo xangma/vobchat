@@ -245,7 +245,7 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                 except Exception as sync_exc:
                     logger.error(f"Error syncing map state to workflow state on retrigger: {sync_exc}", exc_info=True)
                     # Add an error message to the chat history
-                    history.append(html.Div(f"Error syncing map state: {str(sync_exc)}", style={"color": "orange"}))
+                    history.insert(0, html.Div(f"Error syncing map state: {str(sync_exc)}", style={"color": "orange"}))
                     # Decide whether to stop or continue; currently continues.
 
             # --- Prepare inputs for the LangGraph workflow based on how this function was triggered ---
@@ -299,15 +299,15 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                             if truncated_ai_response:
                                 truncated_ai_response = truncated_ai_response.split("'}")[0] if "'intent': 'Chat', 'arguments': {'text': '" in full_ai_response else truncated_ai_response.split('"}')[0]
 
-                        if not history or not isinstance(history[-1], html.Div) \
-                        or "ai-bubble" not in history[-1].className:
+                        if not history or not isinstance(history[0], html.Div) \
+                        or "ai-bubble" not in history[0].className:
                             # first chunk → start a new bubble
                             if truncated_ai_response != "":
-                                history.append(html.Div(truncated_ai_response,
+                                history.insert(0, html.Div(truncated_ai_response,
                                                         className="speech-bubble ai-bubble"))
                         else:
                             # subsequent chunk → update last bubble
-                            history[-1].children = truncated_ai_response
+                            history[0].children = truncated_ai_response
                         if throttler.ready():             # only every 100 ms
                             set_props("chat-display", {"children": history})
                             throttler.mark_flushed()
@@ -319,7 +319,7 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
             except Exception as stream_exc:
                 logger.error(f"Error during workflow stream: {stream_exc}", exc_info=True)
                 # Add an error message to the chat history
-                history.append(html.Div(f"Streaming Error: {str(stream_exc)}", style={"color": "orange"}))
+                history.insert(0, html.Div(f"Streaming Error: {str(stream_exc)}", style={"color": "orange"}))
                 # Allow execution to continue to try and fetch the final state
 
            # --- Post-Stream State Retrieval and Interrupt Handling ---
@@ -340,7 +340,7 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                 ]
 
                 if new_divs:
-                    history.extend(new_divs)                       # append, don’t replace
+                    history = new_divs + history
                     app_state_async["render_cursor"] = len(all_msgs)
                     # ensure at least one final flush (pairs with throttling from task 1)
                     set_props("chat-display", {"children": history})
@@ -474,7 +474,7 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                                 interrupt_message = html.Div(txt, className="speech-bubble ai-bubble")
 
                                 # ① append to visible history
-                                history.append(interrupt_message)
+                                history.insert(0, interrupt_message)
 
                                 # ② also push it into the workflow state so it survives a retrigger
                                 msgs = final_state_values.get("messages", [])
@@ -515,7 +515,7 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
             except Exception as post_stream_exc:
                 logger.error(f"Error processing state/interrupts after stream: {post_stream_exc}", exc_info=True)
                 # Add an error message to the chat history
-                history.append(html.Div(f"Post-Stream Error: {str(post_stream_exc)}", style={"color": "red"}))
+                history.insert(0, html.Div(f"Post-Stream Error: {str(post_stream_exc)}", style={"color": "red"}))
                 # Return the current state of things on error to prevent data loss
                 return history, app_state_async, map_state_async, place_state_async, []
 
@@ -551,7 +551,7 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                 
         if user_input and user_input.strip() and "send-button" in ctx_trigger and not is_retrigger_event:
             user_message_div = html.Div(f"{user_input}", className="speech-bubble user-bubble")
-            chat_history.append(user_message_div)
+            chat_history.insert(0, user_message_div)
             set_props("chat-display", {"children": chat_history})
             app_state["render_cursor"] = len(chat_history) # Update the render cursor in app_state
             
@@ -650,7 +650,7 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
             logger.error(f"Error running async logic within callback: {e}", exc_info=True)
             # Fallback return on error: Show an error message in the chat
             error_message = html.Div(f"Callback Error: {str(e)}", style={"color": "red"})
-            chat_history.append(error_message)
+            chat_history.insert(0, error_message)
             # Try to return current state where possible to avoid losing context entirely
             current_app_state = app_state.copy() if app_state else {}
             # Decide if the retrigger flag should be cleared on error. Maybe not,
