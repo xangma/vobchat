@@ -339,7 +339,7 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                     if _msg_to_div(m, i) is not None
                 ]
 
-                if new_divs and not is_retrigger:
+                if new_divs:
                     history.extend(new_divs)                       # append, don’t replace
                     app_state_async["render_cursor"] = len(all_msgs)
                     # ensure at least one final flush (pairs with throttling from task 1)
@@ -466,6 +466,7 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                                 # Update app_state to signal UI to show visualization components
                                 app_state_async.update({"show_visualization": True})
                                 
+                                
 
                             if interrupt_updates.get("message"):
                                 # treat as ordinary assistant text
@@ -553,6 +554,7 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
             chat_history.append(user_message_div)
             set_props("chat-display", {"children": chat_history})
             app_state["render_cursor"] = len(chat_history) # Update the render cursor in app_state
+            
 
         # Handle Reset Button Click
         if "reset-button" in ctx_trigger:
@@ -600,6 +602,9 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                  logger.error(f"Error parsing button ID: {ctx_trigger} - {e}")
                  # Handle error - perhaps display a message or prevent update?
                  raise PreventUpdate # Example: stop processing if ID is invalid
+        else:
+            buttons = []
+            # Clear the buttons if this was not a button click
 
         # --- Execute the Asynchronous Workflow Logic ---
         try:

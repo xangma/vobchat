@@ -967,7 +967,6 @@ def find_cubes_node(state: lg_State) -> lg_State:
     # This check depends on whether the frontend clears `selected_cubes` state or if we want re-fetching.
     if state.get('selected_cubes') and state.get('current_node') == 'find_cubes_node':
          logger.info("Cube data already present in selected_cubes, potentially from previous run. Skipping refetch.")
-         # Ensure interrupt flag is set correctly if we are just passing through
          return state
 
     try:
@@ -1189,7 +1188,7 @@ def create_workflow(lg_state: TypedDict):
 
     workflow.add_edge("postcode_tool_call", "get_place_themes_node")
     workflow.add_edge("get_place_themes_node", "get_place_themes_handler")
-    workflow.add_edge("find_cubes_node", "agent_node")
+    workflow.add_edge("find_cubes_node", END)
     
     workflow.add_edge("get_place_themes_handler", "theme_hint_node")
     workflow.add_edge("theme_hint_node", "find_cubes_node")
