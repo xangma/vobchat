@@ -63,9 +63,8 @@ _INTENT_EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
         Map the user's message to **one** of the following intents and extract any arguments:  
         {intent_list}
 
-        • If the user explicitly asks to add / include a place, use AddPlace and return {{"place": "<name>"}}.  
-        • If they ask to remove a place, RemovePlace with {{"place": "<name>"}}.  
-        • If they ask to remove several places, RemovePlace with {{"places": ["<name1>","<name2>", …]}}.  
+        • If the user explicitly asks to add / include a place/s, use AddPlace and return {{"place": "<name>"}}.  
+        • If they ask to remove a place/s, RemovePlace with {{"place": "<name>"}}.   
         • If they mention a postcode, treat it as AddPlace with {{"postcode": "<code>"}}.  
         • If they request a statistical topic, use AddTheme with {{"theme_query": "<words from user>"}}.
         • If they ask what a theme is, use DescribeTheme with {{"theme": "<name>"}}. 
