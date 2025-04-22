@@ -78,8 +78,7 @@ _INTENT_EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
 
         Reply **only** with JSON matching this schema:
         {{"intents": [
-            {{"intent": <intent string>, "arguments": <object>}},
-            {{"intent": <intent string>, "arguments": <object>}}
+            {{"intent": <intent string>, "arguments": <object>}}, ...
         ]
         }}
                 
