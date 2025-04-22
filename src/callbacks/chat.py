@@ -201,10 +201,6 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
             Executes the asynchronous LangGraph workflow, handles state synchronization,
             streaming responses, and interrupts.
             """
-
-            def dict_without_none(d: dict) -> dict:
-                """Return a shallow copy without keys whose value is None."""
-                return {k: v for k, v in d.items() if v is not None}
             
             # Make copies of mutable state objects to avoid modifying the outer scope's state directly
             # until the final results are ready. Use slicing for lists.
@@ -605,7 +601,7 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
         else:
             buttons = []
             # Clear the buttons if this was not a button click
-
+        
         # --- Execute the Asynchronous Workflow Logic ---
         try:
             # Use asyncio.run() to execute the async function `_run_async_logic` from the synchronous callback context.

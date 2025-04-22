@@ -211,7 +211,7 @@ def AddTheme_node(state: lg_State):
         q = args["theme_query"].strip()
         state["extracted_theme"] = q
         state["selected_theme"] = None
-        _append_ai(state, f"Looking for a theme matching “{q}”…")
+        # _append_ai(state, f"Looking for a theme matching “{q}”…")
 
     else:
         _append_ai(state, "AddTheme: no theme_code or theme_query provided.")

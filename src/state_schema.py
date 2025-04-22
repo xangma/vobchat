@@ -57,3 +57,4 @@ class lg_State(TypedDict):
     options: Optional[List[dict]]
     message: Optional[str]
     _theme_hint_done: Optional[bool]
+    _prompted_for_place: Optional[bool]

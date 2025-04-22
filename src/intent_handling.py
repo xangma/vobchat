@@ -60,9 +60,11 @@ _INTENT_EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
         """
         You are the routing brain of the DDME assistant.  
         
-        Map the user's message to **one** of the following intents and extract any arguments:  
+        Map the user's message to the following intents and extract any arguments:  
         {intent_list}
-
+        
+        There can be multiple intents in the same message.
+        
         • If the user explicitly asks to add / include a place/s, use AddPlace and return {{"place": "<name>"}}.  
         • If they ask to remove a place/s, RemovePlace with {{"place": "<name>"}}.   
         • If they mention a postcode, treat it as AddPlace with {{"postcode": "<code>"}}.  

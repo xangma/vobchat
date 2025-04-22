@@ -696,17 +696,33 @@ def get_place_themes_node(state: lg_State) -> lg_State:
     logger.info("Retrieving available themes for all selected units...")
     state["current_node"] = "get_place_themes_node"
     logger.debug({"current_state": state})
-
-    # Combine units selected through the standard workflow and those from map interaction.
+    # ────────────────────────────────────────────────────────────────
+    # Early‑exit guard - run *nothing* until at least one g_unit
+    # ────────────────────────────────────────────────────────────────
     workflow_units = state.get("selected_place_g_units", [])
-    map_selected_units_int = [int(p) for p in state.get("selected_polygons", []) if str(p).isdigit()] # Ensure integer IDs
+    map_selected_units_int = [int(p) for p in state.get("selected_polygons", []) if str(p).isdigit()]
+    if not (workflow_units or map_selected_units_int):
+        # add a friendly prompt only the **first** time so we don't spam
+        if not state.get("_prompted_for_place"):
+            # state.setdefault("messages", []).append(
+            #     AIMessage(
+            #         content=(
+            #             "Got the topic – now pick a place (or click an area on the "
+            #             "map) and I’ll fetch the datasets that are available there."
+            #         )
+            #     )
+            # )
+            state["_prompted_for_place"] = True
+        # Nothing else to do in this node; the conditional edge you added
+        # will route the graph back to `agent_node`.
+        return state
 
     # Combine and find unique unit IDs.
     all_selected_unit_ids = list(set(workflow_units + map_selected_units_int))
 
     if not all_selected_unit_ids:
         logger.warning("No units selected (workflow or map). Cannot retrieve themes.")
-        state["messages"].append(AIMessage(content="Please select a place or area on the map first."))
+        # state["messages"].append(AIMessage(content="Please select a place or area on the map first."))
         state["selected_place_themes"] = None # Ensure it's cleared/set to None
         return state
 
@@ -1045,7 +1061,7 @@ def find_cubes_node(state: lg_State) -> lg_State:
              # The core data payload for the frontend visualization components.
             "cubes": cubes_data_list,
             "current_node": "find_cubes_node", # Identify the interrupting node
-            "last_intent_payload": {}
+            "last_intent_payload": {},
         })
         # Execution stops here, waits for frontend to handle the data (e.g., render charts)
         # and potentially resume the workflow later if needed (e.g., user asks follow-up question).
@@ -1184,11 +1200,20 @@ def create_workflow(lg_state: TypedDict):
     )
     
     workflow.add_edge("AddTheme_node", "get_place_themes_node")
-    
-    
+    workflow.add_conditional_edges(
+    "get_place_themes_node",
+    lambda s: (
+        "agent_node" if not s.get("selected_place_g_units") and not s.get("selected_polygons") # no units selected
+        else "get_place_themes_handler"
+    ),
+    {
+        "agent_node": "agent_node",
+        "get_place_themes_handler": "get_place_themes_handler",
+    },
+    )
 
     workflow.add_edge("postcode_tool_call", "get_place_themes_node")
-    workflow.add_edge("get_place_themes_node", "get_place_themes_handler")
+
     workflow.add_edge("find_cubes_node", END)
     
     workflow.add_edge("get_place_themes_handler", "theme_hint_node")
