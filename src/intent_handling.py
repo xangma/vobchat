@@ -80,7 +80,8 @@ _INTENT_EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
         {{"intents": [
             {{"intent": <intent string>, "arguments": <object>}},
             {{"intent": <intent string>, "arguments": <object>}}
-        ]}}
+        ]
+        }}
                 
         Previous conversation:
         {history}
