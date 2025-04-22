@@ -1152,15 +1152,10 @@ def create_workflow(lg_state: TypedDict):
             "NO_INTENT": "ask_followup_node",
         },
     )
-
-    for n in [
-        "RemovePlace_node", "RemoveTheme_node"
-        ]:
-        workflow.add_edge(n, "agent_node")
         
     for n in [
         "ShowState_node", "ListThemesForSelection_node", "ListAllThemes_node",
-        "DescribeTheme_node",
+        "DescribeTheme_node", "RemovePlace_node", "RemoveTheme_node"
     ]:
         workflow.add_edge(n, END)
 

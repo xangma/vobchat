@@ -304,7 +304,8 @@ def get_all_cube_data(
         d.cellref,
         d.g_data as value,
         m.ncuberef as cube_id,
-        ncube.labl as cube_name
+        ncube.labl as cube_name,
+        ncube.text as cube_text
     FROM 
         hgis.g_data d
         JOIN hgis.g_data_map m ON d.cellref = m.cellref

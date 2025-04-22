@@ -30,6 +30,7 @@ app_state_data = {
     "selection_idx": None,
     "retrigger_chat": False,
     "show_visualization": False,
+    "render_cursor": 0,
 }
 
 def create_stores():

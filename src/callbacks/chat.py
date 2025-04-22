@@ -86,6 +86,8 @@ from dash import Input, Output, State, ALL, ctx
 import dash_bootstrap_components as dbc
 import logging
 
+from time import monotonic
+
 # Import CycleBreakerInput for managing circular dependencies in callbacks if needed
 from dash_extensions.enrich import CycleBreakerInput
 
@@ -97,6 +99,26 @@ from langchain_core.messages import AIMessage, HumanMessage, AIMessageChunk, Too
 # Set up logging for this module
 logger = logging.getLogger(__name__)
 
+
+class StreamThrottler:
+    """Batch UI updates so we don’t call set_props more than ~10× s‑1."""
+    def __init__(self, interval: float = 0.10):
+        self.interval = interval
+        self._last_flush = monotonic()
+
+    def ready(self) -> bool:
+        return monotonic() - self._last_flush >= self.interval
+
+    def mark_flushed(self):
+        self._last_flush = monotonic()
+
+def _msg_to_div(msg, idx: int):
+    if isinstance(msg, HumanMessage):
+        return html.Div(msg.content, className="speech-bubble user-bubble", key=f"user-{idx}")
+    if isinstance(msg, AIMessage):
+        return html.Div(msg.content, className="speech-bubble ai-bubble",   key=f"ai-{idx}")
+    # Skip ToolMessage (or style differently)
+    return None
 
 def register_chat_callbacks(app, compiled_workflow, background_callback_manager):
     """
@@ -258,30 +280,42 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
 
             # --- Execute the LangGraph workflow using asynchronous streaming ---
             full_ai_response = "" # Accumulator for the complete AI response message
+            truncated_ai_response = "" # For displaying truncated messages
             final_state_values = {} # To store the final workflow state values after streaming
             try:
+                throttler = StreamThrottler(interval=0.10)
                 # Call the workflow's astream method to get events (messages, state updates, etc.)
                 async for msg, metadata in compiled_workflow.astream(
                     workflow_input,    # Pass the prepared input (or None if resuming/retriggering)
                     config=current_config, # Pass the thread configuration
                     stream_mode="messages" # Request message-based streaming events
-                ):
+                    ):
                     # Check if the event contains a message chunk from the AI
                     if msg.content and isinstance(msg, AIMessageChunk):
                         full_ai_response += msg.content
+                        if "'intent': 'Chat', 'arguments': {'text': '" in full_ai_response or '"intent": "Chat", "arguments": {"text": "' in full_ai_response:
+                            truncated_ai_response = full_ai_response.split("'intent': 'Chat', 'arguments': {'text': '")[1] if "'intent': 'Chat', 'arguments': {'text': '" in full_ai_response else full_ai_response.split('"intent": "Chat", "arguments": {"text": "')[1]
+
+                            if truncated_ai_response:
+                                truncated_ai_response = truncated_ai_response.split("'}")[0] if "'intent': 'Chat', 'arguments': {'text': '" in full_ai_response else truncated_ai_response.split('"}')[0]
+
                         if not history or not isinstance(history[-1], html.Div) \
                         or "ai-bubble" not in history[-1].className:
                             # first chunk → start a new bubble
-                            history.append(html.Div(full_ai_response,
-                                                    className="speech-bubble ai-bubble"))
+                            if truncated_ai_response != "":
+                                history.append(html.Div(truncated_ai_response,
+                                                        className="speech-bubble ai-bubble"))
                         else:
                             # subsequent chunk → update last bubble
-                            history[-1].children = full_ai_response
-                        set_props("chat-display", {"children": history})
+                            history[-1].children = truncated_ai_response
+                        if throttler.ready():             # only every 100 ms
+                            set_props("chat-display", {"children": history})
+                            throttler.mark_flushed()
                     # Note: Depending on the LangGraph version and stream_mode, you might get
                     # other types of events here containing state updates. This example primarily
                     # focuses on streaming AIMessageChunks for progressive text display.
-
+                    set_props("chat-display", {"children": history})
+                
             except Exception as stream_exc:
                 logger.error(f"Error during workflow stream: {stream_exc}", exc_info=True)
                 # Add an error message to the chat history
@@ -296,40 +330,22 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                 final_state_values = final_state.values if final_state else {} # Extract the state dictionary
                 logger.debug({"event": "workflow_state_after_stream", "final_state_values": final_state_values})
 
-                # --- *** RECONSTRUCT CHAT HISTORY FROM FINAL WORKFLOW STATE *** ---
-                final_chat_history_components = []
-                all_final_messages = final_state_values.get("messages", [])
+                already = len(history)
+                all_msgs = final_state_values.get("messages", [])
 
-                if all_final_messages:
-                    logger.debug(f"Reconstructing chat history from {len(all_final_messages)} final messages in workflow state.")
-                    for i, msg in enumerate(all_final_messages):
-                        component = None
-                        if isinstance(msg, HumanMessage):
-                            component = html.Div(f"{msg.content}", className="speech-bubble user-bubble", key=f"msg-{i}-user")
-                        elif isinstance(msg, (AIMessage, AIMessageChunk)):
-                            # Check content is not empty or just whitespace
-                            if msg.content and msg.content.strip():
-                                component = html.Div(f"{msg.content}", className="speech-bubble ai-bubble", key=f"msg-{i}-ai")
-                        elif isinstance(msg, ToolMessage):
-                            # Decide whether to display tool messages or skip
-                            # component = html.Div(f"[Tool Call: {msg.tool_call.get('name', 'Unknown')}]", className="text-muted small", key=f"msg-{i}-tool")
-                            pass # Skipping ToolMessage display in chat history for now
-                        else:
-                            logger.warning(f"Unhandled message type in final state: {type(msg)}")
+                # create divs for *new* messages only
+                new_divs = [
+                    _msg_to_div(m, i) for i, m in enumerate(all_msgs[already:], start=already)
+                    if _msg_to_div(m, i) is not None
+                ]
 
-                        if component:
-                            final_chat_history_components.append(component)
-                else:
-                    # Fallback if no messages in final state (unlikely)
-                    logger.warning("No messages found in final workflow state to reconstruct history.")
-                    final_chat_history_components = initial_chat_history[:] # Use original history
-
-                    # If an AI response was streamed, replace the temporary accumulating div with the final complete message div
-                    # if full_ai_response != "":
-                        # final_ai_message_div = html.Div(f"{full_ai_response}", className="speech-bubble ai-bubble")
-                        # history.append(final_ai_message_div) # Add the final, complete AI message to the history
-                        # app_state_async["messages"] = history # Update app_state with the reconstructed history
-                history = final_chat_history_components
+                if new_divs and not is_retrigger:
+                    history.extend(new_divs)                       # append, don’t replace
+                    app_state_async["render_cursor"] = len(all_msgs)
+                    # ensure at least one final flush (pairs with throttling from task 1)
+                    set_props("chat-display", {"children": history})
+                
+                # history = final_chat_history_components
                 app_state_async["messages"] = history
                 # Reset button rendering list for this turn
                 buttons_to_render_async = []
@@ -514,10 +530,29 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
         logger.debug({"event": "update_chat_start (sync part)", "trigger": ctx_trigger, "is_retrigger": is_retrigger_event})
         chat_history = chat_history or [] # Initialize chat history if empty
 
+        # ------------------------------------------------------------------
+        #  🌟  First page‑load safety  (rebuild once if browser refreshed)
+        # ------------------------------------------------------------------
+        if (not chat_history) and app_state and app_state.get("render_cursor", 0):
+            try:
+                # we’re in a **sync** context → use asyncio.run to call the async API
+                state_snapshot = asyncio.run(
+                    compiled_workflow.aget_state({"configurable": {"thread_id": thread_id}})
+                )
+                all_msgs = state_snapshot.values.get("messages", []) if state_snapshot else []
+                chat_history = [
+                    _msg_to_div(m, i) for i, m in enumerate(all_msgs)
+                    if _msg_to_div(m, i) is not None
+                ]
+            except Exception as exc:
+                logger.warning(f"Could not rebuild chat after refresh: {exc}")
+                chat_history = []
+                
         if user_input and user_input.strip() and "send-button" in ctx_trigger and not is_retrigger_event:
             user_message_div = html.Div(f"{user_input}", className="speech-bubble user-bubble")
             chat_history.append(user_message_div)
             set_props("chat-display", {"children": chat_history})
+            app_state["render_cursor"] = len(chat_history) # Update the render cursor in app_state
 
         # Handle Reset Button Click
         if "reset-button" in ctx_trigger:
