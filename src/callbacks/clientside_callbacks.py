@@ -30,9 +30,12 @@ def register_clientside_callbacks(app: Dash):
         function(unit_clicks, reset_clicks, slider_value, geojson_click, toggle_clicks, ctrl_pressed,
                  map_state, button_ids, click_data, toggle_text) {
 
+            let add_trigger_data = window.dash_clientside.no_update;
+            let remove_trigger_data = window.dash_clientside.no_update;
+            
             const triggered = dash_clientside.callback_context.triggered;
             if (!triggered || triggered.length === 0) {
-                return window.dash_clientside.no_update; // No trigger
+                return [window.dash_clientside.no_update, window.dash_clientside.no_update, window.dash_clientside.no_update, window.dash_clientside.no_update]; // No trigger
             }
 
             const triggered_id = triggered[0].prop_id;
@@ -112,9 +115,25 @@ def register_clientside_callbacks(app: Dash):
                     if (index > -1) { // Already selected, deselect
                        selected_ids.splice(index, 1);
                        selected_units.splice(index, 1);
+                        // Prepare payload for RemovePlace trigger
+                        remove_trigger_data = {
+                            id: fid,
+                            name: click_data.properties.unit_name || fid, // Use name if available, else ID
+                            type: unit_type,
+                            timestamp: Date.now()
+                        };
+                        console.log("Client (Cb1): Firing Remove trigger for:", remove_trigger_data);
                     } else { // Not selected, select
-                       selected_ids.push(fid);
-                       selected_units.push(unit_type);
+                        selected_ids.push(fid);
+                        selected_units.push(unit_type);
+                        // Prepare payload for AddPlace trigger
+                        add_trigger_data = {
+                            id: fid,
+                            name: click_data.properties.unit_name || fid, // Use name if available, else ID
+                            type: unit_type,
+                            timestamp: Date.now()
+                        };
+                        console.log("Client (Cb1): Firing Add trigger for:", add_trigger_data);
                     }
                     new_state.selected_polygons = selected_ids;
                     new_state.selected_polygons_unit_types = selected_units;
@@ -134,14 +153,16 @@ def register_clientside_callbacks(app: Dash):
 
             // Only update state if it changed
             if (state_changed) {
-                return [new_state, new_toggle_text];
+                return [new_state, new_toggle_text, add_trigger_data, remove_trigger_data];
             } else {
-                return [window.dash_clientside.no_update, window.dash_clientside.no_update];
+                return [window.dash_clientside.no_update, window.dash_clientside.no_update, window.dash_clientside.no_update, window.dash_clientside.no_update];
             }
         }
         """,
         Output("map-state", "data"),
         Output("toggle-unselected", "children"),
+        Output("map-click-add-trigger", "data"),
+        Output("map-click-remove-trigger", "data"),
         Input({'type': 'unit-filter', 'unit': ALL}, 'n_clicks'),
         Input('reset-selections', 'n_clicks'),
         Input('year-range-slider', 'value'),
@@ -159,7 +180,6 @@ def register_clientside_callbacks(app: Dash):
     app.clientside_callback(
         f"""
         function(map_state, current_year_str) {{
-
             // --- Start Standard UI Update Logic ---
             if (!map_state) {{
                  console.log("Client (Cb2): map_state is null, returning default UI config.");

@@ -149,6 +149,7 @@ def AddPlace_node(state: lg_State):
     # ── gather place names to add ───────────────────────────────────
     names_to_add: List[str] = []
     counties_to_add: List[str] = []
+    unit_types_to_add: List[str] = []
     if "places" in args and isinstance(args["places"], list):
         names_to_add = [p.strip() for p in args["places"] if p.strip()]
     elif "place" in args:
@@ -157,6 +158,9 @@ def AddPlace_node(state: lg_State):
         counties_to_add = [p.strip() for p in args["counties"] if p.strip()]
     elif "county" in args:
         counties_to_add = [args["county"].strip()]
+    if "unit_type" in args:
+        unit_types_to_add = [args["unit_type"].strip()]
+        
 
     if not names_to_add:
         _append_ai(state, "AddPlace: please specify at least one place name.")
@@ -165,10 +169,13 @@ def AddPlace_node(state: lg_State):
     # ── extend the existing queues ─────────────────────────────────
     names    = state.get("extracted_place_names", [])
     counties = state.get("extracted_counties", [])
+    unit_types = state.get("extracted_unit_types", [])
     for p in names_to_add:
         names.append(p)
     for c in counties_to_add:
         counties.append(c)
+    for u in unit_types_to_add:
+        unit_types.append(u)
 
     # pointer to the **first** new place
     new_idx = len(names) - len(names_to_add)
@@ -180,11 +187,11 @@ def AddPlace_node(state: lg_State):
         "messages": state["messages"],
         "extracted_place_names": names,
         "extracted_counties": counties,
+        "extracted_unit_types": unit_types,
         "multi_place_search_df": None,
         "current_place_index": new_idx,
         "last_intent_payload": {},
     }
-
 
     return Command(goto="multi_place_tool_call", update=update)
 
@@ -193,6 +200,7 @@ def AddPlace_node(state: lg_State):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def AddTheme_node(state: lg_State):
+    logger.info("AddTheme_node: adding a theme to the selection")
     payload = state.get("last_intent_payload", {})
     args = payload.get("arguments", {}) if payload else {}
 
@@ -235,6 +243,7 @@ def RemoveTheme_node(state: lg_State):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def RemovePlace_node(state: lg_State):
+    logger.info("RemovePlace_node: removing a place from the selection")
     payload = state.get("last_intent_payload", {})
     args = payload.get("arguments", {}) if payload else {}
     place: Optional[str] = args.get("place")

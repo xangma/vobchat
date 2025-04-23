@@ -272,16 +272,19 @@ def multi_place_tool_call(state: lg_State) -> lg_State:
     logger.info("multi_place_tool_call – searching DB for each place")
     place_names = state.get("extracted_place_names", [])
     counties     = state.get("extracted_counties", [])      # may be shorter
-
+    unit_types  = state.get("extracted_unit_types", [])
+    
     places: list[dict] = []
 
     for idx, place_name in enumerate(place_names):
         county = counties[idx] if idx < len(counties) else "0"
+        unit_type = unit_types[idx] if idx < len(unit_types) else None
         try:
             df = pd.read_json(
                 io.StringIO(
                     find_places_by_name({"place_name": place_name,
-                                         "county": county})
+                                         "county": county,
+                                         "unit_type": unit_type})
                 ),
                 orient="records",
             )
@@ -324,7 +327,7 @@ def multi_place_tool_call(state: lg_State) -> lg_State:
     # return state
 
 
-def select_unit_on_map(state: lg_State) -> lg_State:
+def select_unit_on_map(state: lg_State) -> lg_State | Command:
     """
     Node intended to trigger map interaction in the frontend.
     It checks if units have been selected for the *most recently processed* place
@@ -347,6 +350,12 @@ def select_unit_on_map(state: lg_State) -> lg_State:
     """
     logger.info("Node: select_unit_on_map entered.")
     state["current_node"] = "select_unit_on_map"
+    last_intent = state.get("last_intent_payload")
+    if last_intent:
+        if last_intent.get("intent") == "AddPlace" or last_intent.get("intent") == "RemovePlace":
+            # Hand control back to the normal router so e.g. AddPlace_node runs
+            logging.info(f"resolve_theme: last_intent_payload set to {last_intent}, returning to agent_node.")
+            return Command(goto="agent_node")
     # Get the list of units selected so far by the workflow (place/unit selection nodes).
     selected_workflow_units = state.get("selected_place_g_units", [])
     # Get the list of units selected *by the user on the map* (from frontend state).
@@ -388,130 +397,231 @@ def select_unit_on_map(state: lg_State) -> lg_State:
     return state
 
 
-def find_cubes_node(state: lg_State) -> lg_State:
+def find_cubes_node(state: lg_State) -> lg_State | Command:
     """
-    Retrieves the actual data cubes (statistical data) based on the finally selected
-    theme (`selected_theme`) and all selected geographical units (`selected_place_g_units` + `selected_polygons`).
-    - Calls the `find_cubes_for_unit_theme` tool for each unit and the chosen theme.
-    - Filters results based on `min_year` and `max_year` if provided in the state.
-    - Combines the data cubes from all units.
-    - Issues an `interrupt` with the combined cube data (`cubes`) to signal the frontend (`chat.py`) to display visualizations (charts, tables).
+    Retrieves the data‑cubes (statistical datasets) for the **currently selected theme**
+    (``state["selected_theme"]``) and every selected geographical unit
+    (``selected_place_g_units`` ∪ ``selected_polygons``).
+
+    Key steps
+    ----------
+    1. Merge the workflow‑selected and map‑selected units.
+    2. Parse theme information from ``state['selected_theme']``.
+    3. **Reuse already‑fetched cubes** in ``state['selected_cubes']`` where they satisfy the
+       current theme + year filters, and **only request cubes that are missing**.
+    4. Apply the optional ``min_year`` / ``max_year`` filters.
+    5. Combine the cubes, update ``state['selected_cubes']``, and emit an ``interrupt``
+       so the front‑end can visualise the data.
     """
-    logger.info("Retrieving data cubes for selected theme and units...")
+    logger.info("Node: find_cubes_node entered.")
     state["current_node"] = "find_cubes_node"
     logger.debug({"current_state": state})
 
-    # Combine workflow-selected and map-selected units again.
-    workflow_units = state.get("selected_place_g_units", [])
-    map_selected_units_int = [int(p) for p in state.get("selected_polygons", []) if str(p).isdigit()]
-    all_selected_unit_ids = list(set(workflow_units + map_selected_units_int))
+    # ──────────────────────────────────────────────────────────────────────────
+    # 1. Early‑exit for AddPlace / RemovePlace intents so the normal router runs
+    # ──────────────────────────────────────────────────────────────────────────
+    last_intent = state.get("last_intent_payload")
+    if last_intent and last_intent.get("intent") in {"AddPlace", "RemovePlace"}:
+        logging.info(
+            "find_cubes_node: last_intent_payload set to %s, returning to agent_node.",
+            last_intent,
+        )
+        return Command(goto="agent_node")
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # 2. Collect the full list of selected geographical‑unit IDs
+    # ──────────────────────────────────────────────────────────────────────────
+    workflow_units: list[int] = state.get("selected_place_g_units", [])
+    map_selected_units_int: list[int] = [
+        int(p) for p in state.get("selected_polygons", []) if str(p).isdigit()
+    ]
+    all_selected_unit_ids: list[int] = sorted(set(workflow_units + map_selected_units_int))
 
     if not all_selected_unit_ids:
         logger.warning("No units selected to find cubes for.")
         state["messages"].append(AIMessage(content="No areas selected to fetch data for."))
         return state
 
-    # Get the selected theme JSON from the state.
-    selected_theme_json = state.get("selected_theme")
+    # ──────────────────────────────────────────────────────────────────────────
+    # 3. Parse the selected theme information
+    # ──────────────────────────────────────────────────────────────────────────
+    selected_theme_json: str | None = state.get("selected_theme")
     if not selected_theme_json:
         logger.warning("No theme selected to find cubes for.")
         state["messages"].append(AIMessage(content="Please select a theme first."))
         return state
 
-    # Check if cubes have already been fetched and stored (e.g., if resuming after chart interaction).
-    # This check depends on whether the frontend clears `selected_cubes` state or if we want re-fetching.
-    if state.get('selected_cubes') and state.get('current_node') == 'find_cubes_node':
-         logger.info("Cube data already present in selected_cubes, potentially from previous run. Skipping refetch.")
-         return state
-
     try:
-        # Parse the selected theme JSON to get the theme ID (e.g., 'T_POP').
-        selected_theme_df = pd.read_json(io.StringIO(selected_theme_json), typ='series')
-        if selected_theme_df.empty or 'ent_id' not in selected_theme_df.index:
+        selected_theme_series = pd.read_json(io.StringIO(selected_theme_json), typ="series")
+        if selected_theme_series.empty or "ent_id" not in selected_theme_series.index:
             raise ValueError("Selected theme data is invalid or missing 'ent_id'.")
-        theme_id = selected_theme_df["ent_id"]
-        theme_label = selected_theme_df["labl"] # For messages
-        logger.info(f"Fetching cubes for theme: '{theme_label}' ({theme_id}) across units: {all_selected_unit_ids}")
-    except (ValueError, KeyError) as e:
-        logger.error(f"Error parsing selected theme JSON: {e}", exc_info=True)
-        state["messages"].append(AIMessage(content="Error reading the selected theme information."))
+        theme_id: str = selected_theme_series["ent_id"]
+        theme_label: str = selected_theme_series["labl"]  # friendly name for the UI
+    except (ValueError, KeyError) as err:
+        logger.error("Error parsing selected theme JSON: %s", err, exc_info=True)
+        state["messages"].append(
+            AIMessage(content="Error reading the selected theme information.")
+        )
         return state
 
-    # Get optional year filters from the state.
-    min_year = state.get("min_year")
-    max_year = state.get("max_year")
+    # Optional year filters
+    min_year: int | None = state.get("min_year")
+    max_year: int | None = state.get("max_year")
 
-    all_cubes_dfs = [] # List to hold cube DataFrames for each unit
-    # Iterate through each selected unit ID.
-    for g_unit in all_selected_unit_ids:
+    # ──────────────────────────────────────────────────────────────────────────
+    # 4. Determine which units (if any) still need data
+    # ──────────────────────────────────────────────────────────────────────────
+    existing_cubes_json: str | None = state.get("selected_cubes")
+    existing_cubes_df = pd.DataFrame()
+    missing_unit_ids: list[int] = list(all_selected_unit_ids)  # start by assuming all missing
+
+    if existing_cubes_json:
         try:
-            # Call the database tool to find cubes for this unit and theme.
-            cubes_df = pd.read_json(io.StringIO(find_cubes_for_unit_theme(
-                {"g_unit": str(g_unit), "theme_id": theme_id})), orient="records"
+            existing_cubes_df = pd.read_json(
+                io.StringIO(existing_cubes_json), orient="records", dtype=False
             )
+            # The stored cubes may include other themes or incomplete year ranges.
+            # Keep only rows matching the current theme.
+            if "g_unit" in existing_cubes_df.columns:
+                existing_cubes_df = existing_cubes_df[existing_cubes_df["Theme_ID"] == theme_id]
+            else:
+                existing_cubes_df = pd.DataFrame()  # Structure is unexpected – treat as empty
+        except ValueError:
+            # Bad JSON ⇒ ignore
+            logger.warning("selected_cubes contained invalid JSON – ignoring it.")
+            existing_cubes_df = pd.DataFrame()
 
+        # Apply the same year filtering logic to the existing data so the coverage test is fair.
+        def _apply_year_filter(df: pd.DataFrame) -> pd.DataFrame:
+            if "Start" not in df.columns or "End" not in df.columns:
+                return df  # Cannot filter without year columns – assume okay
+            df = df.copy()
+            df["Start"] = pd.to_numeric(df["Start"], errors="coerce")
+            df["End"] = pd.to_numeric(df["End"], errors="coerce")
+            if min_year is not None:
+                df = df[df["End"] >= min_year]
+            if max_year is not None:
+                df = df[df["Start"] <= max_year]
+            return df
+
+        filtered_existing_df = _apply_year_filter(existing_cubes_df)
+
+        # For each selected unit, check if we have *any* rows after filtering.
+        missing_unit_ids = [
+            u
+            for u in all_selected_unit_ids
+            if filtered_existing_df.empty
+            or filtered_existing_df[filtered_existing_df["g_unit"] == u].empty
+        ]
+
+    logger.info(
+        "Units requiring a fresh fetch: %s (out of %s)",
+        missing_unit_ids,
+        all_selected_unit_ids,
+    )
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # 5. Fetch cubes for any missing units
+    # ──────────────────────────────────────────────────────────────────────────
+    newly_fetched_dfs: list[pd.DataFrame] = []
+    for g_unit in missing_unit_ids:
+        try:
+            raw_json = find_cubes_for_unit_theme({"g_unit": str(g_unit), "theme_id": theme_id})
+            cubes_df = pd.read_json(io.StringIO(raw_json), orient="records")
             if cubes_df.empty:
-                logger.debug(f"No cubes found for unit {g_unit}, theme {theme_id}.")
-                continue # Skip to next unit if no data
+                logger.debug("No cubes found for unit %s, theme %s.", g_unit, theme_id)
+                continue
 
-            # --- Apply Year Filtering ---
-            # Check if 'Start' and 'End' columns exist for filtering. Adjust column names if needed.
+            # Year‑filter the newly fetched data
             if "Start" in cubes_df.columns and "End" in cubes_df.columns:
-                # Convert year columns to numeric, coercing errors to NaN (which are then dropped implicitly by comparisons).
                 cubes_df["Start"] = pd.to_numeric(cubes_df["Start"], errors="coerce")
                 cubes_df["End"] = pd.to_numeric(cubes_df["End"], errors="coerce")
-                # Apply min_year filter: Keep rows where the period *ends* at or after min_year.
                 if min_year is not None:
                     cubes_df = cubes_df[cubes_df["End"] >= min_year]
-                # Apply max_year filter: Keep rows where the period *starts* at or before max_year.
                 if max_year is not None:
                     cubes_df = cubes_df[cubes_df["Start"] <= max_year]
 
             if cubes_df.empty:
-                logger.debug(f"No cubes remained for unit {g_unit}, theme {theme_id} after year filtering ({min_year}-{max_year}).")
-                continue # Skip if filtering removed all data
+                logger.debug(
+                    "No cubes remained for unit %s after year filtering (%s–%s).",
+                    g_unit,
+                    min_year,
+                    max_year,
+                )
+                continue
 
-            # Add the 'g_unit' identifier back to the DataFrame (if not already present)
-            # to know which unit these cube rows belong to after concatenation.
-            cubes_df["g_unit"] = g_unit
-            # Add the resulting DataFrame to the list.
-            all_cubes_dfs.append(cubes_df)
-            logger.debug(f"Found {len(cubes_df)} cubes for unit {g_unit} (theme: {theme_id}, years: {min_year}-{max_year}).")
+            cubes_df["g_unit"] = g_unit  # tag with the unit ID
+            newly_fetched_dfs.append(cubes_df)
+            logger.debug(
+                "Fetched %d cube rows for unit %s (theme %s).", len(cubes_df), g_unit, theme_id
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "Error finding cubes for unit %s, theme %s: %s", g_unit, theme_id, exc, exc_info=True
+            )
+            state["messages"].append(
+                AIMessage(content=f"Error fetching data for one of the areas (Unit ID: {g_unit}).")
+            )
 
-        except Exception as e:
-            logger.error(f"Error finding cubes for unit {g_unit}, theme {theme_id}", exc_info=True)
-            state["messages"].append(AIMessage(content=f"Error fetching data for one of the areas (Unit ID: {g_unit})."))
-            # Continue processing other units.
+    # ──────────────────────────────────────────────────────────────────────────
+    # 6. Merge existing + newly‑fetched cubes and update state
+    # ──────────────────────────────────────────────────────────────────────────
+    combined_df_list: list[pd.DataFrame] = []
+    if not existing_cubes_df.empty:
+        combined_df_list.append(existing_cubes_df)
+    combined_df_list.extend(newly_fetched_dfs)
 
-    # Combine all collected cube DataFrames.
-    if all_cubes_dfs:
-        big_cubes_df = pd.concat(all_cubes_dfs, ignore_index=True)
-        logger.info(f"Successfully combined {len(big_cubes_df)} cube rows across {len(all_selected_unit_ids)} units.")
-
-        # Convert the combined DataFrame to a list of dictionaries for the interrupt payload.
-        cubes_data_list = big_cubes_df.to_json(orient="records")
-
-        # --- Issue Interrupt for Visualization ---
-        # Signal the frontend that data is ready for display.
-        interrupt(value={
-             # Message to potentially display to the user.
-            "message": f"Here is the data for '{theme_label}' across the selected area(s):",
-             # The core data payload for the frontend visualization components.
-            "cubes": cubes_data_list,
-            "current_node": "find_cubes_node", # Identify the interrupting node
-            "last_intent_payload": {},
-        })
-        # Execution stops here, waits for frontend to handle the data (e.g., render charts)
-        # and potentially resume the workflow later if needed (e.g., user asks follow-up question).
-    else:
-        # If no cubes were found for any unit after filtering.
-        logger.warning(f"No cube data found for theme '{theme_label}' and selected units {all_selected_unit_ids} (Years: {min_year}-{max_year}).")
-        state["messages"].append(
-            AIMessage(content=f"Sorry, I couldn't find any data matching '{theme_label}' for the specified criteria and selected area(s).")
+    if not combined_df_list:
+        logger.warning(
+            "No cube data found for theme '%s' and selected units %s (Years: %s–%s).",
+            theme_label,
+            all_selected_unit_ids,
+            min_year,
+            max_year,
         )
+        state["messages"].append(
+            AIMessage(
+                content=f"Sorry, I couldn't find any data matching '{theme_label}' for the specified criteria and selected area(s)."
+            )
+        )
+        return state
 
-    # Return state. If interrupt was called, graph pauses. If not, graph proceeds based on edges.
+    big_cubes_df = pd.concat(combined_df_list, ignore_index=True).drop_duplicates()
+
+    # Before saving back to state, re‑apply year filter *one more time* to ensure consistency.
+    if "Start" in big_cubes_df.columns and "End" in big_cubes_df.columns:
+        big_cubes_df["Start"] = pd.to_numeric(big_cubes_df["Start"], errors="coerce")
+        big_cubes_df["End"] = pd.to_numeric(big_cubes_df["End"], errors="coerce")
+        if min_year is not None:
+            big_cubes_df = big_cubes_df[big_cubes_df["End"] >= min_year]
+        if max_year is not None:
+            big_cubes_df = big_cubes_df[big_cubes_df["Start"] <= max_year]
+
+    # Persist the up‑to‑date cubes so future invocations can reuse them
+    state["selected_cubes"] = big_cubes_df.to_json(orient="records")
+
+    logger.info(
+        "Combined %d cube rows across %d units (theme %s).",
+        len(big_cubes_df),
+        len(all_selected_unit_ids),
+        theme_id,
+    )
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # 7. Notify the front‑end via interrupt
+    # ──────────────────────────────────────────────────────────────────────────
+    interrupt(
+        value={
+            "message": f"Here is the data for '{theme_label}' across the selected area(s):",
+            "cubes": state["selected_cubes"],
+            "current_node": "find_cubes_node",
+            "last_intent_payload": {},
+        }
+    )
+
+    # The graph pauses after the interrupt; return state for completeness
     return state
+
 
 def resolve_place_and_unit(state: lg_State) -> lg_State:
     """
@@ -521,6 +631,7 @@ def resolve_place_and_unit(state: lg_State) -> lg_State:
         • write g_place / g_unit / g_unit_type
     It never mutates state *before* raising an interrupt.
     """
+    logger.info("Node: resolve_place_and_unit entered.")
     i       = state.get("current_place_index", 0)
     places  = state.get("places", [])
 
@@ -638,6 +749,15 @@ def resolve_theme(state: lg_State) -> lg_State | Command:
     # ------------------------------------------------------------------
     # Step 0 · How many units do we have?
     # ------------------------------------------------------------------
+    logging.info("Node: resolve_theme entered.")
+    state["current_node"] = "resolve_theme"
+    last_intent = state.get("last_intent_payload")
+    if last_intent:
+        if last_intent.get("intent") == "AddPlace" or last_intent.get("intent") == "RemovePlace":
+            # Hand control back to the normal router so e.g. AddPlace_node runs
+            logging.info(f"resolve_theme: last_intent_payload set to {last_intent}, returning to agent_node.")
+            return Command(goto="agent_node")
+    
     units = state.get("selected_place_g_units", []) + [
         int(p) for p in state.get("selected_polygons", []) if str(p).isdigit()
     ]
@@ -716,15 +836,15 @@ def resolve_theme(state: lg_State) -> lg_State | Command:
                     f"Got it – I'll use the **{chosen.labl}** theme. "
                     "Which place or postcode should I fetch it for?"
                 ),
-                "options": [
-                    {
-                        "option_type": "intent",
-                        "label": "Add a place",
-                        "value": 0,       # handled by ask_followup_node
-                        "color": "#333",
-                    }
-                ],
-                "current_node": "ask_followup_node",
+                # "options": [
+                #     {
+                #         "option_type": "intent",
+                #         "label": "Add a place",
+                #         "value": 0,       # handled by ask_followup_node
+                #         "color": "#333",
+                #     }
+                # ],
+                "current_node": "resolve_theme",
             }
         )
         return state                        # wait for user input
@@ -795,8 +915,6 @@ def create_workflow(lg_state: TypedDict):
     workflow.add_node("ask_followup_node", ask_followup_node)
     workflow.add_node("resolve_place_and_unit", resolve_place_and_unit)
 
-    workflow.add_edge("multi_place_tool_call", "resolve_place_and_unit")
-    workflow.add_edge("resolve_place_and_unit", "select_unit_on_map")
     workflow.add_node("resolve_theme", resolve_theme)
 
     # agent-edge - single mapping
@@ -823,6 +941,9 @@ def create_workflow(lg_state: TypedDict):
 
     # START already goes straight to agent_node now
     workflow.add_edge(START, "agent_node")
+    
+    workflow.add_edge("multi_place_tool_call", "resolve_place_and_unit")
+    workflow.add_edge("resolve_place_and_unit", "select_unit_on_map")
 
     workflow.add_conditional_edges(
         "select_unit_on_map",
@@ -840,26 +961,28 @@ def create_workflow(lg_state: TypedDict):
     
     workflow.add_edge("AddTheme_node", "resolve_theme")
 
+    def _have_any_units(s):
+        """True if the user has supplied a unit in either slot."""
+        return bool(
+            s.get("selected_place_g_units") or
+            s.get("selected_polygons")      # added
+        )
+
     workflow.add_conditional_edges(
         "resolve_theme",
-        # go to cubes only if we have BOTH a theme and at least one unit
-        lambda s: (
-            "find_cubes_node"
-            if s.get("selected_theme")
-            and s.get("selected_place_g_units")
-            else "agent_node"
-        ),
+        lambda s: "find_cubes_node" if s.get("selected_theme") and _have_any_units(s)
+                else "agent_node",
         {
             "find_cubes_node": "find_cubes_node",
             "agent_node": "agent_node",
         },
     )
 
-    workflow.add_edge("find_cubes_node", END)
+    workflow.add_edge("find_cubes_node", "agent_node")
     
     workflow.add_edge("ask_followup_node", "agent_node")
 
-
+    
     # --- Compile the workflow ---
     logger.info("Compiling workflow with Redis checkpointer...")
     try:

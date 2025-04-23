@@ -111,7 +111,8 @@ def find_cubes_for_unit_theme(
     Find cubes for a given unit and theme.
     """
     query = f"""select 
-        ncube.ent_ID as cube_id,
+        ncube.theme_ID as theme_ID,
+        ncube.ent_ID as cube_ID,
         ncube.labl as cube,
         min(data.end_date_decimal) as start,
         max(data.end_date_decimal) as end,
@@ -131,7 +132,7 @@ def find_cubes_for_unit_theme(
     res = dbtool.db._execute(query)
     df = pd.DataFrame(res)
     # Convert column names to match what we expect
-    df.columns = ['Cube_ID', 'Cube', 'Start', 'End', 'Count']
+    df.columns = ['Theme_ID','Cube_ID', 'Cube', 'Start', 'End', 'Count']
     logger.debug(f"[find_cubes_for_unit_theme] Query returned: \n\n{df}")
     return df.to_json(orient='records')
 
@@ -166,6 +167,7 @@ def find_units_by_postcode(
 def find_places_by_name(
     place_name: Annotated[str, "Name of the place to search for"],
     county: Annotated[str, "County code, default is '0'"] = "0",
+    unit_type: Annotated[str, "Unit type code, default is '0'"] = "0",
     nation: Annotated[str, "Nation code, default is '0'"] = "0",
     domain: Annotated[str, "Domain code, default is '0'"] = "0",
     state: Annotated[str, "State code, default is '0'"] = "0"
@@ -173,7 +175,7 @@ def find_places_by_name(
     """
     Find place names by provided parameters.
     """
-    types_tuple = tuple(UNIT_TYPES.keys())
+    types_tuple = tuple(UNIT_TYPES.keys()) if unit_type == "0" else (f"('{unit_type}')")
     query = f"""
         SELECT 
             p.g_place, 

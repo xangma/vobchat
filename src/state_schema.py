@@ -36,6 +36,7 @@ class lg_State(TypedDict):
     # extraction results
     extracted_place_names: List[str]
     extracted_counties: List[str]
+    extracted_unit_types: List[str]
     extracted_theme: Optional[str]
     is_postcode: bool
     extracted_postcode: Optional[str]
