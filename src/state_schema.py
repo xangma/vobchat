@@ -21,6 +21,7 @@ class lg_State(TypedDict):
     selection_idx: Optional[int]
 
     # place + unit selections
+    places: List[Optional[str]]
     selected_place_g_places: List[Optional[int]]
     selected_place_g_units: List[Optional[int]]
     selected_place_g_unit_types: List[Optional[str]]

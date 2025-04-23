@@ -563,6 +563,14 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
             buttons = []
             thread_id = None # Clear thread ID to start a new conversation
             counts_store = {}
+            # clear the state
+            state = {k: None for k in lg_State.__annotations__}
+            state_snapshot = asyncio.run(
+                compiled_workflow.aupdate_state(
+                    config={"configurable": {"thread_id": thread_id}},
+                    values=state
+                )
+            )
             # Return the reset states
             return (
                 chat_history,          # Empty history

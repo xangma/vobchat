@@ -20,7 +20,7 @@ place_state_data = {
     "themes": None,
     "selected_theme_id": None,
     "cubes": None,
-    "cube_data": None
+    "cube_data": None,
 }
 
 app_state_data = {
