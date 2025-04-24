@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 #   agent_node - single entry point for routing
 # ---------------------------------------------------------------------------
 def agent_node(state: lg_State):
-    logging.info(f"agent_node entered. State snapshot (keys): {list(state.keys())}")
+    logging.info(f"agent_node entered. State snapshot: {state}") 
     # For brevity, log only keys or specific interesting values
     logging.debug(f"agent_node state details: last_intent_payload={state.get('last_intent_payload')}, queue_len={len(state.get('intent_queue', []))}")
 
@@ -105,6 +105,7 @@ def agent_node(state: lg_State):
         txt = final_args.get("text", "Okay.") # Default chat response
         logging.info(f"agent_node: Handling CHAT intent.")
         state.setdefault("messages", []).append(AIMessage(content=txt))
+        state["last_intent_payload"] = {} # Clear the payload after processing
         # CHAT usually ends the turn for the AI.
         return state # Return state after adding message
 
@@ -121,9 +122,13 @@ def agent_node(state: lg_State):
 
     else:
         # Fallback if no intent determined (e.g., LLM failed, queue empty/invalid, no pre-set)
-        logging.warning("agent_node: No valid intent determined. Routing to ask_followup_node.")
+        logging.warning("agent_node: No valid intent determined. Routing to END.")
         # Route to clarification node
-        return Command(goto="ask_followup_node", update={
+        # return Command(goto="ask_followup_node", update={
+        #      "last_intent_payload": None, # Clear any potentially invalid payload
+        #      "intent_queue": state.get("intent_queue", []),
+        # })
+        return Command(goto=END, update={
              "last_intent_payload": None, # Clear any potentially invalid payload
              "intent_queue": state.get("intent_queue", []),
         })

@@ -221,11 +221,12 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
             # an interaction outside the chat, like map selection, modified a Dash state like map_state),
             # we need to synchronize the relevant Dash state back into the persistent LangGraph state
             # stored by the checkpointer (e.g., Redis) before resuming the workflow.
+            latest_state = await compiled_workflow.aget_state(current_config)
             if is_retrigger and initial_map_state.get('selected_polygons'):
                 logger.info("Retrigger detected: Syncing map_state to LangGraph state before resuming.")
                 try:
                     # Retrieve the latest state snapshot from the LangGraph checkpointer
-                    latest_state = await compiled_workflow.aget_state(current_config)
+                    
                     if latest_state:
                         # Copy the state values to modify
                         current_workflow_state_values = latest_state.values.copy()
@@ -265,7 +266,8 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                 logger.info(f"User input detected: {current_user_input}")
 
             # Case 2: Dynamic button clicked (e.g., place/unit/theme choice)
-            await compiled_workflow.aupdate_state(config=current_config, values={"selection_idx": current_selection_idx}) # Clear the selection index in the workflow state
+            if current_selection_idx is not None and triggered_by_button:
+                await compiled_workflow.aupdate_state(config=current_config, values={"selection_idx": current_selection_idx}) # Clear the selection index in the workflow state
 
             # --- Execute the LangGraph workflow using asynchronous streaming ---
             full_ai_response = "" # Accumulator for the complete AI response message
@@ -416,7 +418,7 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                                 map_state_async["unit_types"] = interrupt_updates.get("selected_place_g_unit_types", [])
                                 map_state_async["zoom_to_selection"] = True # Flag to tell the map component to zoom
                                 # Flag indicating a programmatic change is pending (might be used by map callbacks)
-                                map_state_async["programmatic_unit_change_pending"] = interrupt_updates.get("selected_place_g_unit_types", [])
+                                # map_state_async["programmatic_unit_change_pending"] = interrupt_updates.get("selected_place_g_unit_types", [])
                                 interrupt_updates.update({
                                     "selected_polygons": map_state_async["selected_polygons"],
                                     "selected_polygons_unit_types": map_state_async["selected_polygons_unit_types"],
@@ -467,11 +469,20 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                                 interrupt_message = html.Div(txt, className="speech-bubble ai-bubble")
 
                                 # ① append to visible history
-                                history.insert(0, interrupt_message)
-
-                                # ② also push it into the workflow state so it survives a retrigger
                                 msgs = final_state_values.get("messages", [])
-                                msgs.append(AIMessage(content=txt))
+                                last_message = history[0] if history else None
+                                if last_message and isinstance(last_message, html.Div):
+                                    last_message_text = last_message.children
+                                    if interrupt_message.children != last_message_text:
+                                        history.insert(0, interrupt_message)
+                                        
+                                        msgs.append(AIMessage(content=txt))
+                                elif last_message and last_message.get("props"):
+                                    last_message_text = last_message.get("props").get("children")
+                                    if interrupt_message.children != last_message_text:
+                                        history.insert(0, interrupt_message)
+                                        msgs.append(AIMessage(content=txt))
+
                                 interrupt_updates["messages"] = msgs          # <- extra field to persist
 
                                 app_state_async["messages"] = history
@@ -480,19 +491,21 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                 # back into the workflow state. This is important if the interrupt occurred
                 # mid-way through processing multiple items (like places).
 
-                if 'show_visualization_signal' in final_state_values:
-                    show_viz = final_state_values['show_visualization_signal']
-                    logger.info(f"Updating app_state show_visualization based on signal: {show_viz}")
-                    app_state_async['show_visualization'] = show_viz
-                    # Remove the signal flag from the state to be persisted
-                    # del final_state_values['show_visualization_signal']
-                    # Update the state in the checkpointer *if necessary*
-                    interrupt_updates.update({"show_visualization_signal": None}) # Or update with the dict minus the key
+                # if 'show_visualization_signal' in final_state_values:
+                #     show_viz = final_state_values['show_visualization_signal']
+                #     logger.info(f"Updating app_state show_visualization based on signal: {show_viz}")
+                #     app_state_async['show_visualization'] = show_viz
+                #     # Remove the signal flag from the state to be persisted
+                #     # del final_state_values['show_visualization_signal']
+                #     # Update the state in the checkpointer *if necessary*
+                #     interrupt_updates.update({"show_visualization_signal": None}) # Or update with the dict minus the key
 
                 # Persist the interrupt data back into the workflow state.
+                logger.info(f"CALLBACK: Updating interrupt updates: {interrupt_updates}")
                 await compiled_workflow.aupdate_state(
                     config=current_config, # Pass the thread configuration
-                    values=interrupt_updates # Update the workflow state with the interrupt data
+                    values=interrupt_updates, # Update the workflow state with the interrupt data
+                    # as_node=interrupt_updates.get("current_node", None), # Optional: specify the node that triggered the interrupt
                 )
                 if 'selected_polygons' in interrupt_updates:
                     # update map_state with the selected polygons
@@ -602,7 +615,7 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
         if ctx_trigger == 'map-click-add-trigger.data' and map_add_payload is not None:
             logger.info(f"Map click (Add) detected. Payload: {map_add_payload}")
             place_name = map_add_payload.get("name", map_add_payload.get("id", "Unknown Place"))
-            unit_type = map_add_payload.get("type", "Unknown Unit Type")
+            unit_type = map_add_payload.get("type")
             # Construct payload for AddPlace intent node
             map_intent_payload = {"intent": AssistantIntent.ADD_PLACE.value, "arguments": {"place": place_name, "unit_type": unit_type}}
             state_updates_for_map_click = {
@@ -617,7 +630,7 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
         elif ctx_trigger == 'map-click-remove-trigger.data' and map_remove_payload is not None:
             logger.info(f"Map click (Remove) detected. Payload: {map_remove_payload}")
             place_name = map_remove_payload.get("name", map_remove_payload.get("id", "Unknown Place"))
-            unit_type = map_add_payload.get("unit_type", "Unknown Unit Type")
+            unit_type = map_remove_payload.get("unit_type")
 
             # Construct payload for RemovePlace intent node
             map_intent_payload = {"intent": AssistantIntent.REMOVE_PLACE.value, "arguments": {"place": place_name, "unit_type": unit_type}}

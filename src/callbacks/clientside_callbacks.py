@@ -476,7 +476,7 @@ def register_clientside_callbacks(app: Dash):
                  try {
                     let newState = JSON.parse(JSON.stringify(mapState));
                     delete newState.zoom_to_selection;
-                    delete newState.programmatic_unit_change_pending;
+                    //delete newState.programmatic_unit_change_pending;
                     window.dash_clientside.set_props("map-state", {data: newState}); // Update map-state directly ONLY on error
                     console.warn("Client (Cb8 - Fetch/Zoom): Reset state flags in map-state as prerequisites failed.");
                 } catch(e){ console.error("Client (Cb8 - Fetch/Zoom): Error resetting state flags on prerequisite failure:", e); }
@@ -493,7 +493,7 @@ def register_clientside_callbacks(app: Dash):
                  try {
                     let newState = JSON.parse(JSON.stringify(mapState));
                     delete newState.zoom_to_selection;
-                    delete newState.programmatic_unit_change_pending;
+                    //delete newState.programmatic_unit_change_pending;
                     window.dash_clientside.set_props("map-state", {data: newState}); // Update map-state directly ONLY on error
                     const layer = polygonManagement.findGeoJSONLayer(map);
                     if(layer) polygonManagement.refreshLayerStyles(layer, mapState.selected_polygons);
@@ -533,7 +533,7 @@ def register_clientside_callbacks(app: Dash):
                          try {
                             let newState = JSON.parse(JSON.stringify(mapState));
                             delete newState.zoom_to_selection;
-                            delete newState.programmatic_unit_change_pending;
+                            //delete newState.programmatic_unit_change_pending;
                             window.dash_clientside.set_props("map-state", {data: newState});
                         } catch(e){}
                     }
@@ -546,7 +546,7 @@ def register_clientside_callbacks(app: Dash):
                      try {
                         let newState = JSON.parse(JSON.stringify(mapState));
                         delete newState.zoom_to_selection;
-                        delete newState.programmatic_unit_change_pending;
+                        //delete newState.programmatic_unit_change_pending;
                         window.dash_clientside.set_props("map-state", {data: newState});
                     } catch(e){}
                 });
@@ -623,7 +623,9 @@ def register_clientside_callbacks(app: Dash):
             console.log("Client (Cb10 - Cleanup): Triggered by zoom-cleanup-trigger-store.");
 
             // Check if cleanup is actually needed
-            if (!currentMapState.zoom_to_selection && !currentMapState.programmatic_unit_change_pending) {
+            //if (!currentMapState.zoom_to_selection && !currentMapState.programmatic_unit_change_pending) {
+            if (!currentMapState.zoom_to_selection) {
+
                 console.log("Client (Cb10 - Cleanup): Flags already cleared in map-state. No update needed.");
                 return window.dash_clientside.no_update;
             }
@@ -636,11 +638,11 @@ def register_clientside_callbacks(app: Dash):
                 console.log("Client (Cb10 - Cleanup): Cleared zoom_to_selection flag.");
                 updated = true;
             }
-            if (newState.programmatic_unit_change_pending) {
-                delete newState.programmatic_unit_change_pending;
-                console.log("Client (Cb10 - Cleanup): Cleared programmatic_unit_change_pending flag.");
-                 updated = true;
-            }
+//            if (newState.programmatic_unit_change_pending) {
+//                delete newState.programmatic_unit_change_pending;
+//                console.log("Client (Cb10 - Cleanup): Cleared programmatic_unit_change_pending flag.");
+//                 updated = true;
+//            }
 
             if (updated) {
                  console.log("Client (Cb10 - Cleanup): Returning updated map-state.");

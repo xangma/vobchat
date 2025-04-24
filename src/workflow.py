@@ -278,7 +278,7 @@ def multi_place_tool_call(state: lg_State) -> lg_State:
 
     for idx, place_name in enumerate(place_names):
         county = counties[idx] if idx < len(counties) else "0"
-        unit_type = unit_types[idx] if idx < len(unit_types) else None
+        unit_type = unit_types[idx] if idx < len(unit_types) else "0"
         try:
             df = pd.read_json(
                 io.StringIO(
@@ -392,7 +392,7 @@ def select_unit_on_map(state: lg_State) -> lg_State | Command:
     else:
         # Log if there are no units or the index is somehow invalid.
         logger.warning(f"Skipping map selection trigger: No units selected in workflow or index mismatch (Index: {last_processed_index}, Units: {selected_workflow_units})")
-
+        return Command(goto="agent_node")
     # Whether interrupted or not, return the state. The graph proceeds based on edges from this node.
     return state
 
@@ -708,7 +708,7 @@ def resolve_place_and_unit(state: lg_State) -> lg_State:
 
             interrupt(value={
                 "message": f"Which geography for “{place['name']}”?",
-                "options": options,               # 🌟 persisted in state
+                "options": options,               #  persisted in state
                 "current_node": "resolve_place_and_unit",
                 "place_cursor": i,
             })
@@ -791,12 +791,16 @@ def resolve_theme(state: lg_State) -> lg_State | Command:
         selection_idx = state.get("selection_idx")
 
         # 2 a · LLM auto-pick
-        if theme_query:
+        if theme_query and not selection_idx:
             try:
                 llm_code = choose_theme_chain.invoke({"question": theme_query}).theme_code
                 chosen = next((t for t in available if t["ent_id"] == llm_code), None)
                 if chosen:
                     state["selected_theme"] = json.dumps(chosen)
+                else:
+                    state.setdefault("messages", []).append(
+                        AIMessage(content=f"I couldn't find statistical themes related to {llm_code} for all selected places.")
+                    )
             except Exception as exc:
                 logger.info(f"LLM pick failed: {exc}")
 
@@ -830,24 +834,29 @@ def resolve_theme(state: lg_State) -> lg_State | Command:
     # ------------------------------------------------------------------
     if state.get("selected_theme") and not units:
         chosen = pd.read_json(state["selected_theme"], typ='series')
-        interrupt(
-            value={
-                "message": (
-                    f"Got it – I'll use the **{chosen.labl}** theme. "
-                    "Which place or postcode should I fetch it for?"
-                ),
-                # "options": [
-                #     {
-                #         "option_type": "intent",
-                #         "label": "Add a place",
-                #         "value": 0,       # handled by ask_followup_node
-                #         "color": "#333",
-                #     }
-                # ],
-                "current_node": "resolve_theme",
-            }
-        )
-        return state                        # wait for user input
+        state.setdefault("messages", []).append(
+            AIMessage(content=f"Got it – I'll use the **{chosen['labl']}** theme. ")
+            )
+        # interrupt(
+        #     value={
+        #         "message": (
+        #             f"Got it – I'll use the **{chosen.labl}** theme. "
+        #             "Which place or postcode should I fetch it for?"
+        #         ),
+        #         # "options": [
+        #         #     {
+        #         #         "option_type": "intent",
+        #         #         "label": "Add a place",
+        #         #         "value": 0,       # handled by ask_followup_node
+        #         #         "color": "#333",
+        #         #     }
+        #         # ],
+        #         "current_node": "resolve_theme",
+        #     }
+        # )
+        state['current_node'] = "resolve_theme"
+        state["last_intent_payload"] = {}
+        return state                      # wait for user input
     return state 
 
 
@@ -918,6 +927,17 @@ def create_workflow(lg_state: TypedDict):
     workflow.add_node("resolve_theme", resolve_theme)
 
     # agent-edge - single mapping
+    # workflow.add_conditional_edges(
+    #     "agent_node",
+    #     lambda s: (s.get("last_intent_payload") or {}).get("intent") or "NO_INTENT",
+    #     {
+    #         **{i.value: f"{i.value}_node"
+    #         for i in AssistantIntent
+    #         if i is not AssistantIntent.CHAT},
+    #         AssistantIntent.CHAT.value: END, 
+    #         "NO_INTENT": "ask_followup_node",
+    #     },
+    # )
     workflow.add_conditional_edges(
         "agent_node",
         lambda s: (s.get("last_intent_payload") or {}).get("intent") or "NO_INTENT",
@@ -926,13 +946,13 @@ def create_workflow(lg_state: TypedDict):
             for i in AssistantIntent
             if i is not AssistantIntent.CHAT},
             AssistantIntent.CHAT.value: END, 
-            "NO_INTENT": "ask_followup_node",
+            "NO_INTENT": END,
         },
     )
         
     for n in [
         "ShowState_node", "ListThemesForSelection_node", "ListAllThemes_node",
-        "DescribeTheme_node", "RemovePlace_node", "RemoveTheme_node"
+        "DescribeTheme_node", "RemoveTheme_node"
     ]:
         workflow.add_edge(n, END)
 
@@ -980,7 +1000,11 @@ def create_workflow(lg_state: TypedDict):
 
     workflow.add_edge("find_cubes_node", "agent_node")
     
-    workflow.add_edge("ask_followup_node", "agent_node")
+    # workflow.add_edge("ask_followup_node", "agent_node")
+    
+    # workflow.add_edge("Reset_node", "agent_node")
+    
+    # workflow.add_edge("agent_node", END)
 
     
     # --- Compile the workflow ---

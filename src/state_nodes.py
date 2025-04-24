@@ -75,8 +75,8 @@ def ShowState_node(state: lg_State):
         summary.append("• no places selected yet")
 
     if state.get("selected_theme"):
-        df = pd.read_json(state["selected_theme"], orient="records")
-        summary.append(f"• theme: {df.iloc[0]['labl']}")
+        df = pd.read_json(state["selected_theme"], typ='series')
+        summary.append(f"• theme: {df['labl']}")
     else:
         summary.append("• no theme selected yet")
 
@@ -247,7 +247,7 @@ def RemovePlace_node(state: lg_State):
     payload = state.get("last_intent_payload", {})
     args = payload.get("arguments", {}) if payload else {}
     place: Optional[str] = args.get("place")
-
+    places = state.get("places")
     if not place:
         _append_ai(state, "Tell me which place to remove, e.g. ‘remove Oxford'.")
         return state
@@ -257,7 +257,12 @@ def RemovePlace_node(state: lg_State):
     place_names = [p.lower() for p in place_names]
     county_names = state.get("extracted_counties", [])
     county_names = [c.lower() for c in county_names]
-    
+    for i in places:
+        if i.get('name').lower() == place:
+            g_unit = i.get('g_unit')
+            g_unit_type = i.get('g_unit_type')
+            g_place = i.get('g_place')
+            break
     if place not in place_names:
         _append_ai(state, f"{place} isn't in your selection.")
         state["last_intent_payload"] = {} 
@@ -267,28 +272,36 @@ def RemovePlace_node(state: lg_State):
     place_names.pop(idx)
     if idx < len(county_names):
         county_names.pop(idx)
-    for key in ("extracted_place_names", "selected_place_g_places", "selected_place_g_units", "selected_place_g_unit_types", "selected_polygons", "selected_polygons_unit_types"):
+    for key in ("selected_place_g_places", "selected_place_g_units", "selected_place_g_unit_types", "selected_polygons", "selected_polygons_unit_types"):
         lst = state.get(key, [])
-        if idx < len(lst):
+        # Take a good look, this is the worst code I've ever written and possible will ever write.
+        idx = lst.index(g_unit) if g_unit in lst else -1
+        if idx == -1:
+            idx = lst.index(g_unit_type) if g_unit_type in lst else -1
+        if idx == -1:
+            idx = lst.index(g_place) if g_place in lst else -1
+        if idx < len(lst) and idx != -1:
             lst.pop(idx)
         state[key] = lst
 
     remaining_units = state.get("selected_place_g_units", [])
-    cubes_filtered: pd.DataFrame = pd.DataFrame(columns=["g_unit"]) 
+    cubes_filtered = pd.DataFrame(columns=["g_unit"]) 
     if state.get("selected_cubes"):
         try:
             df = pd.read_json(state["selected_cubes"], orient="records")
             if not df.empty and "g_unit" in df.columns:
                 df = df[df["g_unit"].isin(remaining_units)]
-                cubes_filtered = df.to_json(orient="records")
+                cubes_filtered = df
         except Exception:          # defensive - fallback to clearing
-            cubes_filtered = pd.DataFrame(columns=["g_unit"]).to_json(orient="records")
+            cubes_filtered = pd.DataFrame(columns=["g_unit"])
 
     if len(cubes_filtered) > 0:
         show_viz = True
+        cubes_filtered = cubes_filtered.to_json(orient="records")
     else:
         show_viz = False
-
+        cubes_filtered = []
+    
     interrupt(value={
     "message": f"Removed {place} from the selection.",
     "extracted_place_names": place_names,
@@ -297,9 +310,9 @@ def RemovePlace_node(state: lg_State):
     "selected_place_g_places": state.get("selected_place_g_places", []),
     "selected_place_g_units": state.get("selected_place_g_units", []),
     "selected_place_g_unit_types": state.get("selected_place_g_unit_types", []),
-    "cubes": cubes_filtered,            # ↓ front-end will overwrite its store
-    "selected_cubes": cubes_filtered,   # ↓ persist for future turns
-    "show_visualization_signal": show_viz,
+    # "cubes": cubes_filtered,            # ↓ front-end will overwrite its store
+    # "selected_cubes": cubes_filtered,   # ↓ persist for future turns
+    # "show_visualization_signal": show_viz,
     "selected_polygons": state.get("selected_polygons", []),
     "selected_polygons_unit_types": state.get("selected_polygons_unit_types", []),
     "current_node": "select_unit_on_map",

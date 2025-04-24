@@ -18,6 +18,7 @@ def register_visualization_callbacks(app, compiled_workflow):
         Output("visualization-area", "style"),          # Controls the inner content div
         # Output("resize-handle-2", "style"), # Let JS handle handle visibility via observer
         Output("cube-selector", "options"),
+        Output("cube-selector", "value", allow_duplicate=True),
         Output("place-state", "data"),
         Output("visualization-area", "data-was-hidden"), # Keep this if JS uses it
         Input("app-state", "data"),
@@ -37,7 +38,7 @@ def register_visualization_callbacks(app, compiled_workflow):
 
         if not app_state or app_state.get("show_visualization") is False:
             # Return styles to hide BOTH container and inner area
-            return hidden_container_style, hidden_area_style, [], place_state, "true"
+            return hidden_container_style, hidden_area_style, [], [], place_state, "true"
 
         try:
             config = {"configurable": {"thread_id": thread_id}}
@@ -45,14 +46,15 @@ def register_visualization_callbacks(app, compiled_workflow):
             cubes = place_state.get("cubes", [])
             if not cubes:
                  # Hide both if no cubes
-                 return hidden_container_style, hidden_area_style, [], place_state, "true"
+                 return hidden_container_style, hidden_area_style, [], [], place_state, "true"
 
             cubes_df = pd.read_json(cubes, orient='records')
             cube_ids = cubes_df['Cube_ID'].tolist()
+            default_value = cube_ids[:1]
             g_units = state.values.get('selected_place_g_units', [])
             if not g_units:
                  # Hide both if no units selected
-                 return hidden_container_style, hidden_area_style, [], place_state, "true"
+                 return hidden_container_style, hidden_area_style, [], [], place_state, "true"
 
             cube_list = []
             for g_unit in g_units:
@@ -67,9 +69,22 @@ def register_visualization_callbacks(app, compiled_workflow):
 
             if not cube_list: # No data found for any unit
                  # Hide both if no data retrieved
-                 return hidden_container_style, hidden_area_style, [], place_state, "true"
+                 return hidden_container_style, hidden_area_style, [], [], place_state, "true"
 
             all_cube_data = pd.concat(cube_list).reset_index()
+
+
+            # ── 1. keep only columns that contain at least one non-NaN ────────────
+            non_empty_cols = all_cube_data.columns[~all_cube_data.isna().all()]
+            all_cube_data = all_cube_data[non_empty_cols]
+
+            # ── 2. keep only Cube_IDs for which a real data column survived ───────
+            def cube_has_data(cid):
+                pattern = cid[2:]                    # '6080' out of 'n6080'
+                return any(pattern in col for col in non_empty_cols)
+
+            cube_ids = [cid for cid in cube_ids if cube_has_data(cid)]
+            cubes_df  = cubes_df[cubes_df['Cube_ID'].isin(cube_ids)]
 
             options = [
                  {"label": row['Cube'], "value": row['Cube_ID']}
@@ -78,12 +93,12 @@ def register_visualization_callbacks(app, compiled_workflow):
             place_state['cube_data'] = all_cube_data.to_json(orient='records')
 
             # Return styles to SHOW BOTH container and inner area
-            return visible_container_style, visible_area_style, options, place_state, "false"
+            return visible_container_style, visible_area_style, options, default_value, place_state, "false"
 
         except Exception as e:
             print(f"Error handling visualization request: {e}")
             # Hide both on error
-            return hidden_container_style, hidden_area_style, [], place_state, "true"
+            return hidden_container_style, hidden_area_style, [], [], place_state, "true"
 
     # --- update_visualization callback remains the same ---
     @app.callback(

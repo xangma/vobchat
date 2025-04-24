@@ -10,7 +10,7 @@ map_state_data = {
     "selected_polygons_unit_types": [],
     "show_unselected": True,
     "zoom_to_selection": False,
-    "programmatic_unit_change_pending": None,
+    # "programmatic_unit_change_pending": None,
 }
 
 place_state_data = {

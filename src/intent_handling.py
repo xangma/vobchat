@@ -79,10 +79,7 @@ _INTENT_EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
         • Anything else: Chat.  Set arguments.text to the assistant's normal reply.
 
         Reply **only** with JSON matching this schema:
-        {{"intents": [
-            {{"intent": <intent string>, "arguments": <object>}}, ...
-        ]
-        }}
+        {{ "intents": [ {{ "intent": <intent string>, "arguments": <object> }} ] }}
                 
         Previous conversation:
         {history}
