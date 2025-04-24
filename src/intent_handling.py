@@ -50,7 +50,7 @@ class AssistantIntentPayload(BaseModel):
 _MODEL_NAME = "llama3.3:latest"  # keep in sync with workflow.py
 _BASE_URL = "https://148.197.150.162/ollama_api/"
 
-_llm = ChatOllama(model=_MODEL_NAME, base_url=_BASE_URL, client_kwargs={"verify": False})
+_llm = ChatOllama(model=_MODEL_NAME, base_url=_BASE_URL, format="json", client_kwargs={"verify": False})
 
 intent_list = ", \n".join([f"{intent.value}" for intent in AssistantIntent])
 
