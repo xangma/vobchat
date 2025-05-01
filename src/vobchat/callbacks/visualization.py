@@ -8,7 +8,7 @@ import plotly.express as px
 from dash import no_update
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
-from tools import get_all_cube_data
+from vobchat.tools import get_all_cube_data
 
 # This file contains all the callbacks for data visualization
 def register_visualization_callbacks(app, compiled_workflow):

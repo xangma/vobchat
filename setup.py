@@ -8,7 +8,8 @@ setup(
     description="A Dash web application for talking to VoB Data.",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
-    packages=find_packages(),
+    packages=find_packages(where="src"),
+    package_dir={"": "src"},
     install_requires=[
         "dash",
         "dash-bootstrap-components",

@@ -78,9 +78,9 @@ from dash.exceptions import PreventUpdate
 from uuid import uuid4
 
 # Import application state stores defined elsewhere (presumably in stores.py)
-from stores import app_state_data, map_state_data, place_state_data
-from state_schema import lg_State  # Import the lg_State TypedDict for type hinting
-from intent_handling import AssistantIntent, AssistantIntentPayload
+from vobchat.stores import app_state_data, map_state_data, place_state_data
+from vobchat.state_schema import lg_State  # Import the lg_State TypedDict for type hinting
+from vobchat.intent_handling import AssistantIntent, AssistantIntentPayload
 
 # Import Dash core components and Bootstrap components
 from dash import Input, Output, State, ALL, ctx
@@ -96,6 +96,8 @@ from dash_extensions.enrich import CycleBreakerInput
 from langgraph.types import interrupt, Command
 # Import necessary LangChain message types used within the workflow's state
 from langchain_core.messages import AIMessage, HumanMessage, AIMessageChunk, ToolMessage
+
+from flask import session
 
 # Set up logging for this module
 logger = logging.getLogger(__name__)
@@ -197,7 +199,8 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
         This synchronous function orchestrates the call to the asynchronous
         workflow logic using asyncio.run().
         """
-
+        email = session.get("email", {}).get("email", "")
+        logger.info(f"User email: {email}")
         # --- Define an inner async function for the core LangGraph interaction ---
         async def _run_async_logic(
             initial_chat_history, initial_app_state, initial_map_state, initial_place_state,

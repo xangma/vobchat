@@ -1,20 +1,27 @@
+# src/vobchat/app.py
 import logging, os
 from dash_extensions.enrich import DashProxy, CycleBreakerTransform, ServersideOutputTransform
 import dash_bootstrap_components as dbc
 from dash import html
-from workflow import create_workflow, lg_State
-from tools import get_date_ranges_by_type
-from stores import create_stores
-from utils.polygon_cache import polygon_cache
-from components.chat import create_chat_layout
-from components.map import create_map_layout
-from components.visualization import create_visualization_layout
-from callbacks.chat import register_chat_callbacks
+from vobchat.workflow import create_workflow, lg_State
+from vobchat.tools import get_date_ranges_by_type
+from vobchat.stores import create_stores
+from vobchat.utils.polygon_cache import polygon_cache
+from vobchat.components.chat import create_chat_layout
+from vobchat.components.map import create_map_layout
+from vobchat.components.visualization import create_visualization_layout
+from vobchat.callbacks.chat import register_chat_callbacks
 # from .callbacks.map_leaflet import register_map_leaflet_callbacks
-from callbacks.visualization import register_visualization_callbacks
-from callbacks.clientside_callbacks import register_clientside_callbacks
-from api.polygon_routes import register_polygon_routes
-from api.bounding_box_routes import register_bounding_box_routes
+from vobchat.callbacks.visualization import register_visualization_callbacks
+from vobchat.callbacks.clientside_callbacks import register_clientside_callbacks
+from vobchat.api.polygon_routes import register_polygon_routes
+from vobchat.api.bounding_box_routes import register_bounding_box_routes
+from vobchat.models import register_app_routes
+from flask import render_template_string, redirect, url_for, request, session
+from authlib.integrations.flask_client import OAuth
+from flask_login import current_user
+import os, json, functools, pathlib
+from vobchat.models import db, lm, bp as auth_bp
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +33,13 @@ if 'REDIS_URL' in os.environ:
     from celery import Celery
     celery_app = Celery(__name__, broker=os.environ['REDIS_URL'], backend=os.environ['REDIS_URL'])
     background_callback_manager = CeleryManager(celery_app)
-
 else:
     # Diskcache for non-production apps when developing locally
     import diskcache
     cache = diskcache.Cache("./cache")
     background_callback_manager = DiskcacheManager(cache)
+
+DASH_PREFIX = os.getenv("DASH_URL_BASE", "/app").rstrip("/")
 
 def create_app():
     """Initialize and configure the Dash app."""
@@ -39,8 +47,10 @@ def create_app():
 
     assets_folder = os.path.join(os.path.dirname(__file__), 'assets')
     
-    app = DashProxy(transforms=[CycleBreakerTransform()], external_stylesheets=[
-                    dbc.themes.BOOTSTRAP], url_base_pathname=os.getenv("DASH_URL_BASE", None), suppress_callback_exceptions=True,
+    app = DashProxy(transforms=[CycleBreakerTransform()], 
+                    external_stylesheets=[dbc.themes.BOOTSTRAP], 
+                    url_base_pathname=DASH_PREFIX + '/', 
+                    suppress_callback_exceptions=True,
                     background_callback_manager=background_callback_manager,)
 
     # initial_gdf = polygon_cache.get_polygons('MOD_REG')
@@ -80,6 +90,8 @@ def create_app():
     ],
     id="document")
 
+    register_app_routes(app.server)
+    
     register_chat_callbacks(app, compiled_workflow, background_callback_manager)
     # register_map_leaflet_callbacks(app, date_ranges_df)
     register_clientside_callbacks(app)
@@ -92,7 +104,57 @@ def create_app():
 
 # Create app and expose `server` for Gunicorn
 app = create_app()
+
 server = app.server
+
+server.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-only-change-me')
+
+server.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL", "sqlite:///users.db")
+server.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+server.config.update(
+    SESSION_COOKIE_SECURE   = True,
+    SESSION_COOKIE_HTTPONLY = True,
+    SESSION_COOKIE_SAMESITE = "Lax",
+    WTF_CSRF_ENABLED        = True,          # if you use Flask-WTF for forms
+)
+
+db.init_app(server)
+lm.init_app(server)
+
+@server.before_request
+def protect_dash():
+    """
+    Redirect unauthenticated users away from every URL that begins
+    with /app … except the static/_dash asset endpoints that Dash
+    needs while the login page is showing.
+    """
+    path = request.path
+
+    if not path.startswith(DASH_PREFIX):
+        return                       # not a Dash URL → ignore
+
+    # Allow the pieces Dash needs to render its blank page assets
+    SAFE_SUBPATHS = ("/_dash", "/assets")     # /app/_dash, /app/assets…
+    if any(path.startswith(f"{DASH_PREFIX}{p}") for p in SAFE_SUBPATHS):
+        return
+
+    # Block everything else unless the user is logged in
+    if not current_user.is_authenticated:
+        # preserve destination so Flask-Login can send them back
+        return redirect(url_for("auth.login_page", next=path))
+
+server.register_blueprint(auth_bp)
+
+# this is needed in order for database session calls (e.g. db.session.commit)
+with server.app_context():
+    try:
+        db.create_all()
+    except Exception as exception:
+        print("got the following exception when attempting db.create_all() in __init__.py: " + str(exception))
+    finally:
+        print("db.create_all() in __init__.py was successfull - no exceptions were raised")
+
+
 
 if 'REDIS_URL' in os.environ:
     app.register_celery_tasks()

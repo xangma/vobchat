@@ -5,14 +5,16 @@ from typing import Optional, List
 import logging
 
 # Import polygon cache and other utilities
-from utils.polygon_cache import polygon_cache
-from utils.constants import UNIT_TYPES
+from vobchat.utils.polygon_cache import polygon_cache
+from vobchat.utils.constants import UNIT_TYPES
+from vobchat.models import login_required
 
 logger = logging.getLogger(__name__)
 
 def register_polygon_routes(server):
     """Register API routes for polygon retrieval."""
     
+    @login_required
     @server.route('/api/polygons/<string:unit_type>', methods=['GET'])
     def get_polygons(unit_type: str):
         """
@@ -58,6 +60,7 @@ def register_polygon_routes(server):
             logger.error(f"Error retrieving polygons for {unit_type}: {str(e)}", exc_info=True)
             return jsonify({"error": str(e)}), 500
     
+    @login_required
     @server.route('/api/polygons/ids', methods=['GET'])
     def get_polygons_by_ids_route():
         """

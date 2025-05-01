@@ -4,8 +4,8 @@ from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.types import Command
 from langgraph.graph import END
 
-from intent_handling import extract_intent, AssistantIntent, AssistantIntentPayload
-from state_schema import lg_State  # TypedDict from your existing workflow file
+from vobchat.intent_handling import extract_intent, AssistantIntent, AssistantIntentPayload
+from vobchat.state_schema import lg_State  # TypedDict from your existing workflow file
 import logging
 
 logger = logging.getLogger(__name__)

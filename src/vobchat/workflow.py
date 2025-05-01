@@ -11,7 +11,7 @@ import pandas as pd  # For data manipulation, primarily with database results
 from typing_extensions import TypedDict  # For defining the structure of the workflow state
 import logging  # For logging information and debugging
 # Import constant definitions for themes from a local utility module
-from utils.constants import UNIT_TYPES, UNIT_THEMES
+from vobchat.utils.constants import UNIT_TYPES, UNIT_THEMES
 
 # -------------------------------
 # Import Pydantic for data validation and models
@@ -38,8 +38,8 @@ from langchain_core.runnables.graph import MermaidDrawMethod  # For generating g
 # -------------------------------
 # Import local modules (configuration, DB setup, tools, etc.)
 # -------------------------------
-from config import load_config, get_db  # Functions to load app config and get DB connection
-from tools import (  # Custom functions to interact with the database/data
+from vobchat.config import load_config, get_db  # Functions to load app config and get DB connection
+from vobchat.tools import (  # Custom functions to interact with the database/data
     find_cubes_for_unit_theme,
     find_units_by_postcode,
     find_themes_for_unit,
@@ -47,10 +47,10 @@ from tools import (  # Custom functions to interact with the database/data
     get_all_themes
 )
 # Import Redis checkpointer for persistent state saving
-from utils.redis_checkpoint import RedisSaver, AsyncRedisSaver
+from vobchat.utils.redis_checkpoint import RedisSaver, AsyncRedisSaver
 from redis.asyncio import Redis  # Asynchronous Redis client
 import asyncio  # For running asynchronous operations (like Redis interaction)
-from state_nodes import (
+from vobchat.state_nodes import (
     ShowState_node, ListThemesForSelection_node,
     ListAllThemes_node, Reset_node,
     AddPlace_node, RemovePlace_node,
@@ -60,9 +60,9 @@ from state_nodes import (
     ask_followup_node
     
 )
-from agent_routing import agent_node  # Main entry point for user interactions
-from intent_handling import AssistantIntent  # Enum for routing intents
-from state_schema import lg_State  # TypedDict for the workflow state
+from vobchat.agent_routing import agent_node  # Main entry point for user interactions
+from vobchat.intent_handling import AssistantIntent  # Enum for routing intents
+from vobchat.state_schema import lg_State  # TypedDict for the workflow state
 
 # -------------------------------
 # Set up logging for debugging and informational messages

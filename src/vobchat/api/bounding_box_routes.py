@@ -10,8 +10,9 @@ from shapely.geometry import box
 import pandas as pd
 
 # Import polygon cache and other utilities
-from utils.polygon_cache import polygon_cache
-from utils.constants import UNIT_TYPES
+from vobchat.utils.polygon_cache import polygon_cache
+from vobchat.utils.constants import UNIT_TYPES
+from vobchat.models import login_required
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,7 @@ def register_bounding_box_routes(server):
             logger.error(f"Error retrieving polygons by bounding box: {str(e)}", exc_info=True)
             return jsonify({"error": str(e)}), 500
     
+    @login_required
     @server.route('/api/polygons/bbox', methods=['GET', 'POST'])
     def get_polygons_by_bbox():
         """

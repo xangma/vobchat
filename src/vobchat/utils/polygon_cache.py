@@ -6,8 +6,8 @@ import hashlib
 import json
 from shapely.geometry import box, Polygon, MultiPolygon
 from shapely.ops import unary_union
-from utils.constants import UNIT_TYPES
-from config import load_config, get_db
+from vobchat.utils.constants import UNIT_TYPES
+from vobchat.config import load_config, get_db
 import shapely
 import pandas as pd
 import os

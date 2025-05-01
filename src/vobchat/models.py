@@ -1,0 +1,105 @@
+# src/vobchat/models.py
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import UserMixin
+from passlib.context import CryptContext
+from authlib.integrations.flask_client import OAuth
+from flask import render_template_string, redirect, url_for, request, session
+import functools
+import os
+import json
+import logging
+import pathlib
+from flask import Blueprint, render_template_string, redirect, url_for, request, session, flash
+from flask_login import LoginManager, login_user, logout_user, login_required, current_user
+from vobchat.assets.loginpage import LOGIN_PAGE, SIGNUP_FORM_HTML
+from sqlalchemy import func, Index
+from sqlalchemy.exc import IntegrityError
+
+db = SQLAlchemy()
+
+pwd_ctx = CryptContext(
+    schemes=["argon2"],       # argon2id is OWASP’s 1st choice  [oai_citation:0‡OWASP Cheat Sheet Series](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html?utm_source=chatgpt.com) [oai_citation:1‡passlib.readthedocs.io](https://passlib.readthedocs.io/en/stable/lib/passlib.hash.argon2.html?utm_source=chatgpt.com)
+    deprecated="auto"
+)
+
+class User(UserMixin, db.Model):
+    __tablename__ = "users"
+    id            = db.Column(db.Integer, primary_key=True)
+    email         = db.Column(db.String(255), nullable=False)
+    password_hash = db.Column(db.String(256), nullable=False)
+
+    __table_args__ = (
+        Index("ix_user_email_lower_unique", func.lower(email), unique=True),
+    )
+    
+    # helpers ---------------------------------------------------------
+    @classmethod
+    def create(cls, email, raw_password):
+        return cls(email=email,
+                   password_hash=pwd_ctx.hash(raw_password))  # salted+peppered automatically
+
+    def verify_password(self, raw_password):
+        return pwd_ctx.verify(raw_password, self.password_hash)
+
+def register_app_routes(server):
+    """Register app routes for authentication and login."""
+    
+
+
+bp   = Blueprint("auth", __name__)
+lm   = LoginManager()           # initialise in create_app()
+lm.login_view = "auth.login_page"
+
+@lm.user_loader
+def load_user(user_id):
+    return db.session.get(User, int(user_id))
+
+@bp.route("/", methods=["GET"])
+def login_page():
+    """Initial GET page shown to unauthenticated users."""
+    if db.session.get(User, session.get("user_id", -1)):
+        return redirect("/app/")          # already logged in
+    return render_template_string(LOGIN_PAGE)
+
+# ---------- sign-up -------------------------------------------------
+@bp.route("/signup", methods=["GET", "POST"])
+def signup():
+    if request.method == "GET":
+        return render_template_string(SIGNUP_FORM_HTML)
+
+    email = request.form["email"].strip().lower()
+    pwd   = request.form["password"]
+
+    # Try to create the user; unique index on lower(email) enforces 1-per-address
+    user = User.create(email, pwd)
+    db.session.add(user)
+    try:
+        db.session.commit()          # succeeds if it’s a new e-mail
+    except IntegrityError:
+        db.session.rollback()        # quietly ignore duplicate
+        # (optional) sleep(0.05) to equalise timing, but usually not needed
+
+    # Same message for both code paths
+    flash("If an account with that e-mail exists, you can now log in.")
+    return redirect(url_for(".login_page"))
+
+# ---------- login ---------------------------------------------------
+@bp.route("/login", methods=["POST"])
+def login():
+    email = request.form.get("email", "").strip().lower()
+    pwd   = request.form.get("password", "")
+
+    user = db.session.scalar(db.select(User).filter_by(email=email))
+    if user and user.verify_password(pwd):
+        login_user(user)
+        return redirect("/app/")
+
+    flash("Invalid credentials")
+    return redirect(url_for(".login_page"))
+
+# ---------- logout --------------------------------------------------
+@bp.route("/logout")
+@login_required
+def logout():
+    logout_user()
+    return redirect("/")

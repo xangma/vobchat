@@ -12,9 +12,9 @@ import pandas as pd
 from langchain_core.messages import AIMessage
 from langgraph.types import Command
 
-from state_schema import lg_State
-from intent_handling import AssistantIntent
-from tools import (
+from vobchat.state_schema import lg_State
+from vobchat.intent_handling import AssistantIntent
+from vobchat.tools import (
     find_themes_for_unit, get_all_themes,
     find_units_by_postcode, find_places_by_name,
     get_theme_text,
