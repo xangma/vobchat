@@ -21,3 +21,9 @@ celery
 diskcache
 dash[diskcache]
 dash[celery]
+sqlalchemy
+flask
+flask_sqlalchemy
+flask_login
+passlib
+authlib

@@ -34,6 +34,12 @@ setup(
         "diskcache",
         "dash[diskcache]",
         "dash[celery]",
+        "flask",
+        "flask_sqlalchemy",
+        "flask_login",
+        "authlib",
+        "passlib",
+        "sqlalchemy",
     ],
     include_package_data=True,
     classifiers=[
