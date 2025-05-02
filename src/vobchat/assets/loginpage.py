@@ -78,6 +78,10 @@ LOGIN_PAGE = f"""
 </html>
 """
 
+LOGIN_PAGE_NO_SIGNUP = LOGIN_PAGE.replace(
+    '<a href="/signup">Create account</a> &ensp;|&ensp;', ''
+)
+
 SIGNUP_FORM_HTML = LOGIN_PAGE.replace(
     "Log in", "Sign up"
 ).replace(

@@ -22,6 +22,7 @@ from authlib.integrations.flask_client import OAuth
 from flask_login import current_user
 import os, json, functools, pathlib
 from vobchat.models import db, lm, bp as auth_bp
+from vobchat.cli import register_commands
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +100,8 @@ def create_app():
 
     register_polygon_routes(app.server)
     register_bounding_box_routes(app.server)
+
+    register_commands(app.server)
     
     return app
 

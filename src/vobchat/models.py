@@ -3,7 +3,7 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin
 from passlib.context import CryptContext
 from authlib.integrations.flask_client import OAuth
-from flask import render_template_string, redirect, url_for, request, session
+from flask import render_template_string, redirect, url_for, request, session, abort
 import functools
 import os
 import json
@@ -11,7 +11,7 @@ import logging
 import pathlib
 from flask import Blueprint, render_template_string, redirect, url_for, request, session, flash
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
-from vobchat.assets.loginpage import LOGIN_PAGE, SIGNUP_FORM_HTML
+from vobchat.assets.loginpage import LOGIN_PAGE_NO_SIGNUP, SIGNUP_FORM_HTML
 from sqlalchemy import func, Index
 from sqlalchemy.exc import IntegrityError
 
@@ -59,29 +59,30 @@ def login_page():
     """Initial GET page shown to unauthenticated users."""
     if db.session.get(User, session.get("user_id", -1)):
         return redirect("/app/")          # already logged in
-    return render_template_string(LOGIN_PAGE)
+    return render_template_string(LOGIN_PAGE_NO_SIGNUP)
 
 # ---------- sign-up -------------------------------------------------
 @bp.route("/signup", methods=["GET", "POST"])
 def signup():
-    if request.method == "GET":
-        return render_template_string(SIGNUP_FORM_HTML)
+    abort(404)
+    # if request.method == "GET":
+    #     return render_template_string(SIGNUP_FORM_HTML)
 
-    email = request.form["email"].strip().lower()
-    pwd   = request.form["password"]
+    # email = request.form["email"].strip().lower()
+    # pwd   = request.form["password"]
 
-    # Try to create the user; unique index on lower(email) enforces 1-per-address
-    user = User.create(email, pwd)
-    db.session.add(user)
-    try:
-        db.session.commit()          # succeeds if it’s a new e-mail
-    except IntegrityError:
-        db.session.rollback()        # quietly ignore duplicate
-        # (optional) sleep(0.05) to equalise timing, but usually not needed
+    # # Try to create the user; unique index on lower(email) enforces 1-per-address
+    # user = User.create(email, pwd)
+    # db.session.add(user)
+    # try:
+    #     db.session.commit()          # succeeds if it’s a new e-mail
+    # except IntegrityError:
+    #     db.session.rollback()        # quietly ignore duplicate
+    #     # (optional) sleep(0.05) to equalise timing, but usually not needed
 
-    # Same message for both code paths
-    flash("If an account with that e-mail exists, you can now log in.")
-    return redirect(url_for(".login_page"))
+    # # Same message for both code paths
+    # flash("If an account with that e-mail exists, you can now log in.")
+    # return redirect(url_for(".login_page"))
 
 # ---------- login ---------------------------------------------------
 @bp.route("/login", methods=["POST"])
