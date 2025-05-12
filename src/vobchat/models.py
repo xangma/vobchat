@@ -3,17 +3,11 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin
 from passlib.context import CryptContext
 from authlib.integrations.flask_client import OAuth
-from flask import render_template_string, redirect, url_for, request, session, abort
-import functools
-import os
-import json
-import logging
-import pathlib
 from flask import Blueprint, render_template_string, redirect, url_for, request, session, flash
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from vobchat.assets.loginpage import LOGIN_PAGE_NO_SIGNUP, SIGNUP_FORM_HTML
-from sqlalchemy import func, Index
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy import String
 
 db = SQLAlchemy()
 
@@ -22,25 +16,26 @@ pwd_ctx = CryptContext(
     deprecated="auto"
 )
 
-class User(UserMixin, db.Model):
+class Base(DeclarativeBase):
+    pass
+
+class User(Base, UserMixin):
     __tablename__ = "users"
-    id            = db.Column(db.Integer, primary_key=True)
-    email         = db.Column(db.String(255), nullable=False)
-    password_hash = db.Column(db.String(256), nullable=False)
+    __allow_unmapped__ = True          # silence Pylance re: UserMixin attrs
 
-    __table_args__ = (
-        Index("ix_user_email_lower_unique", func.lower(email), unique=True),
-    )
-    
-    # helpers ---------------------------------------------------------
+    id:            Mapped[int]  = mapped_column(primary_key=True)
+    email:         Mapped[str]  = mapped_column(String(255), nullable=False)
+    password_hash: Mapped[str]  = mapped_column(String(256), nullable=False)
+
     @classmethod
-    def create(cls, email, raw_password):
-        return cls(email=email,
-                   password_hash=pwd_ctx.hash(raw_password))  # salted+peppered automatically
+    def create(cls, email: str, raw_password: str) -> "User":
+        return cls(
+            email=email,
+            password_hash=pwd_ctx.hash(raw_password)
+        )
 
-    def verify_password(self, raw_password):
+    def verify_password(self, raw_password: str) -> bool:
         return pwd_ctx.verify(raw_password, self.password_hash)
-
 def register_app_routes(server):
     """Register app routes for authentication and login."""
     

@@ -16,3 +16,4 @@ vobchat.egg-info/
 analysedcode.json
 CLAUDE.md
 cache/
+src/instance/users.db
