@@ -17,3 +17,4 @@ analysedcode.json
 CLAUDE.md
 cache/
 src/instance/users.db
+*.db

@@ -199,8 +199,6 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
         This synchronous function orchestrates the call to the asynchronous
         workflow logic using asyncio.run().
         """
-        email = session.get("email", {}).get("email", "")
-        logger.info(f"User email: {email}")
         # --- Define an inner async function for the core LangGraph interaction ---
         async def _run_async_logic(
             initial_chat_history, initial_app_state, initial_map_state, initial_place_state,

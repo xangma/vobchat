@@ -137,7 +137,7 @@ def protect_dash():
         return                       # not a Dash URL → ignore
 
     # Allow the pieces Dash needs to render its blank page assets
-    SAFE_SUBPATHS = ("/_dash", "/assets")     # /app/_dash, /app/assets…
+    SAFE_SUBPATHS = ("/_dash", "/assets", "/_favicon", "/_reload")
     if any(path.startswith(f"{DASH_PREFIX}{p}") for p in SAFE_SUBPATHS):
         return
 
