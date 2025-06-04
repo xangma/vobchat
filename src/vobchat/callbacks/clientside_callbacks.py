@@ -429,6 +429,25 @@ def register_clientside_callbacks(app: Dash):
                 console.warn("Client (Cb7): GeoJSON layer not ready, skipping moveend update.");
                 return window.dash_clientside.no_update;
             }
+            
+            // Skip update if this moveend was triggered by a programmatic zoom
+            if (window.programmaticZoomInProgress || window.programmaticZoomAnimating) {
+                console.log("Client (Cb7): Skipping moveend update (triggered by programmatic zoom).");
+                return window.dash_clientside.no_update;
+            }
+            
+            // Also skip if zoom_to_selection flag is set (indicating zoom cycle in progress)
+            if (mapState.zoom_to_selection) {
+                console.log("Client (Cb7): Skipping moveend update (zoom_to_selection flag set).");
+                return window.dash_clientside.no_update;
+            }
+            
+            // Skip update if a programmatic zoom just completed (debounce mechanism)
+            const now = Date.now();
+            if (window.lastZoomEndTime_MapEvents && (now - window.lastZoomEndTime_MapEvents < 1000)) {
+                console.log("Client (Cb7): Skipping moveend update (recent programmatic zoom completion).");
+                return window.dash_clientside.no_update;
+            }
 
             const bounds = map.getBounds();
             const unitTypes = mapState.unit_types || ['MOD_REG'];
@@ -508,7 +527,7 @@ def register_clientside_callbacks(app: Dash):
             window.programmaticZoomInProgress = true; // Set progress flag
             console.log("Client (Cb8 - Fetch/Zoom): Global programmaticZoomInProgress SET to true.");
 
-            polygonManagement.fetchPolygonsByIds(map, mapState, unitType, idsToFetch, yearRange)
+            polygonManagement.fetchPolygonsByIds(map, mapState, unitType, idsToFetch, yearRange, mapState.selected_polygons)
                 .then(fetchedGeoJson => {
                     console.log("Client (Cb8 - Fetch/Zoom): Fetch by ID completed.");
                     const geojsonLayer = polygonManagement.findGeoJSONLayer(map);
@@ -573,9 +592,29 @@ def register_clientside_callbacks(app: Dash):
 
             // --- Condition: Act ONLY if zoom flags are NOT set AND zoom animation is NOT in progress ---
             // Cb10 now handles clearing the flags, so Cb9 runs after that state update.
-            if (mapState.zoom_to_selection || window.programmaticZoomAnimating || window.programmaticZoomInProgress) {
-                 console.log("Client (Cb9 - Refresh): Skipping update (zoom flags/animation/progress still active).");
+            if (mapState.zoom_to_selection) {
+                 console.log("Client (Cb9 - Refresh): Skipping update (zoom_to_selection flag still set).");
                  return window.dash_clientside.no_update;
+            }
+            
+            if (window.programmaticZoomAnimating || window.programmaticZoomInProgress) {
+                 console.log(`Client (Cb9 - Refresh): Skipping update (JS zoom flags still active - animating: ${window.programmaticZoomAnimating}, inProgress: ${window.programmaticZoomInProgress}).`);
+                 // Add a fallback: if flags have been stuck for too long, reset them
+                 const now = Date.now();
+                 if (!window.lastZoomFlagCheck) window.lastZoomFlagCheck = now;
+                 if (now - window.lastZoomFlagCheck > 3000) { // 3 second timeout
+                     console.warn("Client (Cb9 - Refresh): Zoom flags stuck for >3s, force clearing them.");
+                     window.programmaticZoomAnimating = false;
+                     window.programmaticZoomInProgress = false;
+                     window.lastZoomFlagCheck = now;
+                     // Don't return no_update, let it continue to refresh
+                 } else {
+                     window.lastZoomFlagCheck = now;
+                     return window.dash_clientside.no_update;
+                 }
+            } else {
+                // Reset timeout tracker when flags are clear
+                window.lastZoomFlagCheck = null;
             }
 
             // --- Prerequisites --- (No change)

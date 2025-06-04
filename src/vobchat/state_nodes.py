@@ -38,25 +38,57 @@ def _maybe_route_to_cubes(state: lg_State):
 
 
 def _initial_state() -> Dict:
-    """Return a fresh lg_State dict with only the keys we mutate here."""
+    """Return a fresh lg_State dict that clears ALL state fields."""
     return {
+        # conversation
         "messages": [],
+        "intent_queue": [],
+        
+        # user-choice plumbing
         "selection_idx": None,
+        
+        # place + unit selections
+        "places": [],
         "selected_place_g_places": [],
         "selected_place_g_units": [],
         "selected_place_g_unit_types": [],
+        
+        # theme selection
         "selected_place_themes": None,
         "selected_theme": None,
+        
+        # cube selection
+        "cubes": [],
+        "selected_cubes": [],
+        
+        # extraction results
         "extracted_place_names": [],
         "extracted_counties": [],
-        "multi_place_search_df": None,
-        "current_place_index": 0,
+        "extracted_unit_types": [],
+        "extracted_polygon_ids": [],
+        "extracted_theme": None,
         "is_postcode": False,
         "extracted_postcode": None,
-        "selected_polygons": [],
-        "selected_polygons_unit_types": [],
+        
+        # multi-place machinery
+        "multi_place_search_df": None,
+        "current_place_index": 0,
+        
+        # year filters
         "min_year": None,
         "max_year": None,
+        
+        # map interaction
+        "selected_polygons": [],
+        "selected_polygons_unit_types": [],
+        
+        # misc / meta
+        "current_node": None,
+        "last_intent_payload": {},
+        "options": [],
+        "message": None,
+        "_theme_hint_done": False,
+        "_prompted_for_place": False,
     }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -137,7 +169,11 @@ def ListAllThemes_node(state: lg_State):
 
 def Reset_node(state: lg_State):
     _append_ai(state, "Starting over - previous selections cleared.")
-    return Command(goto="START", update=_initial_state())
+    # Ensure selection_idx is explicitly cleared in the reset state
+    reset_state = _initial_state()
+    reset_state["selection_idx"] = None
+    logger.info("Reset_node: Cleared all state including selection_idx")
+    return Command(goto="START", update=reset_state)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 5. AddPlace
@@ -150,6 +186,7 @@ def AddPlace_node(state: lg_State):
     names_to_add: List[str] = []
     counties_to_add: List[str] = []
     unit_types_to_add: List[str] = []
+    polygon_ids_to_add: List[Optional[int]] = []
     if "places" in args and isinstance(args["places"], list):
         names_to_add = [p.strip() for p in args["places"] if p.strip()]
     elif "place" in args:
@@ -160,6 +197,9 @@ def AddPlace_node(state: lg_State):
         counties_to_add = [args["county"].strip()]
     if "unit_type" in args:
         unit_types_to_add = [args["unit_type"].strip()]
+    # Extract polygon_id if provided (from map clicks)
+    if "polygon_id" in args:
+        polygon_ids_to_add = [args["polygon_id"]]
         
 
     if not names_to_add:
@@ -170,8 +210,15 @@ def AddPlace_node(state: lg_State):
     names    = state.get("extracted_place_names", [])
     counties = state.get("extracted_counties", [])
     unit_types = state.get("extracted_unit_types", [])
-    for p in names_to_add:
+    polygon_ids = state.get("extracted_polygon_ids", [])
+    
+    for idx, p in enumerate(names_to_add):
         names.append(p)
+        # Add corresponding polygon_id if available, otherwise None
+        if idx < len(polygon_ids_to_add):
+            polygon_ids.append(polygon_ids_to_add[idx])
+        else:
+            polygon_ids.append(None)
     for c in counties_to_add:
         counties.append(c)
     for u in unit_types_to_add:
@@ -188,6 +235,7 @@ def AddPlace_node(state: lg_State):
         "extracted_place_names": names,
         "extracted_counties": counties,
         "extracted_unit_types": unit_types,
+        "extracted_polygon_ids": polygon_ids,
         "multi_place_search_df": None,
         "current_place_index": new_idx,
         "last_intent_payload": {},
@@ -199,8 +247,51 @@ def AddPlace_node(state: lg_State):
 # 6. AddTheme
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _clean_duplicate_intents_from_queue(state: lg_State):
+    """Remove duplicate intents from the intent queue to prevent infinite loops."""
+    intent_queue = state.get("intent_queue", [])
+    if not intent_queue:
+        return
+    
+    # Group intents by (intent, arguments) and keep only one of each
+    seen_intents = set()
+    cleaned_queue = []
+    
+    for intent in intent_queue:
+        # Create a hashable representation of the intent
+        intent_key = (
+            intent.get("intent"),
+            str(sorted(intent.get("arguments", {}).items()))
+        )
+        
+        if intent_key not in seen_intents:
+            seen_intents.add(intent_key)
+            cleaned_queue.append(intent)
+    
+    original_length = len(intent_queue)
+    if len(cleaned_queue) < original_length:
+        logger.info(f"_clean_duplicate_intents_from_queue: Removed {original_length - len(cleaned_queue)} duplicate intents from queue")
+        state["intent_queue"] = cleaned_queue
+
+
 def AddTheme_node(state: lg_State):
     logger.info("AddTheme_node: adding a theme to the selection")
+    
+    # CRITICAL: Clear ALL AddTheme intents from queue immediately to prevent infinite loops
+    intent_queue = state.get("intent_queue", [])
+    original_queue_size = len(intent_queue)
+    
+    # Remove ALL AddTheme intents from the queue aggressively
+    cleaned_queue = [intent for intent in intent_queue if intent.get("intent") != "AddTheme"]
+    state["intent_queue"] = cleaned_queue
+    
+    removed_count = original_queue_size - len(cleaned_queue)
+    if removed_count > 0:
+        logger.info(f"AddTheme_node: AGGRESSIVELY removed {removed_count} AddTheme intents from queue (was {original_queue_size}, now {len(cleaned_queue)})")
+    
+    # Also clean other duplicate intents while we're at it
+    _clean_duplicate_intents_from_queue(state)
+    
     payload = state.get("last_intent_payload", {})
     args = payload.get("arguments", {}) if payload else {}
 
@@ -217,12 +308,52 @@ def AddTheme_node(state: lg_State):
     # free text query
     elif "theme_query" in args:
         q = args["theme_query"].strip()
+        logger.info(f"AddTheme_node: Processing theme query '{q}'")
+        
+        # Check if we already have this theme selected to avoid unnecessary changes
+        current_theme = state.get("selected_theme")
+        if current_theme:
+            try:
+                import json
+                theme_data = json.loads(current_theme)
+                current_label = theme_data.get("labl", "").lower()
+                query_lower = q.lower().strip()
+                
+                # If the query matches the current theme, don't change anything
+                if query_lower in current_label or current_label in query_lower:
+                    logger.info(f"AddTheme_node: Theme query '{q}' matches current theme '{current_label}', keeping current selection")
+                    
+                    # CRITICAL: Clear ALL AddTheme intents from the queue to prevent infinite processing
+                    intent_queue = state.get("intent_queue", [])
+                    original_queue_length = len(intent_queue)
+                    filtered_queue = [
+                        intent for intent in intent_queue 
+                        if intent.get("intent") != "AddTheme"  # Remove ALL AddTheme intents, not just matching ones
+                    ]
+                    state["intent_queue"] = filtered_queue
+                    removed_count = original_queue_length - len(filtered_queue)
+                    if removed_count > 0:
+                        logger.info(f"AddTheme_node: Removed {removed_count} ALL AddTheme intents from queue")
+                    
+                    # Clear the processed intent payload to prevent reprocessing
+                    state["last_intent_payload"] = {}
+                    return state
+            except (json.JSONDecodeError, KeyError):
+                logger.warning(f"AddTheme_node: Error parsing current theme, proceeding with theme change")
+        
+        logger.info(f"AddTheme_node: Setting extracted_theme to '{q}' and clearing selected_theme for theme resolution")
         state["extracted_theme"] = q
-        state["selected_theme"] = None
+        # Use pop to completely remove selected_theme from state
+        state.pop("selected_theme", None)
+        state["selection_idx"] = None  # Clear any stale button selection
+        logger.info(f"AddTheme_node: State after update - extracted_theme: '{state.get('extracted_theme')}', selected_theme: {state.get('selected_theme')}")
         # _append_ai(state, f"Looking for a theme matching “{q}”…")
 
     else:
         _append_ai(state, "AddTheme: no theme_code or theme_query provided.")
+    
+    # Clear the processed intent payload to prevent reprocessing
+    state["last_intent_payload"] = {}
     return state
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -235,6 +366,9 @@ def RemoveTheme_node(state: lg_State):
         return state
     state["selected_theme"] = None
     state["extracted_theme"] = None
+    # CRITICAL: Clear selection_idx when removing theme to prevent stale values
+    state["selection_idx"] = None
+    logger.info("RemoveTheme_node: Cleared selection_idx to prevent stale values")
     _append_ai(state, "Theme selection cleared.")
     return state
 
@@ -248,28 +382,71 @@ def RemovePlace_node(state: lg_State):
     args = payload.get("arguments", {}) if payload else {}
     place: Optional[str] = args.get("place")
     places = state.get("places")
+    
+    # CRITICAL: Clear selection_idx when removing places to prevent stale values
+    state["selection_idx"] = None
+    logger.info("RemovePlace_node: Cleared selection_idx to prevent stale values")
+    
     if not place:
         _append_ai(state, "Tell me which place to remove, e.g. ‘remove Oxford'.")
         return state
 
     place_names = state.get("extracted_place_names", [])
-    place = place.lower()
-    place_names = [p.lower() for p in place_names]
+    place_lower = place.lower()
+    place_names_lower = [p.lower() for p in place_names]
     county_names = state.get("extracted_counties", [])
     county_names = [c.lower() for c in county_names]
-    for i in places:
-        if i.get('name').lower() == place:
-            g_unit = i.get('g_unit')
-            g_unit_type = i.get('g_unit_type')
-            g_place = i.get('g_place')
-            break
-    if place not in place_names:
+    
+    # Find the place in the places list (which contains the full place data)
+    g_unit = None
+    g_unit_type = None
+    g_place = None
+    
+    if places:
+        for i in places:
+            if i.get('name', '').lower() == place_lower:
+                g_unit = i.get('g_unit')
+                g_unit_type = i.get('g_unit_type')
+                g_place = i.get('g_place')
+                break
+    
+    # Check if the place exists in our selection by name
+    place_index = -1
+    if place_lower in place_names_lower:
+        place_index = place_names_lower.index(place_lower)
+    else:
+        # If not found by name, check if it's a polygon ID (for polygons without place names)
+        selected_units = state.get("selected_place_g_units", [])
+        selected_polygons = state.get("selected_polygons", [])
+        
+        # Try to match by polygon ID (when place name fallback was used)
+        try:
+            place_as_id = int(place)
+            if place_as_id in selected_units:
+                # Find the index in selected_place_g_units
+                place_index = selected_units.index(place_as_id)
+                # Update the place variable to use a more descriptive name
+                place = f"Polygon {place_as_id}"
+            elif place_as_id in selected_polygons:
+                # Also check selected_polygons
+                polygon_index = selected_polygons.index(place_as_id)
+                # Find corresponding unit if available
+                if polygon_index < len(selected_units):
+                    place_index = polygon_index
+                    place = f"Polygon {place_as_id}"
+        except (ValueError, TypeError):
+            # place is not a numeric ID
+            pass
+    
+    if place_index == -1:
         _append_ai(state, f"{place} isn't in your selection.")
         state["last_intent_payload"] = {} 
         return Command(goto=END)
 
-    idx = place_names.index(place)
-    place_names.pop(idx)
+    idx = place_index
+    # Only remove from place_names if it was found there (not for polygon IDs)
+    if idx < len(place_names):
+        place_names.pop(idx)
     if idx < len(county_names):
         county_names.pop(idx)
     for key in ("selected_place_g_places", "selected_place_g_units", "selected_place_g_unit_types", "selected_polygons", "selected_polygons_unit_types"):
@@ -283,6 +460,17 @@ def RemovePlace_node(state: lg_State):
         if idx < len(lst) and idx != -1:
             lst.pop(idx)
         state[key] = lst
+
+    # CRITICAL: Also remove the place from the places array to clear resolved state
+    if places:
+        updated_places = []
+        for place_entry in places:
+            # Keep places that don't match the one being removed
+            if (place_entry.get('name', '').lower() != place_lower and 
+                place_entry.get('g_unit') != g_unit):
+                updated_places.append(place_entry)
+        state["places"] = updated_places
+        logger.info(f"RemovePlace_node: Removed place '{place}' from places array. {len(places)} -> {len(updated_places)} places")
 
     remaining_units = state.get("selected_place_g_units", [])
     cubes_filtered = pd.DataFrame(columns=["g_unit"]) 
@@ -316,6 +504,8 @@ def RemovePlace_node(state: lg_State):
     "selected_polygons": state.get("selected_polygons", []),
     "selected_polygons_unit_types": state.get("selected_polygons_unit_types", []),
     "current_node": "select_unit_on_map",
+    # CRITICAL: Clear selection_idx in interrupt to ensure it's cleared
+    "selection_idx": None,
     })
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -440,6 +630,8 @@ def ask_followup_node(state: lg_State):
         interrupt(value={
             "options": state["options"],          # keep the same buttons alive
             "current_node": "ask_followup_node",
+            # CRITICAL: Clear selection_idx through interrupt to prevent stale values
+            "selection_idx": None,
         })
         return state  
 
@@ -512,6 +704,8 @@ def ask_followup_node(state: lg_State):
             "message": "I'm not entirely sure what you need. Choose one of the quick actions below or rephrase your request:",
             "options": quick_buttons,
             "current_node": "ask_followup_node",
+            # CRITICAL: Clear selection_idx through interrupt to prevent stale values
+            "selection_idx": None,
         }
     )
 

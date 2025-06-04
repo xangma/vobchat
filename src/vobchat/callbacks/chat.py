@@ -23,8 +23,8 @@
 #    3.  Calls `compiled_workflow.astream(...)`, forwarding streamed
 #        AIMessageChunks back to the UI with progressive updates.
 #    4.  Detects **interrupts** emitted by the workflow and materialises them into Dash widgets:
-#          - multiple-choice buttons  
-#          - map selection requests  
+#          - multiple-choice buttons
+#          - map selection requests
 #          - cube visualisation signals
 #    5.  Persists / hydrates state on every turn so the graph can be
 #        *paused* by the front-end and later *resumed* (e.g. after a map click).
@@ -183,7 +183,7 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
         button_clicks, # List of click counts for dynamic buttons
         retrigger_chat,# Data from the retrigger signal input
         reset__n_clicks, # Number of clicks for the reset button
-        map_add_payload, 
+        map_add_payload,
         map_remove_payload,
         thread_id,     # Current conversation thread ID
         app_state,     # Current app state data
@@ -223,11 +223,11 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
             # we need to synchronize the relevant Dash state back into the persistent LangGraph state
             # stored by the checkpointer (e.g., Redis) before resuming the workflow.
             latest_state = await compiled_workflow.aget_state(current_config)
-            if is_retrigger and initial_map_state.get('selected_polygons'):
-                logger.info("Retrigger detected: Syncing map_state to LangGraph state before resuming.")
+            if is_retrigger and initial_map_state.get('selected_polygons') and not latest_state.next:
+                logger.info("Retrigger detected: Syncing map_state to LangGraph state (workflow not interrupted).")
                 try:
                     # Retrieve the latest state snapshot from the LangGraph checkpointer
-                    
+
                     if latest_state:
                         # Copy the state values to modify
                         current_workflow_state_values = latest_state.values.copy()
@@ -238,15 +238,20 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
 
                     # Update the retrieved workflow state values with the latest data from the Dash map_state
                     # This assumes the workflow state has keys 'selected_polygons' and 'selected_polygons_unit_types'
+                    existing_units = current_workflow_state_values.get("selected_place_g_units", [])
+                    map_polygons = initial_map_state["selected_polygons"]
+                    logger.info(f"State sync: existing_units={existing_units}, map_polygons={map_polygons}")
+                    
                     current_workflow_state_values["selected_place_g_units"] = list(
                         set(current_workflow_state_values.get("selected_place_g_units", [])) |
                         {int(p) for p in initial_map_state["selected_polygons"] if str(p).isdigit()}
                     )
+                    logger.info(f"State sync: updated_units={current_workflow_state_values['selected_place_g_units']}")
                     # Ensure the interrupt flag in the workflow state is cleared, as we are now resuming
                     # *after* handling the interrupt condition that led to the retrigger (e.g., map selection).
 
                     # Persist the updated state back to the checkpointer
-                    await compiled_workflow.aupdate_state(config=current_config, values=current_workflow_state_values)
+                    await compiled_workflow.aupdate_state(config=current_config, values=current_workflow_state_values, as_node="agent_node")
                     logger.info("Successfully updated workflow state with map selection data.")
 
 
@@ -255,6 +260,8 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                     # Add an error message to the chat history
                     history.insert(0, html.Div(f"Error syncing map state: {str(sync_exc)}", style={"color": "orange"}))
                     # Decide whether to stop or continue; currently continues.
+            elif is_retrigger and initial_map_state.get('selected_polygons') and latest_state.next:
+                logger.info(f"Retrigger detected: Workflow is interrupted with next nodes: {latest_state.next}. Not syncing state to preserve interrupt.")
 
 
             # --- Prepare inputs for the LangGraph workflow based on how this function was triggered ---
@@ -268,7 +275,68 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
 
             # Case 2: Dynamic button clicked (e.g., place/unit/theme choice)
             if current_selection_idx is not None and triggered_by_button:
-                await compiled_workflow.aupdate_state(config=current_config, values={"selection_idx": current_selection_idx}) # Clear the selection index in the workflow state
+                # Check workflow state to ensure it's interrupted and waiting
+                button_state = await compiled_workflow.aget_state(current_config)
+                logger.info(f"Button click: Current workflow state - next={button_state.next if button_state else None}")
+                logger.info(f"Button click: Current workflow tasks={len(button_state.tasks) if button_state and button_state.tasks else 0}")
+                
+                if button_state and button_state.next:
+                    logger.info(f"Button click: Workflow interrupted, updating state and resuming from {button_state.next}")
+                    
+                    # CRITICAL: Determine the correct node based on the workflow context
+                    # Check what node was interrupted to route button clicks correctly
+                    current_node = button_state.values.get("current_node") if button_state.values else None
+                    target_node = None
+                    
+                    if current_node == "resolve_theme":
+                        target_node = "resolve_theme"
+                        logger.info(f"Button click: Theme selection button, routing to resolve_theme")
+                    elif current_node == "resolve_place_and_unit":
+                        target_node = "resolve_place_and_unit"
+                        logger.info(f"Button click: Place/unit selection button, routing to resolve_place_and_unit")
+                    elif current_node == "ask_followup_node":
+                        target_node = "ask_followup_node"
+                        logger.info(f"Button click: Followup selection button, routing to ask_followup_node")
+                    else:
+                        # Fallback: use the workflow's natural routing instead of forcing a specific node
+                        target_node = None
+                        logger.info(f"Button click: Unknown context '{current_node}', letting workflow handle routing naturally")
+                    
+                    if target_node:
+                        # Update state and resume from interrupt with the correct target node
+                        await compiled_workflow.aupdate_state(config=current_config, values={"selection_idx": current_selection_idx}, as_node=target_node)
+                    else:
+                        # Let the workflow route naturally without forcing a specific node
+                        await compiled_workflow.aupdate_state(config=current_config, values={"selection_idx": current_selection_idx})
+                    
+                    # Resume with None input to continue from interrupt
+                    workflow_input = None
+                else:
+                    logger.warning(f"Button click: Workflow not interrupted, setting selection_idx={current_selection_idx}")
+                    workflow_input = {"selection_idx": current_selection_idx}
+
+            # Case 3: Retrigger after map selection - resume the workflow  
+            if is_retrigger and initial_map_state.get('selected_polygons'):
+                # Use the state we already retrieved
+                current_state = latest_state
+                current_units = current_state.values.get("selected_place_g_units", []) if current_state else []
+                logger.info(f"Retrigger continuation: current units in state = {current_units}")
+                
+                # Check if workflow is in interrupted state
+                if current_state and current_state.next:
+                    logger.info(f"Workflow has next nodes to execute: {current_state.next}")
+                    # Resume the workflow with None input to continue from interrupt
+                    workflow_input = None
+                elif current_state and hasattr(current_state, 'tasks') and current_state.tasks:
+                    logger.info(f"Workflow has pending tasks: {[task.name for task in current_state.tasks]}")
+                    # Resume the workflow with None input to continue from interrupt
+                    workflow_input = None
+                else:
+                    logger.info("Workflow not in interrupted state, using empty workflow input to trigger routing")
+                    # Use None input to trigger the routing logic without new messages
+                    workflow_input = None
+                
+                logger.info("Retrigger with map selection detected: resuming workflow")
 
             # --- Execute the LangGraph workflow using asynchronous streaming ---
             full_ai_response = "" # Accumulator for the complete AI response message
@@ -308,7 +376,7 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                     # other types of events here containing state updates. This example primarily
                     # focuses on streaming AIMessageChunks for progressive text display.
                     set_props("chat-display", {"children": history})
-                
+
             except Exception as stream_exc:
                 logger.error(f"Error during workflow stream: {stream_exc}", exc_info=True)
                 # Add an error message to the chat history
@@ -337,11 +405,12 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                     app_state_async["render_cursor"] = len(all_msgs)
                     # ensure at least one final flush (pairs with throttling from task 1)
                     set_props("chat-display", {"children": history})
-                
+
                 # history = final_chat_history_components
                 app_state_async["messages"] = history
-                # Reset button rendering list for this turn
-                buttons_to_render_async = []
+                # Reset button rendering list for this turn, but preserve existing buttons during retriggers
+                buttons_to_render_async = buttons[:] if is_retrigger else []
+                logger.info(f"Buttons initialization - is_retrigger: {is_retrigger}, existing buttons: {len(buttons) if buttons else 0}, new buttons: {len(buttons_to_render_async)}")
 
                 interrupt_updates = {}
                 interrupt_message = None
@@ -358,7 +427,7 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                         logger.info(f"CALLBACK: Processing interrupt updates: {interrupt_updates}")
                         if interrupt_updates: # Ensure we have interrupt data
                             logger.debug({"event": "processing_interrupt", "interrupt_updates": interrupt_updates})
-                            
+
                             # --- Handle different types of interrupts based on the interrupt_updates content ---
 
                             # 1. Multiple Choice Options Interrupt: Render buttons for user selection
@@ -389,15 +458,18 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                                     )
                                     for opt in options
                                 ]
-                                
+
                                 # Get the prompt message to display above the buttons
                                 prompt_text = interrupt_updates.get("message", "Please choose:")
                                 interrupt_message = html.Div(f"{prompt_text}", className="speech-bubble ai-bubble")
 
                                 # Update the Dash app_state to potentially store button info (if needed elsewhere)
+                                logger.info(f"Before theme interrupt update - retrigger_chat: {app_state_async.get('retrigger_chat')}")
                                 app_state_async.update({
                                     "button_options": options,
+                                    "retrigger_chat": False,  # Ensure retrigger is not set for theme selection
                                 })
+                                logger.info(f"After theme interrupt update - retrigger_chat: {app_state_async.get('retrigger_chat')}")
 
                             # 2. Map Selection Interrupt: Update map state to show/select units
                             elif interrupt_updates.get("current_node") == "select_unit_on_map":
@@ -405,7 +477,7 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                                 # Extract necessary data from the interrupt payload
                                 selected_place_g_units = interrupt_updates.get("selected_place_g_units", [])
                                 selected_place_g_unit_types = interrupt_updates.get("selected_place_g_unit_types", [])
-                                
+
                                 # Update the Dash map_state_async to trigger map changes
                                 # Add the unit IDs and types to the map state's selected polygons list
                                 # This logic assumes map_state['selected_polygons'] triggers map updates
@@ -434,9 +506,28 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                                 })
                                 # Clear any buttons as this interrupt is handled by map interaction + retriggering
                                 buttons_to_render_async = []
-                                
+
                                 prompt_text = interrupt_updates.get("message", "")
                                 interrupt_message = html.Div(f"{prompt_text}", className="speech-bubble ai-bubble")
+
+                            # 3. Cube Data Interrupt: Update place state to display visualizations
+                            elif interrupt_updates.get("cubes"):
+                                logger.info("Processing cube data interrupt")
+                                cubes = interrupt_updates.get("cubes", [])
+                                logger.info(f"Cube data received: {type(cubes)} - length: {len(cubes) if isinstance(cubes, (list, str)) else 'N/A'}")
+                                
+                                # Update the Dash place_state_async with the retrieved cube data
+                                place_state_async.update({"cubes": cubes})
+                                place_state_async.update({"cube_data": cubes})
+                                # Persist the selected cubes back into the workflow state if needed later
+                                interrupt_updates.update({"selected_cubes": cubes})
+
+                                # Display the message associated with the cube data
+                                prompt_text = interrupt_updates.get("message", "Data retrieved.")
+                                interrupt_message = html.Div(f"{prompt_text}", className="speech-bubble ai-bubble")
+                                # Update app_state to signal UI to show visualization components
+                                app_state_async.update({"show_visualization": True})
+                                logger.info("Set show_visualization to True in app_state")
 
                             # 5. Text Input Interrupt: Prompt the user for text input (handled by next user message)
                             else:
@@ -446,26 +537,11 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                                 prompt_text = interrupt_updates.get("message", "Please provide input:")
                                 interrupt_message = html.Div(f"{prompt_text}", className="speech-bubble ai-bubble")
 
-                            # 3. Cube Data Interrupt: Update place state to display visualizations
-                            if interrupt_updates.get("cubes"):
-                                logger.debug("Cube data interrupt")
-                                cubes = interrupt_updates.get("cubes", [])
-                                # Update the Dash place_state_async with the retrieved cube data
-                                place_state_async.update({"cubes": cubes})
-                                place_state_async.update({"cube_data": cubes}) # Flag to show visualization
-                                # Persist the selected cubes back into the workflow state if needed later
-                                interrupt_updates.update({"selected_cubes": cubes})
 
-                                # Display the message associated with the cube data
-                                prompt_text = interrupt_updates.get("message", "Data retrieved.")
-                                interrupt_message = html.Div(f"{prompt_text}", className="speech-bubble ai-bubble")
-                                # Update app_state to signal UI to show visualization components
-                                app_state_async.update({"show_visualization": True})
-                                
-                                
 
-                            if interrupt_updates.get("message"):
-                                # treat as ordinary assistant text
+                            # Add interrupt message to chat history (but don't duplicate cube messages)
+                            if interrupt_updates.get("message") and not interrupt_updates.get("cubes"):
+                                # treat as ordinary assistant text (for non-cube interrupts)
                                 txt = interrupt_updates["message"]
                                 interrupt_message = html.Div(txt, className="speech-bubble ai-bubble")
 
@@ -476,7 +552,7 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                                     last_message_text = last_message.children
                                     if interrupt_message.children != last_message_text:
                                         history.insert(0, interrupt_message)
-                                        
+
                                         msgs.append(AIMessage(content=txt))
                                 elif last_message and last_message.get("props"):
                                     last_message_text = last_message.get("props").get("children")
@@ -487,7 +563,16 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                                 interrupt_updates["messages"] = msgs          # <- extra field to persist
 
                                 app_state_async["messages"] = history
-                
+                            
+                            # For cube interrupts, the message was already handled above
+                            elif interrupt_updates.get("cubes") and interrupt_message:
+                                # Add the cube interrupt message to history
+                                history.insert(0, interrupt_message)
+                                msgs = final_state_values.get("messages", [])
+                                msgs.append(AIMessage(content=str(interrupt_message.children or "")))
+                                interrupt_updates["messages"] = msgs
+                                app_state_async["messages"] = history
+
                 # Persist relevant context from the interrupt (like current place index)
                 # back into the workflow state. This is important if the interrupt occurred
                 # mid-way through processing multiple items (like places).
@@ -503,18 +588,20 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
 
                 # Persist the interrupt data back into the workflow state.
                 logger.info(f"CALLBACK: Updating interrupt updates: {interrupt_updates}")
-                await compiled_workflow.aupdate_state(
-                    config=current_config, # Pass the thread configuration
-                    values=interrupt_updates, # Update the workflow state with the interrupt data
-                    # as_node=interrupt_updates.get("current_node", None), # Optional: specify the node that triggered the interrupt
-                )
+                # Only update state if there are actual interrupt updates
+                if interrupt_updates:
+                    await compiled_workflow.aupdate_state(
+                        config=current_config, # Pass the thread configuration
+                        values=interrupt_updates, # Update the workflow state with the interrupt data
+                        as_node=interrupt_updates.get("current_node", None), # Optional: specify the node that triggered the interrupt
+                    )
                 if 'selected_polygons' in interrupt_updates:
                     # update map_state with the selected polygons
                     map_state_async['selected_polygons'] = interrupt_updates['selected_polygons']
                     map_state_async['selected_polygons_unit_types'] = interrupt_updates['selected_polygons_unit_types']
                 logger.debug("Workflow state updated with interrupt data.")
 
-                logger.info("Async logic completed successfully, returning results.")
+                logger.info(f"Async logic completed successfully, returning {len(buttons_to_render_async)} buttons.")
                 # logger.info("State after async logic: ", interrupt_updates)
                 # Return the final computed states and buttons from the async function
                 return history, app_state_async, map_state_async, place_state_async, buttons_to_render_async
@@ -556,31 +643,39 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
             except Exception as exc:
                 logger.warning(f"Could not rebuild chat after refresh: {exc}")
                 chat_history = []
-                
+
         if user_input and user_input.strip() and "send-button" in ctx_trigger and not is_retrigger_event:
             user_message_div = html.Div(f"{user_input}", className="speech-bubble user-bubble")
             chat_history.insert(0, user_message_div)
             set_props("chat-display", {"children": chat_history})
             app_state["render_cursor"] = len(chat_history) # Update the render cursor in app_state
-            
+
+
+        # Initialize clear trigger variables
+        clear_add_trigger = dash.no_update
+        clear_remove_trigger = dash.no_update
 
         # Handle Reset Button Click
         if "reset-button" in ctx_trigger:
             logger.info("Reset button clicked. Clearing state.")
-            # Reset all relevant states to their initial values
-            app_state = app_state_data
-            map_state = map_state_data
-            place_state = place_state_data
+            # Reset all relevant states to their initial values (deep copy to avoid mutation)
+            app_state = app_state_data.copy()
+            map_state = map_state_data.copy() 
+            place_state = place_state_data.copy()
             chat_history = []
             buttons = []
             thread_id = None # Clear thread ID to start a new conversation
             counts_store = {}
-            # clear the state
-            state = {k: None for k in lg_State.__annotations__}
+            # clear the state using the same comprehensive reset as Reset_node
+            from vobchat.state_nodes import _initial_state
+            state = _initial_state()
+            # Generate a new thread ID for a completely fresh conversation
+            thread_id = str(uuid4())
             state_snapshot = asyncio.run(
                 compiled_workflow.aupdate_state(
                     config={"configurable": {"thread_id": thread_id}},
-                    values=state
+                    values=state,
+                    as_node="agent_node"
                 )
             )
             # Return the reset states
@@ -609,19 +704,36 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
         map_intent_payload = None
         triggered_by_map_click = False
         state_updates_for_map_click = {} # Initialize here
-        clear_add_trigger = dash.no_update # Default to no update
-        clear_remove_trigger = dash.no_update # Default to no update
 
 
         if ctx_trigger == 'map-click-add-trigger.data' and map_add_payload is not None:
             logger.info(f"Map click (Add) detected. Payload: {map_add_payload}")
             place_name = map_add_payload.get("name", map_add_payload.get("id", "Unknown Place"))
             unit_type = map_add_payload.get("type")
-            # Construct payload for AddPlace intent node
-            map_intent_payload = {"intent": AssistantIntent.ADD_PLACE.value, "arguments": {"place": place_name, "unit_type": unit_type}}
+
+            # Check if this is a direct polygon ID selection (no actual place name)
+            is_polygon_id = place_name and place_name.isdigit()
+            if is_polygon_id:
+                # For polygon IDs, directly update the state without going through place lookup
+                polygon_id = int(place_name)
+                place_display_name = f"Polygon {place_name}"
+                logger.info(f"Direct polygon selection: {place_display_name}")
+
+                # Directly add to selection state
+                map_intent_payload = None  # Skip intent processing
+                # We'll handle this case separately below
+            else:
+                # Normal place name - use existing workflow
+                # But also preserve polygon ID if available
+                place_args = {"place": place_name, "unit_type": unit_type}
+                if "id" in map_add_payload and map_add_payload["id"].isdigit():
+                    place_args["polygon_id"] = int(map_add_payload["id"])
+                map_intent_payload = {"intent": AssistantIntent.ADD_PLACE.value, "arguments": place_args}
             state_updates_for_map_click = {
                 "last_intent_payload": map_intent_payload,
                 "retrigger_chat": True, # Set the retrigger flag to true
+                # CRITICAL: Clear selection_idx when processing map clicks to prevent stale values
+                "selection_idx": None,
             }
             triggered_by_map_click = True
             # Clear the trigger by returning None for its output later
@@ -633,11 +745,25 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
             place_name = map_remove_payload.get("name", map_remove_payload.get("id", "Unknown Place"))
             unit_type = map_remove_payload.get("unit_type")
 
-            # Construct payload for RemovePlace intent node
-            map_intent_payload = {"intent": AssistantIntent.REMOVE_PLACE.value, "arguments": {"place": place_name, "unit_type": unit_type}}
+            # Check if this is a direct polygon ID selection (no actual place name)
+            is_polygon_id = place_name and place_name.isdigit()
+            if is_polygon_id:
+                # For polygon IDs, handle removal directly
+                polygon_id = int(place_name)
+                place_display_name = f"Polygon {place_name}"
+                logger.info(f"Direct polygon removal: {place_display_name}")
+
+                # Directly remove from selection state
+                map_intent_payload = None  # Skip intent processing
+                # We'll handle this case separately below
+            else:
+                # Normal place name - use existing workflow
+                map_intent_payload = {"intent": AssistantIntent.REMOVE_PLACE.value, "arguments": {"place": place_name, "unit_type": unit_type}}
             state_updates_for_map_click = {
                 "last_intent_payload": map_intent_payload,
                 "retrigger_chat": True, # Set the retrigger flag to true
+                # CRITICAL: Clear selection_idx when processing map clicks to prevent stale values
+                "selection_idx": None,
             }
             triggered_by_map_click = True
             # Clear the trigger by returning None for its output later
@@ -650,14 +776,152 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
             clear_remove_trigger = dash.no_update
 
 
-        # Use asyncio.run to call the async state update *before* calling _run_async_logic
-        if triggered_by_map_click:
+        # Handle direct polygon operations (bypass the normal workflow)
+        if triggered_by_map_click and (
+            (ctx_trigger == 'map-click-add-trigger.data' and map_add_payload and map_add_payload.get("name", "").isdigit()) or
+            (ctx_trigger == 'map-click-remove-trigger.data' and map_remove_payload and map_remove_payload.get("name", "").isdigit())
+        ):
+            try:
+                # Get current state
+                latest_state = asyncio.run(compiled_workflow.aget_state(config))
+                current_state_values = latest_state.values if latest_state else {}
+
+                if ctx_trigger == 'map-click-add-trigger.data':
+                    polygon_id = int(map_add_payload.get("name"))
+                    unit_type = map_add_payload.get("type")
+                    place_display_name = f"Polygon {polygon_id}"
+
+                    # Directly add to the relevant state lists
+                    selected_units = list(current_state_values.get("selected_place_g_units", []))
+                    selected_names = list(current_state_values.get("extracted_place_names", []))
+                    selected_unit_types = list(current_state_values.get("selected_place_g_unit_types", []))
+                    selected_polygons = list(current_state_values.get("selected_polygons", []))
+                    selected_polygon_types = list(current_state_values.get("selected_polygons_unit_types", []))
+
+                    if polygon_id not in selected_units:
+                        selected_units.append(polygon_id)
+                        selected_names.append(place_display_name)
+                        if unit_type:
+                            selected_unit_types.append(unit_type)
+                            selected_polygon_types.append(unit_type)
+                        if polygon_id not in selected_polygons:
+                            selected_polygons.append(polygon_id)
+
+                        # Create a fake place entry to avoid workflow resolution issues
+                        places = list(current_state_values.get("places", []))
+                        fake_place = {
+                            "name": place_display_name,
+                            "candidate_rows": [],
+                            "g_place": polygon_id,  # Use polygon_id as place ID
+                            "unit_rows": [{"g_unit": polygon_id, "g_unit_type": unit_type}],
+                            "g_unit": polygon_id,
+                            "g_unit_type": unit_type,
+                        }
+                        places.append(fake_place)
+                        
+                        # Update state directly
+                        direct_state_update = {
+                            "selected_place_g_units": selected_units,
+                            "extracted_place_names": selected_names,
+                            "selected_place_g_unit_types": selected_unit_types,
+                            "selected_polygons": selected_polygons,
+                            "selected_polygons_unit_types": selected_polygon_types,
+                            "places": places,
+                            "current_place_index": len(places),  # Mark as processed
+                            # CRITICAL: Clear selection_idx for direct polygon operations
+                            "selection_idx": None,
+                        }
+
+                        asyncio.run(compiled_workflow.aupdate_state(config=config, values=direct_state_update, as_node="agent_node"))
+
+                        # Add confirmation message
+                        chat_history.insert(0, html.Div(f"Added {place_display_name} to selection", className="speech-bubble ai-bubble"))
+                        logger.info(f"Direct polygon add successful: {place_display_name}")
+
+                elif ctx_trigger == 'map-click-remove-trigger.data':
+                    polygon_id = int(map_remove_payload.get("name"))
+                    place_display_name = f"Polygon {polygon_id}"
+
+                    # Directly remove from the relevant state lists
+                    selected_units = list(current_state_values.get("selected_place_g_units", []))
+                    selected_names = list(current_state_values.get("extracted_place_names", []))
+                    selected_unit_types = list(current_state_values.get("selected_place_g_unit_types", []))
+                    selected_polygons = list(current_state_values.get("selected_polygons", []))
+                    selected_polygon_types = list(current_state_values.get("selected_polygons_unit_types", []))
+
+                    # Remove by polygon ID
+                    indices_to_remove = []
+                    for i, unit_id in enumerate(selected_units):
+                        if unit_id == polygon_id:
+                            indices_to_remove.append(i)
+
+                    # Remove from all lists (in reverse order to maintain indices)
+                    for i in reversed(indices_to_remove):
+                        if i < len(selected_units):
+                            selected_units.pop(i)
+                        if i < len(selected_names):
+                            selected_names.pop(i)
+                        if i < len(selected_unit_types):
+                            selected_unit_types.pop(i)
+                        if i < len(selected_polygon_types):
+                            selected_polygon_types.pop(i)
+
+                    # Also remove from selected_polygons
+                    if polygon_id in selected_polygons:
+                        selected_polygons.remove(polygon_id)
+                    
+                    # Also remove from places list
+                    places = list(current_state_values.get("places", []))
+                    places = [p for p in places if p.get("g_unit") != polygon_id]
+
+                    # Update state directly
+                    direct_state_update = {
+                        "selected_place_g_units": selected_units,
+                        "extracted_place_names": selected_names,
+                        "selected_place_g_unit_types": selected_unit_types,
+                        "selected_polygons": selected_polygons,
+                        "selected_polygons_unit_types": selected_polygon_types,
+                        "places": places,
+                        "current_place_index": len(places),  # Update index
+                        # CRITICAL: Clear selection_idx for direct polygon operations
+                        "selection_idx": None,
+                    }
+
+                    asyncio.run(compiled_workflow.aupdate_state(config=config, values=direct_state_update, as_node="agent_node"))
+
+                    # Add confirmation message
+                    chat_history.insert(0, html.Div(f"Removed {place_display_name} from selection", className="speech-bubble ai-bubble"))
+                    logger.info(f"Direct polygon remove successful: {place_display_name}")
+
+            except Exception as direct_polygon_exc:
+                logger.error(f"Error in direct polygon operation: {direct_polygon_exc}", exc_info=True)
+                error_message = html.Div(f"Error processing polygon selection: {str(direct_polygon_exc)}", style={"color": "red"})
+                chat_history.insert(0, error_message)
+
+            # For direct polygon operations, return immediately without running the workflow
+            return (
+                chat_history,           # Updated chat history with confirmation
+                "",                     # Clear user input
+                app_state,              # Keep current app state
+                map_state,              # Keep current map state
+                place_state,            # Keep current place state
+                None,                   # Clear retrigger data
+                buttons or [],          # Keep current buttons
+                counts_store,           # Keep current counts
+                thread_id,              # Keep thread ID
+                clear_add_trigger,      # Clear the add trigger
+                clear_remove_trigger,   # Clear the remove trigger
+            )
+
+        # Use asyncio.run to call the async state update *before* calling _run_async_logic (for normal workflow)
+        elif triggered_by_map_click and state_updates_for_map_click.get("last_intent_payload"):
             try:
                 logger.info(f"Updating persistent state for map click with payload: {state_updates_for_map_click}")
                 # *** Use asyncio.run here for the async state update ***
                 asyncio.run(compiled_workflow.aupdate_state(
                     config=config,
                     values=state_updates_for_map_click,
+                    as_node="agent_node",  # Specify that this update should be attributed to agent_node
                 ))
                 logger.info("Persistent state updated successfully for map click.")
             except Exception as state_update_exc:
@@ -683,9 +947,10 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                  # Handle error - perhaps display a message or prevent update?
                  raise PreventUpdate # Example: stop processing if ID is invalid
         else:
-            buttons = []
-            # Clear the buttons if this was not a button click
-        
+            # Keep existing buttons if this was not a button click
+            # (they will be updated by interrupt handling logic if needed)
+            pass
+
         # --- Execute the Asynchronous Workflow Logic ---
         try:
             # Use asyncio.run() to execute the async function `_run_async_logic` from the synchronous callback context.
@@ -712,7 +977,10 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
             # This prevents immediate re-triggering in a loop.
             if is_retrigger_event and final_app_state:
                 final_app_state['retrigger_chat'] = False
-                logger.debug("Cleared retrigger_chat flag in app_state.")
+                logger.info("Cleared retrigger_chat flag in app_state after retrigger event.")
+            
+            logger.info(f"Returning final_app_state with retrigger_chat: {final_app_state.get('retrigger_chat') if final_app_state else 'None'}")
+            logger.info(f"Returning final_app_state with show_visualization: {final_app_state.get('show_visualization') if final_app_state else 'None'}")
 
             # Return the final results obtained from the async function to update the Dash outputs
             return (
@@ -771,13 +1039,15 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
         This is used to resume the workflow after an external action (like map selection)
         has completed and updated the necessary Dash state.
         """
+        logger.info(f"retrigger_chat_callback called with app_state retrigger_chat: {app_state.get('retrigger_chat') if app_state else 'None'}")
         if app_state and app_state.get("retrigger_chat"):
-            logger.debug("Retriggering chat via retrigger_chat_callback because app_state['retrigger_chat'] is True.")
+            logger.info("TRIGGERING RETRIGGER: app_state['retrigger_chat'] is True.")
             # Outputting any non-None value will trigger the CycleBreakerInput
             # Using a simple boolean or timestamp can be useful.
             return True # Or use something like time.time()
         else:
             # If the flag is not set, prevent the callback from updating its output
+            logger.info("NOT triggering retrigger: flag is False or missing")
             raise PreventUpdate
 
     @app.callback(

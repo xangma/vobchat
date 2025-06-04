@@ -47,10 +47,10 @@ class AssistantIntentPayload(BaseModel):
 # 3.  Prompt + chain to extract the intent
 # -------------------------------------------------------------------------------------
 
-_MODEL_NAME = "llama3.3:latest"  # keep in sync with workflow.py
-_BASE_URL = "https://148.197.150.162/ollama_api/"
+_MODEL_NAME = "deepseek-r1-wt:latest"  # keep in sync with workflow.py
+_BASE_URL = "http://localhost:11434/"
 
-_llm = ChatOllama(model=_MODEL_NAME, base_url=_BASE_URL, format="json", client_kwargs={"verify": False})
+_llm = ChatOllama(model=_MODEL_NAME, base_url=_BASE_URL, format="json", temperature=0.0, max_tokens=512)
 
 intent_list = ", \n".join([f"{intent.value}" for intent in AssistantIntent])
 
@@ -58,35 +58,59 @@ _INTENT_EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
     (
         "system",
         """
-        You are the routing brain of the DDME assistant.  
-        
-        Map the user's message to the following intents and extract any arguments:  
+        You are the routing brain of the DDME assistant.
+
+        Map the user's message to the following intents and extract any arguments:
         {intent_list}
-        
+
         There can be multiple intents in the same message.
-        
-        • If the user explicitly asks to add / include a place/s, use AddPlace and return {{"place": "<name>"}}.  
-        • If they ask to remove a place/s, RemovePlace with {{"place": "<name>"}}.   
-        • If they mention a postcode, treat it as AddPlace with {{"postcode": "<code>"}}.  
+
+        • If the user explicitly asks to add / include a place/s, use AddPlace and return {{"place": "<name>"}}.
+        • If they ask to remove a place/s, RemovePlace with {{"place": "<name>"}}.
+        • If they mention a postcode, treat it as AddPlace with {{"postcode": "<code>"}}.
         • If they request a statistical topic, use AddTheme with {{"theme_query": "<words from user>"}}.
-        • If they ask what a theme is, use DescribeTheme with {{"theme": "<name>"}}. 
-        • If they ask to clear the current theme, use RemoveTheme.  
-        • For state inspection requests ("what have I selected?", "show my current selection") use ShowState.  
-        • Listing intents:  
-            - ListThemesForSelection: list themes *available for the current selection*  
+        • If they ask to change the theme, switch themes, or want different data categories, use AddTheme with {{"theme_query": "<words from user>"}}.
+        • IMPORTANT: "Change theme to X", "switch to X", "use X theme", "back to X", "set theme to X" are ALL AddTheme intents, NOT RemoveTheme.
+        • If they ask for "[theme] stats for [places]" or "show [theme] data for [places]", extract BOTH:
+            - AddPlace for EACH place mentioned separately: {{"place": "<place_name>"}}
+            - AddTheme for the theme: {{"theme_query": "<theme_words>"}}
+        • IMPORTANT: Always look for place names/city names in requests, even if they ask for data or stats "for" those places. Extract each place as a separate AddPlace intent.
+        • If they ask what a theme is, use DescribeTheme with {{"theme": "<name>"}}.
+        • RemoveTheme is ONLY for explicitly clearing/removing themes, like "remove the theme", "clear theme", "no theme". NOT for changing themes.
+        • For state inspection requests ("what have I selected?", "show my current selection") use ShowState.
+        • Listing intents:
+            - ListThemesForSelection: list themes *available for the current selection*
             - ListAllThemes: list all themes in the DB
-        • The phrase "start over" maps to Reset.  
+        • The phrase "start over" maps to Reset.
         • Anything else: Chat.  Set arguments.text to the assistant's normal reply.
 
-        Reply **only** with JSON matching this schema:
-        {{ "intents": [ {{ "intent": <intent string>, "arguments": <object> }} ] }}
-                
+        EXAMPLES:
+        • "Please show Life & Death stats for Southampton and Portsmouth" →
+          AddPlace {{"place": "Southampton"}}, AddPlace {{"place": "Portsmouth"}}, AddTheme {{"theme_query": "Life & Death"}}
+        • "Population data for London" →
+          AddPlace {{"place": "London"}}, AddTheme {{"theme_query": "Population"}}
+        • "Add Manchester and Leeds" →
+          AddPlace {{"place": "Manchester"}}, AddPlace {{"place": "Leeds"}}
+        • "Change the theme to population" →
+          AddTheme {{"theme_query": "population"}}
+        • "Can you switch to life & death theme?" →
+          AddTheme {{"theme_query": "life & death"}}
+        • "Back to population data" →
+          AddTheme {{"theme_query": "population"}}
+        • "Remove the current theme" →
+          RemoveTheme {{}}
+
+        You MUST reply with valid JSON in this exact format:
+        {{ "intents": [ {{ "intent": "<intent_name>", "arguments": {{ }} }} ] }}
+
+        Do NOT include any other text, explanations, or formatting. ONLY return the JSON object.
+
         Previous conversation:
         {history}
-        
+
         """),
     (
-        "user", 
+        "user",
         "{text}"
     ),
 ])
@@ -96,7 +120,7 @@ def extract_intent(user_text: str, messages: list[AnyMessage]) -> AssistantInten
     Call the LLM, read the raw text, then parse / validate it with Pydantic.
     If the model doesn't give valid JSON we fall back to the Chat intent.
     """
-    
+
     # 1. build the prompt (template already has {intent_list} substituted)
 
     history_snippet = "\n".join(m.content for m in messages[:-1])   # tune N
@@ -109,14 +133,36 @@ def extract_intent(user_text: str, messages: list[AnyMessage]) -> AssistantInten
     # 2. get the LLM's reply
     llm_reply: AIMessage = _llm.invoke(messages_llm)     # returns AIMessage
     raw = llm_reply.content.strip()
+    logger.info(f"Raw LLM response: '{raw}'")
 
     # 3. try JSON → pydantic
     try:
+        if not raw:
+            logger.warning("LLM returned empty response")
+            # If empty response, fall back to Chat intent
+            return AssistantIntentPayload(
+                intents=[SingleIntent(intent=AssistantIntent.CHAT, arguments={"text": "I'm having trouble understanding. Could you please rephrase your request?"})],
+            )
+
         data = json.loads(raw)
-        logger.info(f"LLM reply: {data}")
+        logger.info(f"Parsed LLM reply: {data}")
+
+        # Validate that we have intents
+        if not data or "intents" not in data or not data["intents"]:
+            logger.warning("LLM reply missing 'intents' field or empty intents")
+            return AssistantIntentPayload(
+                intents=[SingleIntent(intent=AssistantIntent.CHAT, arguments={"text": "I'm having trouble understanding. Could you please rephrase your request?"})],
+            )
+
         return AssistantIntentPayload.model_validate(data)
-    except Exception:
+    except json.JSONDecodeError as e:
+        logger.warning(f"Failed to parse LLM response as JSON: {e}. Raw response: '{raw}'")
         # fallback: treat entire reply as a free-form assistant answer
         return AssistantIntentPayload(
             intents=[SingleIntent(intent=AssistantIntent.CHAT, arguments={"text": raw})],
+        )
+    except Exception as e:
+        logger.error(f"Error processing LLM response: {e}. Raw response: '{raw}'")
+        return AssistantIntentPayload(
+            intents=[SingleIntent(intent=AssistantIntent.CHAT, arguments={"text": "I'm having trouble understanding. Could you please rephrase your request?"})],
         )

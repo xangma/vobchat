@@ -11,53 +11,90 @@ from langgraph.graph.message import add_messages  # adds message-append semantic
 from langchain_core.messages import AnyMessage
 
 
+
+def merge_lists(existing: Optional[List], new: Optional[List]) -> Optional[List]:
+    """Helper function to merge lists, preferring new value if provided."""
+    if new is not None:
+        return new
+    return existing
+
+
+def merge_places(existing: Optional[List[dict]], new: Optional[List[dict]]) -> Optional[List[dict]]:
+    """Helper function to merge places, preferring new value if provided."""
+    if new is not None:
+        return new
+    return existing
+
+
+def merge_string(existing: Optional[str], new: Optional[str]) -> Optional[str]:
+    """Helper function to merge strings, preferring new value if provided."""
+    if new is not None:
+        return new
+    return existing
+
+
+def merge_int(existing: Optional[int], new: Optional[int]) -> Optional[int]:
+    """Helper function to merge integers, preferring new value if provided."""
+    if new is not None:
+        return new
+    return existing
+
+
+def merge_dict(existing: Optional[dict], new: Optional[dict]) -> Optional[dict]:
+    """Helper function to merge dictionaries, preferring new value if provided."""
+    if new is not None:
+        return new
+    return existing
+
+
 class lg_State(TypedDict):
     # conversation
     messages: Annotated[List[AnyMessage], add_messages]
 
-    intent_queue: Optional[List[dict]]
+    intent_queue: Annotated[Optional[List[dict]], merge_lists]
 
     # user-choice plumbing
-    selection_idx: Optional[int]
+    selection_idx: Annotated[Optional[int], merge_int]
 
     # place + unit selections
-    places: Optional[List[str]]
-    selected_place_g_places: List[Optional[int]]
-    selected_place_g_units: List[Optional[int]]
-    selected_place_g_unit_types: List[Optional[str]]
+    places: Annotated[Optional[List[dict]], merge_places]
+    selected_place_g_places: Annotated[List[Optional[int]], merge_lists]
+    selected_place_g_units: Annotated[List[Optional[int]], merge_lists]
+    selected_place_g_unit_types: Annotated[List[Optional[str]], merge_lists]
 
     # theme selection
     selected_place_themes: Optional[str]
-    selected_theme: Optional[str]
-    
+    selected_theme: Annotated[Optional[str], merge_string]
+
     # cube selection
-    cubes : Optional[List[str]]
-    selected_cubes: Optional[List[str]]
+    cubes : Annotated[Optional[List[str]], merge_lists]
+    selected_cubes: Annotated[Optional[List[str]], merge_lists]
 
     # extraction results
-    extracted_place_names: List[str]
-    extracted_counties: List[str]
-    extracted_unit_types: Optional[List[str]]
-    extracted_theme: Optional[str]
+    extracted_place_names: Annotated[List[str], merge_lists]
+    extracted_counties: Annotated[List[str], merge_lists]
+    extracted_unit_types: Annotated[Optional[List[str]], merge_lists]
+    extracted_polygon_ids: Annotated[Optional[List[Optional[int]]], merge_lists]  # polygon IDs from map clicks
+    extracted_theme: Annotated[Optional[str], merge_string]
     is_postcode: Optional[bool]
     extracted_postcode: Optional[str]
 
     # multi-place machinery
     multi_place_search_df: Optional[str]
-    current_place_index: Optional[int]
+    current_place_index: Annotated[Optional[int], merge_int]
 
     # year filters
     min_year: Optional[int]
     max_year: Optional[int]
 
     # map interaction
-    selected_polygons: Optional[List[str]]
-    selected_polygons_unit_types: Optional[List[str]]
-    
+    selected_polygons: Annotated[Optional[List[str]], merge_lists]
+    selected_polygons_unit_types: Annotated[Optional[List[str]], merge_lists]
+
     # misc / meta
-    current_node: Optional[str]
-    last_intent_payload: Optional[dict]
-    options: Optional[List[dict]]
-    message: Optional[str]
+    current_node: Annotated[Optional[str], merge_string]
+    last_intent_payload: Annotated[Optional[dict], merge_dict]
+    options: Annotated[Optional[List[dict]], merge_lists]
+    message: Annotated[Optional[str], merge_string]
     _theme_hint_done: Optional[bool]
     _prompted_for_place: Optional[bool]

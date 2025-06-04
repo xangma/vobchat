@@ -128,13 +128,38 @@ def find_cubes_for_unit_theme(
     order by ncube.labl;
     """
     logger.debug(f"[find_cubes_for_unit_theme] Running query:\n{query}")
-    dbtool = QuerySQLDataBaseTool(db=db)
-    res = dbtool.db._execute(query)
-    df = pd.DataFrame(res)
-    # Convert column names to match what we expect
-    df.columns = ['Theme_ID','Cube_ID', 'Cube', 'Start', 'End', 'Count']
-    logger.debug(f"[find_cubes_for_unit_theme] Query returned: \n\n{df}")
-    return df.to_json(orient='records')
+    
+    # Retry logic for database connection issues
+    max_retries = 3
+    retry_delay = 0.5
+    
+    for attempt in range(max_retries):
+        try:
+            # Create a fresh database tool for each attempt
+            from vobchat.config import load_config, get_db
+            config = load_config()
+            fresh_db = get_db(config)
+            dbtool = QuerySQLDataBaseTool(db=fresh_db)
+            
+            res = dbtool.db._execute(query)
+            df = pd.DataFrame(res)
+            # Convert column names to match what we expect
+            df.columns = ['Theme_ID','Cube_ID', 'Cube', 'Start', 'End', 'Count']
+            logger.debug(f"[find_cubes_for_unit_theme] Query returned: \n\n{df}")
+            return df.to_json(orient='records')
+            
+        except Exception as e:
+            logger.warning(f"[find_cubes_for_unit_theme] Database error for unit {g_unit}, theme {theme_id} (attempt {attempt + 1}/{max_retries}): {e}")
+            
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+                continue
+            else:
+                logger.error(f"[find_cubes_for_unit_theme] All retry attempts failed for unit {g_unit}, theme {theme_id}: {e}")
+                # Return empty result instead of crashing
+                return "[]"
 
 
 @tool
@@ -239,11 +264,36 @@ def find_themes_for_unit(
         data.g_unit='{unit}';
     """
     logger.debug(f"[find_themes_for_unit] Running query:\n{query}")
-    dbtool = QuerySQLDataBaseTool(db=db)
-    res = dbtool.db._execute(query)
-    df = pd.DataFrame(res)
-    logger.debug(f"[find_themes_for_unit] Query returned: \n\n{df}")
-    return df.to_json(orient='records')
+    
+    # Retry logic for database connection issues
+    max_retries = 3
+    retry_delay = 0.5
+    
+    for attempt in range(max_retries):
+        try:
+            # Create a fresh database tool for each attempt
+            from vobchat.config import load_config, get_db
+            config = load_config()
+            fresh_db = get_db(config)
+            dbtool = QuerySQLDataBaseTool(db=fresh_db)
+            
+            res = dbtool.db._execute(query)
+            df = pd.DataFrame(res)
+            logger.debug(f"[find_themes_for_unit] Query returned: \n\n{df}")
+            return df.to_json(orient='records')
+            
+        except Exception as e:
+            logger.warning(f"[find_themes_for_unit] Database error for unit {unit} (attempt {attempt + 1}/{max_retries}): {e}")
+            
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+                continue
+            else:
+                logger.error(f"[find_themes_for_unit] All retry attempts failed for unit {unit}: {e}")
+                # Return empty result instead of crashing
+                return "[]"
 
 
 @tool
@@ -297,6 +347,10 @@ def get_all_cube_data(
     """
     Fetch data for multiple cubes at once.
     """
+    if not cube_ids:
+        logger.warning(f"[get_all_cube_data] No cube_ids provided for unit {g_unit}")
+        return "[]"
+        
     cube_ids_str = "','".join(cube_ids)
     query = f"""
     SELECT 
@@ -319,13 +373,25 @@ def get_all_cube_data(
     ORDER BY 
         d.end_date_decimal;
     """
-    dbtool = QuerySQLDataBaseTool(db=db)
-    res = dbtool.db._execute(query)
-    df = pd.DataFrame(res)
     
-    # Pivot the data to create columns for each cube
-    pivot_df = df.pivot(index=['g_name', 'year'], columns='cellref', values='value').reset_index()
-    return pivot_df.to_json(orient='records')
+    try:
+        logger.debug(f"[get_all_cube_data] Running query for unit {g_unit} with {len(cube_ids)} cubes")
+        dbtool = QuerySQLDataBaseTool(db=db)
+        res = dbtool.db._execute(query)
+        df = pd.DataFrame(res)
+        
+        if df.empty:
+            logger.warning(f"[get_all_cube_data] No data found for unit {g_unit}")
+            return "[]"
+        
+        # Pivot the data to create columns for each cube
+        pivot_df = df.pivot(index=['g_name', 'year'], columns='cellref', values='value').reset_index()
+        logger.debug(f"[get_all_cube_data] Returning {len(pivot_df)} rows for unit {g_unit}")
+        return pivot_df.to_json(orient='records')
+    except Exception as e:
+        logger.error(f"[get_all_cube_data] Database error for unit {g_unit}: {e}")
+        # Return empty result instead of crashing
+        return "[]"
 
 
 # tool to choose theme from sentence

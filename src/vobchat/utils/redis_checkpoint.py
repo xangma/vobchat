@@ -113,14 +113,22 @@ def _load_writes(
     serde: SerializerProtocol, task_id_to_data: dict[tuple[str, str], dict]
 ) -> list[PendingWrite]:
     """Deserialize pending writes."""
-    writes = [
-        (
-            task_id,
-            data[b"channel"].decode(),
-            serde.loads_typed((data[b"type"].decode(), data[b"value"])),
-        )
-        for (task_id, _), data in task_id_to_data.items()
-    ]
+    writes = []
+    for (task_id, _), data in task_id_to_data.items():
+        try:
+            # Check if required keys exist
+            if b"type" not in data or b"value" not in data or b"channel" not in data:
+                print(f"Warning: Skipping corrupted write data for task {task_id}, missing keys: {list(data.keys())}")
+                continue
+                
+            writes.append((
+                task_id,
+                data[b"channel"].decode(),
+                serde.loads_typed((data[b"type"].decode(), data[b"value"])),
+            ))
+        except Exception as e:
+            print(f"Warning: Failed to load write for task {task_id}: {e}")
+            continue
     return writes
 
 

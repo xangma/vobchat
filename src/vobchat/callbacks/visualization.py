@@ -22,12 +22,17 @@ def register_visualization_callbacks(app, compiled_workflow):
         Output("place-state", "data"),
         Output("visualization-area", "data-was-hidden"), # Keep this if JS uses it
         Input("app-state", "data"),
+        Input("map-state", "data"),  # Add map-state as input to trigger on polygon changes
         State("thread-id", "data"),
         State("place-state", "data"),
         State("visualization-area", "data-was-hidden"),
+        State("cube-selector", "value"), # Add current cube selector value as State
         prevent_initial_call=True
     )
-    def handle_visualization_request(app_state, thread_id, place_state, current_visibility_data_attr):
+    def handle_visualization_request(app_state, map_state, thread_id, place_state, current_visibility_data_attr, current_cube_selection):
+        import logging
+        logger = logging.getLogger(__name__)
+        
         # Define styles for visible/hidden states
         # Style for the outer container
         visible_container_style = {"flex": "0 0 40%", "display": "flex"}
@@ -36,7 +41,11 @@ def register_visualization_callbacks(app, compiled_workflow):
         visible_area_style = {"height": "100%", "display": "flex", "flexDirection": "column", "position": "relative"}
         hidden_area_style = {"height": "100%", "display": "none", "flexDirection": "column", "position": "relative"}
 
+        logger.info(f"Visualization callback triggered - app_state: {app_state is not None}, show_visualization: {app_state.get('show_visualization') if app_state else 'None'}")
+        logger.info(f"Place state cubes: {bool(place_state.get('cubes') if place_state else False)}")
+        
         if not app_state or app_state.get("show_visualization") is False:
+            logger.info("Hiding visualization - app_state missing or show_visualization=False")
             # Return styles to hide BOTH container and inner area
             return hidden_container_style, hidden_area_style, [], [], place_state, "true"
 
@@ -44,13 +53,23 @@ def register_visualization_callbacks(app, compiled_workflow):
             config = {"configurable": {"thread_id": thread_id}}
             state = asyncio.run(compiled_workflow.aget_state(config))
             cubes = place_state.get("cubes", [])
+            logger.info(f"Retrieved cubes from place_state: {type(cubes)} - {len(cubes) if isinstance(cubes, (list, str)) else 'N/A'}")
             if not cubes:
-                 # Hide both if no cubes
-                 return hidden_container_style, hidden_area_style, [], [], place_state, "true"
+                logger.info("No cubes found in place_state - hiding visualization")
+                # Hide both if no cubes
+                return hidden_container_style, hidden_area_style, [], [], place_state, "true"
 
             cubes_df = pd.read_json(cubes, orient='records')
             cube_ids = cubes_df['Cube_ID'].tolist()
-            default_value = cube_ids[:1]
+            logger.info(f"Processed cubes_df: {len(cubes_df)} rows, cube_ids: {cube_ids}")
+            
+            # Preserve current cube selection if it's valid, otherwise use first cube as default
+            if current_cube_selection and isinstance(current_cube_selection, list) and len(current_cube_selection) > 0:
+                # Check if current selection is still valid (all selected cubes exist in available options)
+                valid_selection = [cube for cube in current_cube_selection if cube in cube_ids]
+                cube_selector_value = valid_selection if valid_selection else cube_ids[:1]
+            else:
+                cube_selector_value = cube_ids[:1]
             g_units = state.values.get('selected_place_g_units', [])
             if not g_units:
                  # Hide both if no units selected
@@ -85,6 +104,9 @@ def register_visualization_callbacks(app, compiled_workflow):
 
             cube_ids = [cid for cid in cube_ids if cube_has_data(cid)]
             cubes_df  = cubes_df[cubes_df['Cube_ID'].isin(cube_ids)]
+            
+            # Remove duplicates from cubes_df to prevent duplicate options
+            cubes_df = cubes_df.drop_duplicates(subset=['Cube_ID'])
 
             options = [
                  {"label": row['Cube'], "value": row['Cube_ID']}
@@ -93,10 +115,11 @@ def register_visualization_callbacks(app, compiled_workflow):
             place_state['cube_data'] = all_cube_data.to_json(orient='records')
 
             # Return styles to SHOW BOTH container and inner area
-            return visible_container_style, visible_area_style, options, default_value, place_state, "false"
+            logger.info(f"Successfully showing visualization with {len(options)} cube options")
+            return visible_container_style, visible_area_style, options, cube_selector_value, place_state, "false"
 
         except Exception as e:
-            print(f"Error handling visualization request: {e}")
+            logger.error(f"Error handling visualization request: {e}", exc_info=True)
             # Hide both on error
             return hidden_container_style, hidden_area_style, [], [], place_state, "true"
 
@@ -108,8 +131,27 @@ def register_visualization_callbacks(app, compiled_workflow):
         prevent_initial_call=True
     )
     def update_visualization(selected_cubes, place_state):
-        if not selected_cubes or not place_state.get("cube_data"):
+        if not place_state.get("cube_data"):
              raise PreventUpdate
+             
+        # If no cubes are selected, show an empty chart with a message
+        if not selected_cubes:
+            return go.Figure().update_layout(
+                title="No data filters selected",
+                xaxis_title="Year",
+                yaxis_title="Value",
+                annotations=[{
+                    'text': "Select one or more data filters to view the data",
+                    'xref': "paper",
+                    'yref': "paper",
+                    'x': 0.5,
+                    'y': 0.5,
+                    'xanchor': 'center',
+                    'yanchor': 'middle',
+                    'showarrow': False,
+                    'font': {'size': 16, 'color': 'gray'}
+                }]
+            )
 
         try:
             # Use read_json for potentially better type inference

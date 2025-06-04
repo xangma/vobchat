@@ -375,7 +375,7 @@ window.polygon_management = {
         return processingPromise;
     },
 
-    fetchPolygonsByIds: function (map, mapState, unitType, ids, yearRange = null) { // Added map parameter
+    fetchPolygonsByIds: function (map, mapState, unitType, ids, yearRange = null, selectedPolygons = null) { // Added selectedPolygons parameter
         const requestId = `req-id-${Date.now().toString(36)}`;
         console.log(`JS (${requestId}): Fetching polygons by ID. UnitType: ${unitType}, Count: ${ids.length}`);
 
@@ -482,19 +482,45 @@ window.polygon_management = {
                     const geoJsonData = { type: "FeatureCollection", features: featuresToAddFiltered };
                     geojsonLayer.addData(geoJsonData);
                     featuresActuallyAddedToLayer.push(...featuresToAddFiltered);
+                    
+                    // Refresh styles for the whole layer after adding features
+                    try {
+                        const currentSelection = selectedPolygons || mapState?.selected_polygons || [];
+                        this.refreshLayerStyles(geojsonLayer, currentSelection);
+                        console.log(`JS (${requestId}): Refreshed styles after adding features by ID.`);
+                    } catch (e) {
+                        console.warn(`JS (${requestId}): Could not refresh styles after adding features:`, e);
+                    }
+                } else {
+                    console.log(`JS (${requestId}): All requested/fetched features were already on the layer.`);
+                    // Still refresh styles even if no new features were added, to ensure highlighting is applied
+                    try {
+                        const currentSelection = selectedPolygons || mapState?.selected_polygons || [];
+                        // Use setTimeout to ensure DOM has updated before style refresh
+                        const self = this;
+                        setTimeout(() => {
+                            self.refreshLayerStyles(geojsonLayer, currentSelection);
+                            console.log(`JS (${requestId}): Refreshed styles for existing features (delayed).`);
+                        }, 10);
+                    } catch (e) {
+                        console.warn(`JS (${requestId}): Could not refresh styles for existing features:`, e);
+                    }
+                }
+            } else {
+                console.log(`JS (${requestId}): No features (cached or fetched) to add to layer.`);
+                // Still refresh styles to ensure highlighting is applied
+                try {
+                    const currentSelection = selectedPolygons || mapState?.selected_polygons || [];
+                    // Use setTimeout to ensure DOM has updated before style refresh
+                    const self = this;
+                    setTimeout(() => {
+                        self.refreshLayerStyles(geojsonLayer, currentSelection);
+                        console.log(`JS (${requestId}): Refreshed styles for polygon highlighting (delayed).`);
+                    }, 10);
+                } catch (e) {
+                    console.warn(`JS (${requestId}): Could not refresh styles:`, e);
                 }
             }
-            //         // Refresh styles for the whole layer after adding
-            //         const currentMapState = window.dash_clientside.store.getState()["map-state"];
-            //         const selectedPolygons = currentMapState?.selected_polygons || [];
-            //         this.refreshLayerStyles(geojsonLayer, selectedPolygons);
-            //         console.log(`JS (${requestId}): Refreshed styles after adding features by ID.`);
-            //     } else {
-            //         console.log(`JS (${requestId}): All requested/fetched features were already on the layer.`);
-            //     }
-            // } else {
-            //     console.log(`JS (${requestId}): No features (cached or fetched) to add to layer.`);
-            // }
 
             // Return only the features that were actually added in this run
             return { type: "FeatureCollection", features: featuresActuallyAddedToLayer };
@@ -685,7 +711,7 @@ window.polygon_management = {
 
                 if (!showUnselected) {
                     finalFeatures = finalFeatures.filter(feature =>
-                        feature.id != null && selectedPolygons.includes(feature.id)
+                        feature.id != null && selectedPolygons.includes(String(feature.id))
                     );
                      // console.log(`JS (${requestId}): Filtered to show only selected. Kept ${finalFeatures.length} / ${initialCount}.`); // Reduce noise
                 } else {

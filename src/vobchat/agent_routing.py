@@ -12,10 +12,13 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 #   agent_node - single entry point for routing
 # ---------------------------------------------------------------------------
+
+
 def agent_node(state: lg_State):
     logging.info(f"agent_node entered. State snapshot: {state}") 
     # For brevity, log only keys or specific interesting values
-    logging.debug(f"agent_node state details: last_intent_payload={state.get('last_intent_payload')}, queue_len={len(state.get('intent_queue', []))}")
+    intent_queue = state.get('intent_queue', []) or []
+    logging.debug(f"agent_node state details: last_intent_payload={state.get('last_intent_payload')}, queue_len={len(intent_queue)}")
 
 
     # Determine the source of the intent for this step
@@ -39,7 +42,9 @@ def agent_node(state: lg_State):
             # Ensure the payload used for the update is the one we determined needed routing
             update_for_command = {
                 "last_intent_payload": payload_to_route,
-                "intent_queue": state.get("intent_queue", []), # Pass remaining queue
+                "intent_queue": state.get("intent_queue", []), # Pass cleaned queue (cleaning happened earlier)
+                # CRITICAL: Clear selection_idx when routing to prevent stale values
+                "selection_idx": None,
             }
             return Command(goto=target_node, update=update_for_command)
             # Clear the payload from the main state *after* using it for routing
@@ -55,34 +60,165 @@ def agent_node(state: lg_State):
     last_msg = state.get("messages", [])[-1] if state.get("messages") else None
     if not final_intent and last_msg and isinstance(last_msg, HumanMessage):
         user_text = cast(str, last_msg.content).strip()
-        logging.info(f"agent_node: Processing user text: '{user_text}'")
-        extracted_payload_obj = extract_intent(user_text, state["messages"])
-
-        if extracted_payload_obj.intents:
-            first_intent_obj, *rest = extracted_payload_obj.intents
-            final_intent = first_intent_obj.intent
-            final_args = first_intent_obj.arguments
-            payload_to_route = first_intent_obj.model_dump()
-            # Store the extracted payload in case it's needed later (e.g. by the target node)
-            # This replaces any pre-set payload as LLM extraction takes precedence on new text
-            state["last_intent_payload"] = payload_to_route
-
-            if rest: # Queue up remaining intents
-                state.setdefault("intent_queue", []).extend([r.model_dump() for r in rest])
-                logging.info(f"agent_node: Queued {len(rest)} additional intents.")
+        
+        # CRITICAL: Only extract intents if this message hasn't been processed yet
+        # Check if we're currently in an interrupt state waiting for user selection
+        # In that case, this message might be unrelated to the selection and should be processed
+        current_node = state.get("current_node")
+        has_options = bool(state.get("options"))
+        
+        # Skip intent extraction only if we're actively waiting for a selection
+        # and the state suggests this is a re-trigger of the same workflow step
+        skip_extraction = (
+            current_node in ["resolve_place_and_unit", "resolve_theme"] and 
+            has_options and
+            state.get("selection_idx") is not None  # User made a selection, likely retriggering
+        )
+        
+        if skip_extraction:
+            logging.info(f"agent_node: Skipping intent extraction - currently handling selection (node={current_node}, has_options={has_options})")
         else:
-            logging.warning("agent_node: No intents extracted from user text.")
-            # Fallback: Treat as CHAT or route to clarification? Let's route to ask_followup.
-            final_intent = None # Signal to route to followup/end
-            payload_to_route = {}
+            logging.info(f"agent_node: Processing user text: '{user_text}'")
+            extracted_payload_obj = extract_intent(user_text, state["messages"])
+
+            if extracted_payload_obj.intents:
+                first_intent_obj, *rest = extracted_payload_obj.intents
+                final_intent = first_intent_obj.intent
+                final_args = first_intent_obj.arguments
+                payload_to_route = first_intent_obj.model_dump()
+                # Store the extracted payload in case it's needed later (e.g. by the target node)
+                # This replaces any pre-set payload as LLM extraction takes precedence on new text
+                state["last_intent_payload"] = payload_to_route
+
+                if rest: # Queue up remaining intents
+                    # Filter out Chat intents when there are other more specific intents
+                    filtered_rest = [r for r in rest if r.intent != AssistantIntent.CHAT]
+                    if filtered_rest:
+                        # Special handling for multiple AddPlace and AddTheme intents
+                        add_place_intents = [r for r in filtered_rest if r.intent == AssistantIntent.ADD_PLACE]
+                        add_theme_intents = [r for r in filtered_rest if r.intent == AssistantIntent.ADD_THEME]
+                        other_intents = [r for r in filtered_rest if r.intent not in {AssistantIntent.ADD_PLACE, AssistantIntent.ADD_THEME}]
+                        
+                        # If we have multiple AddPlace intents and the first intent was also AddPlace,
+                        # combine them into a single intent to avoid sequential processing issues
+                        if add_place_intents and final_intent == AssistantIntent.ADD_PLACE:
+                            logging.info(f"agent_node: Combining {len(add_place_intents)} additional AddPlace intents with the first one")
+                            # Extract all place names from the additional AddPlace intents
+                            additional_places = []
+                            for add_intent in add_place_intents:
+                                place_arg = add_intent.arguments.get("place")
+                                if place_arg:
+                                    additional_places.append(place_arg)
+                            
+                            # Update the current payload to include all places
+                            if additional_places:
+                                current_places = final_args.get("places", [final_args.get("place")] if final_args.get("place") else [])
+                                if isinstance(current_places, str):
+                                    current_places = [current_places]
+                                all_places = current_places + additional_places
+                                payload_to_route["arguments"] = {"places": all_places}
+                                state["last_intent_payload"] = payload_to_route
+                                logging.info(f"agent_node: Combined places: {all_places}")
+                            
+                            # Only queue non-AddPlace intents
+                            filtered_rest = other_intents + add_theme_intents
+                        
+                        # CRITICAL: Prevent AddTheme multiplication by only keeping one AddTheme intent
+                        if add_theme_intents and final_intent != AssistantIntent.ADD_THEME:
+                            logging.info(f"agent_node: Found {len(add_theme_intents)} AddTheme intents, keeping only the first one to prevent multiplication")
+                            # Only add the first AddTheme intent to prevent multiplication
+                            if add_theme_intents:
+                                filtered_rest = other_intents + add_theme_intents[:1]
+                            else:
+                                filtered_rest = other_intents
+                        elif add_theme_intents and final_intent == AssistantIntent.ADD_THEME:
+                            logging.info(f"agent_node: Already processing AddTheme, dropping {len(add_theme_intents)} duplicate AddTheme intents")
+                            # If we're already processing an AddTheme, drop all additional ones
+                            filtered_rest = other_intents
+                        
+                        if filtered_rest:
+                            # Deduplicate intents to avoid processing the same intent multiple times
+                            existing_queue = state.get("intent_queue", [])
+                            new_intents = []
+                            seen_in_batch = set()  # Track intents already seen in this batch
+                            
+                            for intent_obj in filtered_rest:
+                                intent_dict = intent_obj.model_dump()
+                                # Create a hashable key for this intent
+                                intent_key = (
+                                    intent_dict.get("intent"),
+                                    str(sorted(intent_dict.get("arguments", {}).items()))
+                                )
+                                
+                                # Check if this exact intent is already in the existing queue
+                                if existing_queue:
+                                    already_exists = any(
+                                        existing_intent.get("intent") == intent_dict.get("intent") and
+                                        existing_intent.get("arguments") == intent_dict.get("arguments")
+                                        for existing_intent in existing_queue
+                                    )
+                                else:
+                                    already_exists = False
+                                
+                                # Also check if the intent is the same as the current intent being processed
+                                current_intent_match = (
+                                    payload_to_route.get("intent") == intent_dict.get("intent") and
+                                    payload_to_route.get("arguments") == intent_dict.get("arguments")
+                                )
+                                
+                                # CRITICAL: Check if we've already seen this intent in this batch
+                                already_in_batch = intent_key in seen_in_batch
+                                
+                                if not already_exists and not current_intent_match and not already_in_batch:
+                                    new_intents.append(intent_dict)
+                                    seen_in_batch.add(intent_key)  # Mark this intent as seen in this batch
+                                    logging.debug(f"agent_node: Adding unique intent to queue: {intent_dict}")
+                                else:
+                                    logging.debug(f"agent_node: Skipping duplicate intent: {intent_dict} (already_exists={already_exists}, current_match={current_intent_match}, in_batch={already_in_batch})")
+                            
+                            if new_intents:
+                                intent_queue = state.get("intent_queue", [])
+                                if intent_queue is None:
+                                    intent_queue = []
+                                intent_queue.extend(new_intents)
+                                state["intent_queue"] = intent_queue
+                                logging.info(f"agent_node: Queued {len(new_intents)} new intents (filtered out {len(filtered_rest) - len(new_intents)} duplicates and Chat intents).")
+                            else:
+                                logging.info(f"agent_node: All {len(filtered_rest)} intents were duplicates or Chat intents.")
+                        else:
+                            logging.info(f"agent_node: All AddPlace intents combined, no other intents to queue.")
+                    else:
+                        logging.info(f"agent_node: Filtered out {len(rest)} Chat intents since specific intent was processed.")
+            else:
+                logging.warning("agent_node: No intents extracted from user text.")
+                # Fallback: Treat as CHAT or route to clarification? Let's route to ask_followup.
+                final_intent = None # Signal to route to followup/end
+                payload_to_route = {}
 
 
     # Priority 3: Check queue (only if no pre-set intent and not human message)
     elif not final_intent and last_msg: # Implies not HumanMessage
         logging.info("agent_node: Not human message & no pre-set payload, checking queue.")
+        
+        # CRITICAL: Don't process intent queue if user is being asked to make a selection
+        current_node = state.get("current_node")
+        has_options = bool(state.get("options"))
+        selection_idx = state.get("selection_idx")
+        
+        if current_node == "resolve_place_and_unit" and has_options and selection_idx is None:
+            logging.info("agent_node: User selection in progress, not processing intent queue")
+            # Don't clear selection_idx here as we're waiting for user input
+            return state
+        elif current_node == "resolve_place_and_unit" and selection_idx is not None:
+            logging.info(f"agent_node: User made selection {selection_idx}, routing to resolve_place_and_unit")
+            # Pass selection_idx to resolve_place_and_unit but don't clear it here as it's needed
+            return Command(goto="resolve_place_and_unit")
+            
         queue = state.get("intent_queue", [])
         if queue:
             payload_from_queue = queue.pop(0) # Take first item
+            state["intent_queue"] = queue  # Update queue after removal
+            
             try:
                  intent_val = payload_from_queue["intent"]
                  final_intent = AssistantIntent(intent_val)
@@ -92,12 +228,35 @@ def agent_node(state: lg_State):
                  logging.info(f"agent_node: Processing intent '{final_intent.value}' from queue.")
             except ValueError:
                  logging.warning(f"agent_node: Invalid intent '{payload_from_queue.get('intent')}' found in queue. Skipping.")
+                 # CRITICAL: Clear selection_idx on error to prevent stale values
+                 state["selection_idx"] = None
                  # If queue item is bad, just return state and let next cycle handle it?
                  # Or try next queue item? For now, return state to avoid complexity.
                  return state
         else:
-            logging.info("agent_node: No human message, no pre-set payload, queue empty. Ending turn.")
-            return state # Nothing to process
+            logging.info("agent_node: No human message, no pre-set payload, queue empty. Checking for unfinished place processing.")
+            # Check if there are more places to process, but avoid reprocessing places that are actively being handled
+            current_node = state.get("current_node")
+            num_places = len(state.get("extracted_place_names", []))
+            current_index = state.get("current_place_index", 0) or 0
+            has_pending_options = bool(state.get("options"))
+            
+            # Only block if we're specifically in resolve_place_and_unit with pending options (waiting for user input)
+            # Don't block other cases where we need to continue the workflow
+            if current_node == "resolve_place_and_unit" and has_pending_options:
+                logging.info(f"agent_node: resolve_place_and_unit has pending user input. Ending turn.")
+                # Don't clear selection_idx here as user input may be pending
+                return state
+            
+            if num_places > 0 and current_index < num_places:
+                logging.info(f"agent_node: Found {num_places - current_index} more places to process, routing to resolve_place_and_unit")
+                # Don't clear selection_idx here as resolve_place_and_unit may need it
+                return Command(goto="resolve_place_and_unit")
+            else:
+                logging.info("agent_node: No places to process. Ending turn.")
+                # CRITICAL: Clear selection_idx when no work to do to prevent stale values
+                state["selection_idx"] = None
+                return state # Nothing to process
 
 
     # --- Routing Logic ---
@@ -106,6 +265,8 @@ def agent_node(state: lg_State):
         logging.info(f"agent_node: Handling CHAT intent.")
         state.setdefault("messages", []).append(AIMessage(content=txt))
         state["last_intent_payload"] = {} # Clear the payload after processing
+        # CRITICAL: Clear selection_idx for CHAT intent to prevent stale values
+        state["selection_idx"] = None
         # CHAT usually ends the turn for the AI.
         return state # Return state after adding message
 
@@ -116,7 +277,9 @@ def agent_node(state: lg_State):
         # Ensure the payload used for the update is the one we determined needed routing
         update_for_command = {
             "last_intent_payload": payload_to_route,
-            "intent_queue": state.get("intent_queue", []), # Pass remaining queue
+            "intent_queue": state.get("intent_queue", []), # Pass cleaned queue (cleaning happened earlier)
+            # CRITICAL: Clear selection_idx when routing to prevent stale values
+            "selection_idx": None,
         }
         return Command(goto=target_node, update=update_for_command)
 
@@ -131,4 +294,6 @@ def agent_node(state: lg_State):
         return Command(goto=END, update={
              "last_intent_payload": None, # Clear any potentially invalid payload
              "intent_queue": state.get("intent_queue", []),
+             # CRITICAL: Clear selection_idx when ending to prevent stale values
+             "selection_idx": None,
         })
