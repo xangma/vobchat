@@ -10,8 +10,10 @@ import re  # For regular expression operations (e.g., postcode validation)
 import pandas as pd  # For data manipulation, primarily with database results
 from typing_extensions import TypedDict  # For defining the structure of the workflow state
 import logging  # For logging information and debugging
-# Import constant definitions for themes from a local utility module
-from vobchat.utils.constants import UNIT_TYPES, UNIT_THEMES
+# Import constant definitions for unit types from a local utility module  
+from vobchat.utils.constants import UNIT_TYPES
+# Import the function to get themes dynamically from database
+from vobchat.tools import get_all_themes
 
 # -------------------------------
 # Import Pydantic for data validation and models
@@ -174,36 +176,77 @@ initial_query_chain = initial_query_prompt | model.with_structured_output(
 )
 
 # -------------------------------
+# Dynamic theme retrieval with caching
+# -------------------------------
+_themes_cache = None
+
+def get_themes_dict():
+    """Get themes as a dictionary, with caching for performance."""
+    global _themes_cache
+    if _themes_cache is None:
+        _load_themes_from_db()
+    return _themes_cache
+
+def _load_themes_from_db():
+    """Load themes from database into cache."""
+    global _themes_cache
+    try:
+        themes_json = get_all_themes("")  # Empty string parameter as required by the function
+        themes_df = pd.read_json(io.StringIO(themes_json), orient='records')
+        _themes_cache = dict(zip(themes_df['ent_id'], themes_df['labl']))
+        logging.info(f"Loaded {len(_themes_cache)} themes dynamically from database")
+    except Exception as e:
+        logging.error(f"Failed to load themes dynamically, using fallback: {e}")
+        # Fallback to minimal themes if database fails
+        _themes_cache = {
+            "T_POP": "Population",
+            "T_WK": "Work & Poverty", 
+            "T_HOUS": "Housing"
+        }
+
+def refresh_themes_cache():
+    """Force refresh of themes cache from database."""
+    global _themes_cache
+    _themes_cache = None
+    return get_themes_dict()
+
+# -------------------------------
 # Define a Pydantic model for theme decision output
 # -------------------------------
-# Ensures the LLM returns a valid theme code from the predefined list.
+# Ensures the LLM returns a valid theme code from the available themes.
 class ThemeDecision(BaseModel):
     theme_code: str = Field(...,
-                            description="The selected theme code from UNIT_THEMES, e.g. T_POP")
+                            description="The selected theme code from available themes, e.g. T_POP")
 
-choose_theme_prompt = ChatPromptTemplate.from_messages([
-    (
-        "system",
-        "You are an expert in selecting the best statistical theme."
-    ),
-    (
-        "system",
-        "Available themes:\n" +
-        "\n".join(f"{k}: {v}" for k, v in UNIT_THEMES.items())
-    ),
-    (
-        "user",
-        # single braces → real variable
-        "Question: {question}\n"
-        # doubled braces → literal { and }
-        "Return *only* this JSON (no code fences, no extra text):\n"
-        "{{\"theme_code\": \"<one_of_the_codes_above>\"}}"
-    )
-])
+def build_theme_prompt():
+    """Build the theme selection prompt with current themes."""
+    themes = get_themes_dict()
+    if not themes:
+        themes = {"T_POP": "Population"}  # Emergency fallback
+    return ChatPromptTemplate.from_messages([
+        (
+            "system",
+            "You are an expert in selecting the best statistical theme."
+        ),
+        (
+            "system",
+            "Available themes:\n" +
+            "\n".join(f"{k}: {v}" for k, v in themes.items())
+        ),
+        (
+            "user",
+            # single braces → real variable
+            "Question: {question}\n"
+            # doubled braces → literal { and }
+            "Return *only* this JSON (no code fences, no extra text):\n"
+            "{{\"theme_code\": \"<one_of_the_codes_above>\"}}"
+        )
+    ])
 
-# Chain the theme decision prompt with the model for structured output using the ThemeDecision schema.
-choose_theme_chain = choose_theme_prompt | model.with_structured_output(
-    schema=ThemeDecision)
+# Build the theme chain dynamically when needed
+def get_theme_chain():
+    """Get the theme selection chain with current themes."""
+    return build_theme_prompt() | model.with_structured_output(schema=ThemeDecision)
 
 def postcode_tool_call(state: lg_State) -> lg_State:
     """
@@ -1084,12 +1127,13 @@ def resolve_theme(state: lg_State) -> lg_State | Command:
                         logger.info(f"resolve_theme: Found keyword match: {theme['labl']}")
                         break
 
-            # If still no match, try LLM-based semantic matching using choose_theme_chain
+            # If still no match, try LLM-based semantic matching using dynamic theme chain
             if not chosen:
                 try:
                     logger.info(f"resolve_theme: No text match found, trying LLM semantic matching for '{theme_query}'")
                     # Use the LLM to semantically match the query to available themes
-                    theme_decision = choose_theme_chain.invoke({"question": theme_query})
+                    theme_chain = get_theme_chain()
+                    theme_decision = theme_chain.invoke({"question": theme_query})
 
                     # Extract theme_code, handling both dict and object responses
                     if hasattr(theme_decision, 'theme_code'):
@@ -1299,6 +1343,11 @@ def create_workflow(lg_state: TypedDict):
         CompiledStateGraph: The compiled LangGraph workflow instance ready for execution.
     """
     logger.info("Creating workflow graph...")
+    
+    # Preload themes from database for immediate availability
+    logger.info("Preloading themes from database...")
+    themes = get_themes_dict()
+    logger.info(f"Preloaded {len(themes)} themes for dynamic usage")
     # Initialize the StateGraph with the defined state structure.
     workflow = StateGraph(lg_state)
 
