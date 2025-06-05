@@ -63,6 +63,7 @@ from vobchat.state_nodes import (
 from vobchat.agent_routing import agent_node  # Main entry point for user interactions
 from vobchat.intent_handling import AssistantIntent  # Enum for routing intents
 from vobchat.state_schema import lg_State  # TypedDict for the workflow state
+from geoalchemy2 import Geometry
 
 # -------------------------------
 # Set up logging for debugging and informational messages
@@ -90,24 +91,25 @@ memory = MemorySaver() # This instance isn't actually used later, AsyncRedisSave
 # Specifies the model name and the API endpoint for the Ollama service.
 logger.info("Initializing language model...")
 model = ChatOllama(
-    model="deepseek-r1-wt:latest",  # The specific Ollama model to use
+    model="deepseek-r1:latest",  # The specific Ollama model to use
     base_url="http://localhost:11434/",  # URL of the Ollama API server
+    # default_options={"format": "json"},
     # base_url="https://148.197.150.162/ollama_api/",  # URL of the Ollama API server
     # client_kwargs={"verify": False}  # Disables SSL verification if needed (use cautiously)
 )
 
 # Set up the SQL toolkit using the database connection and the LLM.
 # This toolkit provides tools for the LLM to interact with the database (list tables, get schema, run queries).
-logger.info("Setting up database toolkit and tools...")
-toolkit = SQLDatabaseToolkit(db=db, llm=model)
-# Get the list of tools provided by the toolkit.
-tools = toolkit.get_tools()
+# logger.info("Setting up database toolkit and tools...")
+# toolkit = SQLDatabaseToolkit(db=db, llm=model)
+# # Get the list of tools provided by the toolkit.
+# tools = toolkit.get_tools()
 
 # Extract specific, frequently used tools from the toolkit list by their names.
-# This makes them easier to call directly if needed (though not explicitly used later in this code).
-list_tables_tool = next(
-    tool for tool in tools if tool.name == "sql_db_list_tables")
-get_schema_tool = next(tool for tool in tools if tool.name == "sql_db_schema")
+# # This makes them easier to call directly if needed (though not explicitly used later in this code).
+# list_tables_tool = next(
+#     tool for tool in tools if tool.name == "sql_db_list_tables")
+# get_schema_tool = next(tool for tool in tools if tool.name == "sql_db_schema")
 
 # -------------------------------
 # Define a regex for UK postcodes
@@ -179,27 +181,26 @@ class ThemeDecision(BaseModel):
     theme_code: str = Field(...,
                             description="The selected theme code from UNIT_THEMES, e.g. T_POP")
 
-
-# Create a prompt template for the LLM to choose the most relevant theme code based on the user's question.
 choose_theme_prompt = ChatPromptTemplate.from_messages([
     (
         "system",
-        "You are an expert in determining the appropriate statistical theme based on a user's question."
+        "You are an expert in selecting the best statistical theme."
     ),
     (
         "system",
-        # Dynamically include the available theme codes and descriptions in the prompt context.
-        "The available themes are:\n" +
-        "\n".join([f"{k}: {v}" for k, v in UNIT_THEMES.items()]) +
-        "\n\n" +
-        "Please try to match similar sentiments, for example, a user might ask for \"education statistics\" or \"qualification data\", where the closest statistical theme may be \"Learning & Language\"."
+        "Available themes:\n" +
+        "\n".join(f"{k}: {v}" for k, v in UNIT_THEMES.items())
     ),
     (
         "user",
-        "User Question: {question}\n" # Placeholder for the user's query
-        "Please output a JSON object with the field 'theme_code' set to one of the above available theme codes."
+        # single braces → real variable
+        "Question: {question}\n"
+        # doubled braces → literal { and }
+        "Return *only* this JSON (no code fences, no extra text):\n"
+        "{{\"theme_code\": \"<one_of_the_codes_above>\"}}"
     )
 ])
+
 # Chain the theme decision prompt with the model for structured output using the ThemeDecision schema.
 choose_theme_chain = choose_theme_prompt | model.with_structured_output(
     schema=ThemeDecision)
@@ -393,6 +394,8 @@ def select_unit_on_map(state: lg_State) -> lg_State | Command:
                 "selected_place_g_unit_types": state.get("selected_place_g_unit_types", []),
                  # Pass the CORRECT current_place_index to preserve state through interrupt
                 "current_place_index": current_place_index,
+                 # Pass total number of places for timing logic
+                "extracted_place_names": state.get("extracted_place_names", []),
                  # Pass node name for potential resume logic.
                 "current_node": "select_unit_on_map",
                 # CRITICAL: Clear selection_idx through interrupt to ensure it's persisted
@@ -447,7 +450,17 @@ def find_cubes_node(state: lg_State) -> lg_State | Command:
     map_selected_units_int: list[int] = [
         int(p) for p in state.get("selected_polygons", []) if str(p).isdigit()
     ]
-    all_selected_unit_ids: list[int] = sorted(set(workflow_units + map_selected_units_int))
+
+    # CRITICAL: Use map state as authoritative source when available
+    # This prevents stale workflow units from contaminating the selection
+    if map_selected_units_int:
+        # Map state exists and is authoritative - use it as the primary source
+        all_selected_unit_ids: list[int] = sorted(set(map_selected_units_int))
+        logger.info(f"find_cubes_node: Using map-selected units as authoritative: {all_selected_unit_ids}")
+    else:
+        # Fallback to workflow units when no map selection exists
+        all_selected_unit_ids: list[int] = sorted(set(workflow_units))
+        logger.info(f"find_cubes_node: Using workflow units as fallback: {all_selected_unit_ids}")
 
     if not all_selected_unit_ids:
         logger.warning("No units selected to find cubes for.")
@@ -689,32 +702,39 @@ def resolve_place_and_unit(state: lg_State) -> lg_State | Command:
 
     # ───────────────────────────────────────── place disambiguation
     if place["g_place"] is None:
+        # CRITICAL: Check if this place already has g_unit info from map click FIRST
+        # This ensures map clicks take priority over database search results
+        if place.get("g_unit") is not None:
+            logger.info(f"Place '{place['name']}' has g_unit {place['g_unit']} from map click, using it directly")
+            # This place already has unit info from map click, add to global lists and mark as resolved
+            selected_units = state.get("selected_place_g_units", [])
+            selected_units.append(place["g_unit"])
+            state["selected_place_g_units"] = selected_units
+
+            selected_unit_types = state.get("selected_place_g_unit_types", [])
+            selected_unit_types.append(place.get("g_unit_type"))
+            state["selected_place_g_unit_types"] = selected_unit_types
+
+            # Also add to selected_place_g_places (using g_unit as placeholder since we don't have g_place)
+            selected_places = state.get("selected_place_g_places", [])
+            selected_places.append(place["g_unit"])  # Use g_unit as g_place placeholder for map clicks
+            state["selected_place_g_places"] = selected_places
+
+            places[i] = place
+            state["current_place_index"] = i + 1
+            logger.info(f"Added map-clicked g_unit {place['g_unit']} to selected_place_g_units")
+            return state
+
+        # If no map click polygon, proceed with normal place disambiguation
         rows = place["candidate_rows"]
 
         # Handle case where no place candidates were found
         if not rows:
             logger.warning(f"No candidate rows found for place '{place['name']}'")
-            # Check if this place already has g_unit info (e.g., from polygon click)
-            if place.get("g_unit") is not None:
-                logger.info(f"Place '{place['name']}' has g_unit {place['g_unit']}, proceeding with unit info")
-                # This place already has unit info, add to global lists and mark as resolved
-                selected_units = state.get("selected_place_g_units", [])
-                selected_units.append(place["g_unit"])
-                state["selected_place_g_units"] = selected_units
-
-                selected_unit_types = state.get("selected_place_g_unit_types", [])
-                selected_unit_types.append(place.get("g_unit_type"))
-                state["selected_place_g_unit_types"] = selected_unit_types
-
-                places[i] = place
-                state["current_place_index"] = i + 1
-                logger.info(f"Added g_unit {place['g_unit']} to selected_place_g_units")
-                return state
-            else:
-                # No place candidates and no existing unit info, skip this place
-                logger.warning(f"Skipping place '{place['name']}' - no candidates and no unit info")
-                state["current_place_index"] = i + 1
-                return state
+            # No place candidates and no existing unit info, skip this place
+            logger.warning(f"Skipping place '{place['name']}' - no candidates and no unit info")
+            state["current_place_index"] = i + 1
+            return state
 
         multiple_options = len(rows) > 1
         sel_idx = state.get("selection_idx")      # refresh in case callback set it
@@ -1095,6 +1115,50 @@ def resolve_theme(state: lg_State) -> lg_State | Command:
 
                 except Exception as e:
                     logger.error(f"resolve_theme: Error in LLM semantic matching: {e}", exc_info=True)
+                    # Fallback: try simple pattern matching for common cases
+                    logger.info(f"resolve_theme: Falling back to pattern matching for '{theme_query}'")
+                    query_lower = theme_query.lower()
+
+                    # Define common patterns for theme matching
+                    theme_patterns = {
+                        "education": "T_LEARN",
+                        "learning": "T_LEARN",
+                        "language": "T_LEARN",
+                        "qualification": "T_LEARN",
+                        "school": "T_LEARN",
+                        "university": "T_LEARN",
+                        "population": "T_POP",
+                        "people": "T_POP",
+                        "demographic": "T_POP",
+                        "housing": "T_HOUS",
+                        "home": "T_HOUS",
+                        "property": "T_HOUS",
+                        "work": "T_WK",
+                        "employment": "T_WK",
+                        "job": "T_WK",
+                        "poverty": "T_WK",
+                        "income": "T_WK",
+                        "industry": "T_IND",
+                        "business": "T_IND",
+                        "economy": "T_IND",
+                        "social": "T_SOC",
+                        "health": "T_VITAL",
+                        "death": "T_VITAL",
+                        "birth": "T_VITAL",
+                        "life": "T_VITAL"
+                    }
+
+                    # Check if any pattern matches
+                    for pattern, theme_code in theme_patterns.items():
+                        if pattern in query_lower:
+                            # Find the matching theme
+                            for theme in available:
+                                if theme["ent_id"] == theme_code:
+                                    chosen = theme
+                                    logger.info(f"resolve_theme: Found pattern match: '{theme_query}' -> '{theme['labl']}' (pattern: {pattern})")
+                                    break
+                            if chosen:
+                                break
 
             if chosen:
                 state["selected_theme"] = json.dumps(chosen)

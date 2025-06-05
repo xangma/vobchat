@@ -64,4 +64,6 @@ def create_stores():
         dcc.Store(id='zoom-cleanup-trigger-store'),
         dcc.Store(id='map-click-add-trigger'),
         dcc.Store(id='map-click-remove-trigger'),
+        dcc.Store(id='visualization-zoom-trigger'),
+        dcc.Store(id='visualization-resize-debouncer'),
     ])

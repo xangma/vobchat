@@ -13,14 +13,18 @@ style_function = f"""
 function(feature, context) {{
     // Add a fallback for context or hideout if they're undefined
     const sel = (context && context.hideout) ? context.hideout.selected || [] : [];
-    
+
     // Mapping unit types to outline colors:
     const unitColors = {color_dict};
-    
+
     let unitType = feature.properties.g_unit_type || 'MOD_REG';
     let outlineColor = unitColors[unitType] || 'black';
 
-    if (sel.includes(feature.id)) {{
+    // Ensure consistent string comparison for feature ID matching
+    const featureIdStr = String(feature.id);
+    const isSelected = sel.includes(featureIdStr);
+
+    if (isSelected) {{
         return {{
             color: 'red',
             fillColor: 'red',
@@ -43,11 +47,11 @@ def create_map_layout(assets_folder):
     """
     Creates the layout that uses Dash Leaflet instead of Plotly.
     """
-    
+
     map_namespace = Namespace("map_leaflet")
     map_namespace.add(style_function, "style_function")
     map_namespace.dump(assets_folder=assets_folder)
-    
+
     buttons = []
 
     for k, v in UNIT_TYPES.items():
@@ -66,7 +70,7 @@ def create_map_layout(assets_folder):
 
     return html.Div([
         html.H3("Map (Dash Leaflet)", className="mb-3"),
-        
+
         # Main content container with proper flex layout
         html.Div(
             style={"display": "flex", "flexDirection": "column", "height": "100%"},
@@ -93,7 +97,7 @@ def create_map_layout(assets_folder):
                         ], id='year-range-container', style={'display': 'none'}),
                     ]
                 ),
-                
+
                 # Map container (flexible, takes remaining space)
                 html.Div(
                     style={

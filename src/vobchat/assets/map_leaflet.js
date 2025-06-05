@@ -16,7 +16,11 @@ window.map_leaflet = Object.assign({}, window.map_leaflet, {
         let unitType = feature.properties.g_unit_type || 'MOD_REG';
         let outlineColor = unitColors[unitType] || 'black';
 
-        if (sel.includes(feature.id)) {
+        // Ensure consistent string comparison for feature ID matching
+        const featureIdStr = String(feature.id);
+        const isSelected = sel.includes(featureIdStr);
+
+        if (isSelected) {
             return {
                 color: 'red',
                 fillColor: 'red',

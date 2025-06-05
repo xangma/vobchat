@@ -27,6 +27,7 @@ from vobchat.cli import register_commands
 logger = logging.getLogger(__name__)
 
 from dash import DiskcacheManager, CeleryManager
+from geoalchemy2 import Geometry
 
 if 'REDIS_URL' in os.environ:
     # Use Redis & Celery if REDIS_URL set as an env variable
@@ -47,10 +48,10 @@ def create_app():
 
 
     assets_folder = os.path.join(os.path.dirname(__file__), 'assets')
-    
-    app = DashProxy(transforms=[CycleBreakerTransform()], 
-                    external_stylesheets=[dbc.themes.BOOTSTRAP], 
-                    url_base_pathname=DASH_PREFIX + '/', 
+
+    app = DashProxy(transforms=[CycleBreakerTransform()],
+                    external_stylesheets=[dbc.themes.BOOTSTRAP],
+                    url_base_pathname=DASH_PREFIX + '/',
                     suppress_callback_exceptions=True,
                     background_callback_manager=background_callback_manager,)
 
@@ -92,7 +93,7 @@ def create_app():
     id="document")
 
     register_app_routes(app.server)
-    
+
     register_chat_callbacks(app, compiled_workflow, background_callback_manager)
     # register_map_leaflet_callbacks(app, date_ranges_df)
     register_clientside_callbacks(app)
@@ -102,7 +103,7 @@ def create_app():
     register_bounding_box_routes(app.server)
 
     register_commands(app.server)
-    
+
     return app
 
 # Create app and expose `server` for Gunicorn

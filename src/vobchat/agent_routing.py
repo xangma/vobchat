@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 
 
 def agent_node(state: lg_State):
-    logging.info(f"agent_node entered. State snapshot: {state}") 
+    # logging.debug(f"agent_node entered. State snapshot: {state}")
+    logging.info("agent_node: Starting intent routing process.")
     # For brevity, log only keys or specific interesting values
     intent_queue = state.get('intent_queue', []) or []
     logging.debug(f"agent_node state details: last_intent_payload={state.get('last_intent_payload')}, queue_len={len(intent_queue)}")
@@ -60,21 +61,21 @@ def agent_node(state: lg_State):
     last_msg = state.get("messages", [])[-1] if state.get("messages") else None
     if not final_intent and last_msg and isinstance(last_msg, HumanMessage):
         user_text = cast(str, last_msg.content).strip()
-        
+
         # CRITICAL: Only extract intents if this message hasn't been processed yet
         # Check if we're currently in an interrupt state waiting for user selection
         # In that case, this message might be unrelated to the selection and should be processed
         current_node = state.get("current_node")
         has_options = bool(state.get("options"))
-        
+
         # Skip intent extraction only if we're actively waiting for a selection
         # and the state suggests this is a re-trigger of the same workflow step
         skip_extraction = (
-            current_node in ["resolve_place_and_unit", "resolve_theme"] and 
+            current_node in ["resolve_place_and_unit", "resolve_theme"] and
             has_options and
             state.get("selection_idx") is not None  # User made a selection, likely retriggering
         )
-        
+
         if skip_extraction:
             logging.info(f"agent_node: Skipping intent extraction - currently handling selection (node={current_node}, has_options={has_options})")
         else:
@@ -98,7 +99,7 @@ def agent_node(state: lg_State):
                         add_place_intents = [r for r in filtered_rest if r.intent == AssistantIntent.ADD_PLACE]
                         add_theme_intents = [r for r in filtered_rest if r.intent == AssistantIntent.ADD_THEME]
                         other_intents = [r for r in filtered_rest if r.intent not in {AssistantIntent.ADD_PLACE, AssistantIntent.ADD_THEME}]
-                        
+
                         # If we have multiple AddPlace intents and the first intent was also AddPlace,
                         # combine them into a single intent to avoid sequential processing issues
                         if add_place_intents and final_intent == AssistantIntent.ADD_PLACE:
@@ -109,7 +110,7 @@ def agent_node(state: lg_State):
                                 place_arg = add_intent.arguments.get("place")
                                 if place_arg:
                                     additional_places.append(place_arg)
-                            
+
                             # Update the current payload to include all places
                             if additional_places:
                                 current_places = final_args.get("places", [final_args.get("place")] if final_args.get("place") else [])
@@ -119,10 +120,10 @@ def agent_node(state: lg_State):
                                 payload_to_route["arguments"] = {"places": all_places}
                                 state["last_intent_payload"] = payload_to_route
                                 logging.info(f"agent_node: Combined places: {all_places}")
-                            
+
                             # Only queue non-AddPlace intents
                             filtered_rest = other_intents + add_theme_intents
-                        
+
                         # CRITICAL: Prevent AddTheme multiplication by only keeping one AddTheme intent
                         if add_theme_intents and final_intent != AssistantIntent.ADD_THEME:
                             logging.info(f"agent_node: Found {len(add_theme_intents)} AddTheme intents, keeping only the first one to prevent multiplication")
@@ -135,13 +136,13 @@ def agent_node(state: lg_State):
                             logging.info(f"agent_node: Already processing AddTheme, dropping {len(add_theme_intents)} duplicate AddTheme intents")
                             # If we're already processing an AddTheme, drop all additional ones
                             filtered_rest = other_intents
-                        
+
                         if filtered_rest:
                             # Deduplicate intents to avoid processing the same intent multiple times
                             existing_queue = state.get("intent_queue", [])
                             new_intents = []
                             seen_in_batch = set()  # Track intents already seen in this batch
-                            
+
                             for intent_obj in filtered_rest:
                                 intent_dict = intent_obj.model_dump()
                                 # Create a hashable key for this intent
@@ -149,7 +150,7 @@ def agent_node(state: lg_State):
                                     intent_dict.get("intent"),
                                     str(sorted(intent_dict.get("arguments", {}).items()))
                                 )
-                                
+
                                 # Check if this exact intent is already in the existing queue
                                 if existing_queue:
                                     already_exists = any(
@@ -159,23 +160,23 @@ def agent_node(state: lg_State):
                                     )
                                 else:
                                     already_exists = False
-                                
+
                                 # Also check if the intent is the same as the current intent being processed
                                 current_intent_match = (
                                     payload_to_route.get("intent") == intent_dict.get("intent") and
                                     payload_to_route.get("arguments") == intent_dict.get("arguments")
                                 )
-                                
+
                                 # CRITICAL: Check if we've already seen this intent in this batch
                                 already_in_batch = intent_key in seen_in_batch
-                                
+
                                 if not already_exists and not current_intent_match and not already_in_batch:
                                     new_intents.append(intent_dict)
                                     seen_in_batch.add(intent_key)  # Mark this intent as seen in this batch
                                     logging.debug(f"agent_node: Adding unique intent to queue: {intent_dict}")
                                 else:
                                     logging.debug(f"agent_node: Skipping duplicate intent: {intent_dict} (already_exists={already_exists}, current_match={current_intent_match}, in_batch={already_in_batch})")
-                            
+
                             if new_intents:
                                 intent_queue = state.get("intent_queue", [])
                                 if intent_queue is None:
@@ -199,12 +200,12 @@ def agent_node(state: lg_State):
     # Priority 3: Check queue (only if no pre-set intent and not human message)
     elif not final_intent and last_msg: # Implies not HumanMessage
         logging.info("agent_node: Not human message & no pre-set payload, checking queue.")
-        
+
         # CRITICAL: Don't process intent queue if user is being asked to make a selection
         current_node = state.get("current_node")
         has_options = bool(state.get("options"))
         selection_idx = state.get("selection_idx")
-        
+
         if current_node == "resolve_place_and_unit" and has_options and selection_idx is None:
             logging.info("agent_node: User selection in progress, not processing intent queue")
             # Don't clear selection_idx here as we're waiting for user input
@@ -213,12 +214,12 @@ def agent_node(state: lg_State):
             logging.info(f"agent_node: User made selection {selection_idx}, routing to resolve_place_and_unit")
             # Pass selection_idx to resolve_place_and_unit but don't clear it here as it's needed
             return Command(goto="resolve_place_and_unit")
-            
+
         queue = state.get("intent_queue", [])
         if queue:
             payload_from_queue = queue.pop(0) # Take first item
             state["intent_queue"] = queue  # Update queue after removal
-            
+
             try:
                  intent_val = payload_from_queue["intent"]
                  final_intent = AssistantIntent(intent_val)
@@ -240,14 +241,14 @@ def agent_node(state: lg_State):
             num_places = len(state.get("extracted_place_names", []))
             current_index = state.get("current_place_index", 0) or 0
             has_pending_options = bool(state.get("options"))
-            
+
             # Only block if we're specifically in resolve_place_and_unit with pending options (waiting for user input)
             # Don't block other cases where we need to continue the workflow
             if current_node == "resolve_place_and_unit" and has_pending_options:
                 logging.info(f"agent_node: resolve_place_and_unit has pending user input. Ending turn.")
                 # Don't clear selection_idx here as user input may be pending
                 return state
-            
+
             if num_places > 0 and current_index < num_places:
                 logging.info(f"agent_node: Found {num_places - current_index} more places to process, routing to resolve_place_and_unit")
                 # Don't clear selection_idx here as resolve_place_and_unit may need it

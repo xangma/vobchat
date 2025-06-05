@@ -40,6 +40,8 @@ setup(
         "authlib",
         "passlib",
         "sqlalchemy",
+        "GeoAlchemy2",
+        "sshtunnel",
     ],
     include_package_data=True,
     classifiers=[

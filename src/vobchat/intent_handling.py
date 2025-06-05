@@ -39,7 +39,7 @@ class SingleIntent(BaseModel):
    )
 class AssistantIntentPayload(BaseModel):
     """Minimal contract returned by agent-LLM before routing."""
-    """ Example: {"intent": "AddPlace", "arguments": {"place": "London"}} """
+    """ Example: { "intent": "AddPlace", "arguments": {"place": "London"} } """
     intents: List[SingleIntent]
 
 
@@ -80,7 +80,7 @@ _INTENT_EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
         • For state inspection requests ("what have I selected?", "show my current selection") use ShowState.
         • Listing intents:
             - ListThemesForSelection: list themes *available for the current selection*
-            - ListAllThemes: list all themes in the DB
+            - ListAllThemes: list all themes in the DB - use for "what statistics", "what themes", "what data", "what's available", "show all themes", "list themes", "what other statistics"
         • The phrase "start over" maps to Reset.
         • Anything else: Chat.  Set arguments.text to the assistant's normal reply.
 
@@ -97,11 +97,19 @@ _INTENT_EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
           AddTheme {{"theme_query": "life & death"}}
         • "Back to population data" →
           AddTheme {{"theme_query": "population"}}
+        • "What other statistics do you have?" →
+          ListAllThemes {{}}
+        • "What themes are available?" →
+          ListAllThemes {{}}
+        • "Show me all available data" →
+          ListAllThemes {{}}
+        • "List all themes" →
+          ListAllThemes {{}}
         • "Remove the current theme" →
           RemoveTheme {{}}
 
         You MUST reply with valid JSON in this exact format:
-        {{ "intents": [ {{ "intent": "<intent_name>", "arguments": {{ }} }} ] }}
+        {{ "intents": [ {{ "intent": "<intent_name>", "arguments": {{ }} }} ] }} }}
 
         Do NOT include any other text, explanations, or formatting. ONLY return the JSON object.
 

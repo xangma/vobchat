@@ -10,8 +10,9 @@ from vobchat.config import load_config, get_db
 import io
 from vobchat.utils.constants import UNIT_TYPES
 import logging
-logger = logging.getLogger(__name__)
+from geoalchemy2 import Geometry
 
+logger = logging.getLogger(__name__)
 
 config = load_config()
 db = get_db(config)
@@ -59,11 +60,11 @@ def _print_event(event: dict, _printed: set, max_length=1500):
 def get_date_ranges_by_type() -> pd.DataFrame:
     """Fetch min and max dates for each unit type."""
     query = """
-    SELECT 
+    SELECT
         g_unit_type,
         MIN(util.get_start_year(g_duration)) as min_year,
         MAX(util.get_end_year(g_duration)) as max_year
-    FROM hgis.g_foot 
+    FROM hgis.g_foot
     WHERE use_for_stat_map='Y'
     GROUP BY g_unit_type
     ORDER BY g_unit_type;
@@ -110,7 +111,7 @@ def find_cubes_for_unit_theme(
     """
     Find cubes for a given unit and theme.
     """
-    query = f"""select 
+    query = f"""select
         ncube.theme_ID as theme_ID,
         ncube.ent_ID as cube_ID,
         ncube.labl as cube,
@@ -128,11 +129,11 @@ def find_cubes_for_unit_theme(
     order by ncube.labl;
     """
     logger.debug(f"[find_cubes_for_unit_theme] Running query:\n{query}")
-    
+
     # Retry logic for database connection issues
     max_retries = 3
     retry_delay = 0.5
-    
+
     for attempt in range(max_retries):
         try:
             # Create a fresh database tool for each attempt
@@ -140,17 +141,17 @@ def find_cubes_for_unit_theme(
             config = load_config()
             fresh_db = get_db(config)
             dbtool = QuerySQLDataBaseTool(db=fresh_db)
-            
+
             res = dbtool.db._execute(query)
             df = pd.DataFrame(res)
             # Convert column names to match what we expect
             df.columns = ['Theme_ID','Cube_ID', 'Cube', 'Start', 'End', 'Count']
             logger.debug(f"[find_cubes_for_unit_theme] Query returned: \n\n{df}")
             return df.to_json(orient='records')
-            
+
         except Exception as e:
             logger.warning(f"[find_cubes_for_unit_theme] Database error for unit {g_unit}, theme {theme_id} (attempt {attempt + 1}/{max_retries}): {e}")
-            
+
             if attempt < max_retries - 1:
                 import time
                 time.sleep(retry_delay)
@@ -171,10 +172,10 @@ def find_units_by_postcode(
     """
     query = f"""select    distinct u.g_unit, gp.g_place, auo_util.get_unit_name(u.g_unit) as g_name, u.g_unit_type, gp.county_name, max(public.st_area(f.g_foot_ertslcc))
     from    hgis.g_unit u, hgis.g_foot f, gbhdb.codepoint_jul2023_gb post, hgis.g_name as gn, hgis.g_place as gp
-    where    f.g_unit=u.g_unit 
+    where    f.g_unit=u.g_unit
 	and gn.g_unit=u.g_unit
 	and gn.g_place=gp.g_place
-	and public.st_contains(f.g_foot_ertslcc, post.g_point_etrs) 
+	and public.st_contains(f.g_foot_ertslcc, post.g_point_etrs)
 	and post.postcode='{postcode}'
 	and u.g_unit_type='MOD_DIST'
     group    by u.g_unit, gp.g_place, u.g_unit_type, gp.county_name
@@ -202,24 +203,24 @@ def find_places_by_name(
     """
     types_tuple = tuple(UNIT_TYPES.keys()) if unit_type == "0" else (f"('{unit_type}')")
     query = f"""
-        SELECT 
-            p.g_place, 
-            p.g_name, 
-            p.g_county, 
-            p.g_nation, 
-            p.g_domain, 
-            p.g_state, 
-            p.county_name, 
-            p.nation_name, 
-            p.domain_name, 
-            p.state_name, 
+        SELECT
+            p.g_place,
+            p.g_name,
+            p.g_county,
+            p.g_nation,
+            p.g_domain,
+            p.g_state,
+            p.county_name,
+            p.nation_name,
+            p.domain_name,
+            p.state_name,
             array_agg(n.g_unit) AS g_unit,
             array_agg(COALESCE(g.g_unit_type, 'NONE')) AS g_unit_type
-        FROM 
+        FROM
             g_place p
-        JOIN 
+        JOIN
             g_name n ON p.g_place = n.g_place
-        LEFT JOIN 
+        LEFT JOIN
             g_unit g ON n.g_unit = g.g_unit
         WHERE
         (g.g_unit_type IS NULL OR g.g_unit_type in {types_tuple})
@@ -229,16 +230,16 @@ def find_places_by_name(
         AND ({domain}::integer = 0 OR p.g_domain = {domain}::integer)
         AND ({state}::integer = 0 OR p.g_state = {state}::integer)
         AND g.g_point_source = 'Own centroid'
-        GROUP BY 
-            p.g_place, 
-            p.g_name, 
-            p.g_county, 
-            p.g_nation, 
-            p.g_domain, 
-            p.g_state, 
-            p.county_name, 
-            p.nation_name, 
-            p.domain_name, 
+        GROUP BY
+            p.g_place,
+            p.g_name,
+            p.g_county,
+            p.g_nation,
+            p.g_domain,
+            p.g_state,
+            p.county_name,
+            p.nation_name,
+            p.domain_name,
             p.state_name
         LIMIT 41;
     """
@@ -264,11 +265,11 @@ def find_themes_for_unit(
         data.g_unit='{unit}';
     """
     logger.debug(f"[find_themes_for_unit] Running query:\n{query}")
-    
+
     # Retry logic for database connection issues
     max_retries = 3
     retry_delay = 0.5
-    
+
     for attempt in range(max_retries):
         try:
             # Create a fresh database tool for each attempt
@@ -276,15 +277,15 @@ def find_themes_for_unit(
             config = load_config()
             fresh_db = get_db(config)
             dbtool = QuerySQLDataBaseTool(db=fresh_db)
-            
+
             res = dbtool.db._execute(query)
             df = pd.DataFrame(res)
             logger.debug(f"[find_themes_for_unit] Query returned: \n\n{df}")
             return df.to_json(orient='records')
-            
+
         except Exception as e:
             logger.warning(f"[find_themes_for_unit] Database error for unit {unit} (attempt {attempt + 1}/{max_retries}): {e}")
-            
+
             if attempt < max_retries - 1:
                 import time
                 time.sleep(retry_delay)
@@ -321,17 +322,17 @@ def get_cube_data(
     Fetch the actual data for a given cube ID.
     """
     query = f"""
-    SELECT 
+    SELECT
         d.end_date_decimal as year,
         d.g_unit,
         d.g_data as value
-    FROM 
+    FROM
         hgis.g_data d,
         hgis.g_data_map m
-    WHERE 
+    WHERE
         d.cellref = m.cellref
         AND m.ncuberef = '{cube_id}'
-    ORDER BY 
+    ORDER BY
         d.end_date_decimal;
     """
     dbtool = QuerySQLDataBaseTool(db=db)
@@ -350,10 +351,10 @@ def get_all_cube_data(
     if not cube_ids:
         logger.warning(f"[get_all_cube_data] No cube_ids provided for unit {g_unit}")
         return "[]"
-        
+
     cube_ids_str = "','".join(cube_ids)
     query = f"""
-    SELECT 
+    SELECT
         d.end_date_decimal as year,
         u.g_name,
         d.g_unit,
@@ -362,28 +363,28 @@ def get_all_cube_data(
         m.ncuberef as cube_id,
         ncube.labl as cube_name,
         ncube.text as cube_text
-    FROM 
+    FROM
         hgis.g_data d
         JOIN hgis.g_data_map m ON d.cellref = m.cellref
         JOIN hgis.g_data_ent ncube ON m.ncuberef = ncube.ent_id
         JOIN hgis.g_unit u ON d.g_unit = u.g_unit
-    WHERE 
+    WHERE
         d.g_unit = '{g_unit}'
         AND m.ncuberef IN ('{cube_ids_str}')
-    ORDER BY 
+    ORDER BY
         d.end_date_decimal;
     """
-    
+
     try:
         logger.debug(f"[get_all_cube_data] Running query for unit {g_unit} with {len(cube_ids)} cubes")
         dbtool = QuerySQLDataBaseTool(db=db)
         res = dbtool.db._execute(query)
         df = pd.DataFrame(res)
-        
+
         if df.empty:
             logger.warning(f"[get_all_cube_data] No data found for unit {g_unit}")
             return "[]"
-        
+
         # Pivot the data to create columns for each cube
         pivot_df = df.pivot(index=['g_name', 'year'], columns='cellref', values='value').reset_index()
         logger.debug(f"[get_all_cube_data] Returning {len(pivot_df)} rows for unit {g_unit}")

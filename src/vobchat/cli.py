@@ -3,6 +3,7 @@ import click
 from getpass import getpass
 from flask.cli import with_appcontext
 from sqlalchemy.exc import IntegrityError
+from geoalchemy2 import Geometry
 from vobchat.models import db, User, pwd_ctx
 
 @click.command("add-user")

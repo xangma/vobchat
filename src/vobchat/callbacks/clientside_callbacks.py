@@ -105,7 +105,7 @@ def register_clientside_callbacks(app: Dash):
             }
             // --- Handle Map Clicks (Selection) ---
             else if (triggered_id.includes('geojson-layer.n_clicks') && click_data) {
-                 const fid = click_data.id;
+                 const fid = String(click_data.id); // Convert to string for consistent comparison
                  const unit_type = click_data.properties.g_unit_type;
                  if (fid != null) { // Check for null or undefined
                     const selected_ids = new_state.selected_polygons || [];
@@ -377,25 +377,63 @@ def register_clientside_callbacks(app: Dash):
         Input('document', 'id')
     )
 
-    # 5. Map Resize Handling (NO CHANGE - Debounce is useful here)
+    # 5. Map Resize Handling with Auto-Zoom to Selected Polygons
+    # This triggers when the visualization panel changes and zooms to selected polygons
     app.clientside_callback(
     """
-    function(style) {
-        if (window.resizeTimeout) {
-            clearTimeout(window.resizeTimeout);
+    function(vizContainerStyle, mapState) {
+        console.log("Client: Visualization container style changed:", vizContainerStyle);
+        console.log("Client: mapState:", mapState);
+        console.log("Client: Selected polygons:", mapState?.selected_polygons);
+        
+        if (window.vizResizeTimeout) {
+            clearTimeout(window.vizResizeTimeout);
         }
-        window.resizeTimeout = setTimeout(function() {
+        window.vizResizeTimeout = setTimeout(function() {
             const mapElement = document.getElementById('leaflet-map');
-            if (mapElement && mapElement._leaflet_map) {
-                console.log("Client: Invalidating map size due to resize.");
-                mapElement._leaflet_map.invalidateSize();
+            const map = mapElement?._leaflet_map;
+            
+            if (map) {
+                console.log("Client: Visualization panel size changed, invalidating map size and checking for selected polygons");
+                map.invalidateSize();
+                
+                // Check if we have selected polygons to zoom to
+                if (mapState && mapState.selected_polygons && mapState.selected_polygons.length > 0) {
+                    console.log("Client: Found selected polygons for auto-zoom after visualization change:", mapState.selected_polygons);
+                    
+                    // Try direct zoom first
+                    if (window.polygon_management && window.polygon_management.zoomTo) {
+                        const geojsonLayer = window.polygon_management.findGeoJSONLayer(map);
+                        if (geojsonLayer) {
+                            console.log("Client: Using direct zoom to selected polygons after visualization change");
+                            window.polygon_management.zoomTo(map, mapState.selected_polygons, geojsonLayer);
+                        } else {
+                            console.warn("Client: GeoJSON layer not found, trying state-based zoom");
+                            // Fallback to state-based zoom
+                            const newState = JSON.parse(JSON.stringify(mapState));
+                            newState.zoom_to_selection = true;
+                            window.dash_clientside.set_props("map-state", {data: newState});
+                        }
+                    } else {
+                        console.warn("Client: polygon_management not available, using state-based zoom");
+                        // Fallback to state-based zoom
+                        const newState = JSON.parse(JSON.stringify(mapState));
+                        newState.zoom_to_selection = true;
+                        window.dash_clientside.set_props("map-state", {data: newState});
+                    }
+                } else {
+                    console.log("Client: No selected polygons to zoom to after visualization change");
+                }
+            } else {
+                console.warn("Client: Map element not found during visualization change callback");
             }
-        }, 150);
+        }, 500); // Longer delay to ensure visualization panel transition is complete
         return window.dash_clientside.no_update;
     }
     """,
-    Output('map-resize-debouncer', 'data'),
-    Input('map-panel', 'style'),
+    Output('visualization-resize-debouncer', 'data'),
+    Input('visualization-panel-container', 'style'),
+    State('map-state', 'data'),
     prevent_initial_call=True
     )
 
@@ -505,6 +543,9 @@ def register_clientside_callbacks(app: Dash):
             const idsToFetch = mapState.selected_polygons || [];
             const unitTypesForFetch = mapState.selected_polygons_unit_types || [];
             const unitType = unitTypesForFetch.length > 0 ? unitTypesForFetch[0] : mapState.unit_types[0] || null;
+            
+            console.log(`Client (Cb8 - Fetch/Zoom): mapState.selected_polygons =`, mapState.selected_polygons);
+            console.log(`Client (Cb8 - Fetch/Zoom): idsToFetch =`, idsToFetch);
 
             if (idsToFetch.length === 0 || !unitType) {
                 console.warn("Client (Cb8 - Fetch/Zoom): No IDs or unit type provided.");
@@ -534,15 +575,9 @@ def register_clientside_callbacks(app: Dash):
                     if (geojsonLayer) {
                         polygonManagement.zoomTo(map, idsToFetch, geojsonLayer); // This sets programmaticZoomAnimating = true
                         console.log("Client (Cb8 - Fetch/Zoom): Zoom initiated.");
-
-                        // *** Trigger the cleanup callback INSTEAD of modifying map-state directly ***
-                        // Pass necessary info if needed, or just a timestamp
-                        const triggerPayload = {
-                            timestamp: Date.now(),
-                            triggered_by_cb8: true // Add a flag for clarity
-                        };
-                        console.log("Client (Cb8 - Fetch/Zoom): Updating zoom-cleanup-trigger-store.");
-                        window.dash_clientside.set_props("zoom-cleanup-trigger-store", { data: triggerPayload });
+                        
+                        // Cleanup is now handled by the zoomend event in polygon_management.js
+                        // No need to trigger cleanup immediately - wait for zoom to complete
 
                     } else {
                         console.warn("Client (Cb8 - Fetch/Zoom): GeoJSON layer not found after fetch, cannot zoom.");
@@ -648,7 +683,8 @@ def register_clientside_callbacks(app: Dash):
         prevent_initial_call=True
     )
     
-    # *** NEW Callback #10: Performs State Cleanup Triggered by Cb8 ***
+
+    # *** NEW Callback #10: Performs State Cleanup Triggered by zoom completion ***
     app.clientside_callback(
         """
         function(triggerData, currentMapState) {
@@ -662,9 +698,7 @@ def register_clientside_callbacks(app: Dash):
             console.log("Client (Cb10 - Cleanup): Triggered by zoom-cleanup-trigger-store.");
 
             // Check if cleanup is actually needed
-            //if (!currentMapState.zoom_to_selection && !currentMapState.programmatic_unit_change_pending) {
             if (!currentMapState.zoom_to_selection) {
-
                 console.log("Client (Cb10 - Cleanup): Flags already cleared in map-state. No update needed.");
                 return window.dash_clientside.no_update;
             }
@@ -674,14 +708,9 @@ def register_clientside_callbacks(app: Dash):
             let updated = false;
             if (newState.zoom_to_selection) {
                 delete newState.zoom_to_selection;
-                console.log("Client (Cb10 - Cleanup): Cleared zoom_to_selection flag.");
+                console.log("Client (Cb10 - Cleanup): Cleared zoom_to_selection flag after zoom completion.");
                 updated = true;
             }
-//            if (newState.programmatic_unit_change_pending) {
-//                delete newState.programmatic_unit_change_pending;
-//                console.log("Client (Cb10 - Cleanup): Cleared programmatic_unit_change_pending flag.");
-//                 updated = true;
-//            }
 
             if (updated) {
                  console.log("Client (Cb10 - Cleanup): Returning updated map-state.");
@@ -694,7 +723,7 @@ def register_clientside_callbacks(app: Dash):
         }
         """,
         Output("map-state", "data", allow_duplicate=True), # Output updates the main map-state
-        Input("zoom-cleanup-trigger-store", "data"), # Triggered by Cb8
+        Input("zoom-cleanup-trigger-store", "data"), # Triggered by zoomend event
         State("map-state", "data"), # Get the current map-state to modify
         prevent_initial_call=True
     )
