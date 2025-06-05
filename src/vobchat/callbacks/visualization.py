@@ -182,6 +182,13 @@ def register_visualization_callbacks(app, compiled_workflow):
 
             unpivoted_df = pd.melt(filtered_df, id_vars=['year', 'g_name'], value_vars=value_vars)
 
+            # CRITICAL: Filter out rows with NaN values to prevent empty series in the plot
+            unpivoted_df = unpivoted_df.dropna(subset=['value'])
+
+            # If no data remains after filtering, return empty plot
+            if unpivoted_df.empty:
+                return go.Figure().update_layout(title="No valid data available for selected cubes")
+
             # Attempt to map back to cube names for legend (if available)
             cube_name_map = {row['Cube_ID']: row['Cube'] for idx, row in pd.read_json(io.StringIO(place_state.get("cubes", [])), orient='records').iterrows()}
             def get_cube_name_from_variable(variable_str):
@@ -194,7 +201,8 @@ def register_visualization_callbacks(app, compiled_workflow):
             unpivoted_df['merged_name'] = unpivoted_df['g_name'] + ' - ' + unpivoted_df['variable']
 
             fig = px.line(unpivoted_df, x='year', y='value', color='merged_name',
-                          title="Historical Data Visualization")
+                          title="Historical Data Visualization",
+                          markers=True)  # Add markers to show single data points
 
             fig.update_layout(
                 xaxis_title="Year",

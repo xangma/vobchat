@@ -1507,6 +1507,11 @@ def create_workflow(lg_state: TypedDict):
             logging.info(f"resolve_theme_router: returning resolve_place_and_unit (places still need processing: {current_place_index} of {num_places})")
             return "resolve_place_and_unit"
 
+        # CRITICAL: If a theme button was clicked but not processed yet, stay in resolve_theme to process it
+        if selection_idx is not None and has_options and current_node == "resolve_theme" and not has_theme:
+            logging.info(f"resolve_theme_router: returning resolve_theme (theme button clicked but not processed yet, selection_idx={selection_idx})")
+            return "resolve_theme"
+
         # If we have both theme and units, go to cubes
         if has_theme and has_units:
             logging.info("resolve_theme_router: returning find_cubes_node (have theme and units)")
