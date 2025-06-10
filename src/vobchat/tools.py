@@ -214,6 +214,10 @@ def find_places_by_name(
             p.nation_name,
             p.domain_name,
             p.state_name,
+            p.x_uk,
+            p.y_uk,
+            public.ST_Y(public.ST_Transform(p.g_point, 4326)) AS lat,
+            public.ST_X(public.ST_Transform(p.g_point, 4326)) AS lon,
             array_agg(n.g_unit) AS g_unit,
             array_agg(COALESCE(g.g_unit_type, 'NONE')) AS g_unit_type
         FROM
@@ -230,6 +234,7 @@ def find_places_by_name(
         AND ({domain}::integer = 0 OR p.g_domain = {domain}::integer)
         AND ({state}::integer = 0 OR p.g_state = {state}::integer)
         AND g.g_point_source = 'Own centroid'
+        AND p.g_point IS NOT NULL
         GROUP BY
             p.g_place,
             p.g_name,
@@ -240,7 +245,10 @@ def find_places_by_name(
             p.county_name,
             p.nation_name,
             p.domain_name,
-            p.state_name
+            p.state_name,
+            p.x_uk,
+            p.y_uk,
+            p.g_point
         LIMIT 41;
     """
     logger.debug(f"[find_places_by_name] Running query:\n{query}")

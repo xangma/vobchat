@@ -66,6 +66,7 @@ _INTENT_EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
         There can be multiple intents in the same message.
 
         • If the user explicitly asks to add / include a place/s, use AddPlace and return {{"place": "<name>"}}.
+        • IMPORTANT: Location queries like "Where's X?", "Show me X", "Find X", "What about X?" where X is a place name should use AddPlace with {{"place": "<name>"}}.
         • If they ask to remove a place/s, RemovePlace with {{"place": "<name>"}}.
         • If they mention a postcode, treat it as AddPlace with {{"postcode": "<code>"}}.
         • If they request a statistical topic, use AddTheme with {{"theme_query": "<words from user>"}}.
@@ -75,7 +76,7 @@ _INTENT_EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
             - AddPlace for EACH place mentioned separately: {{"place": "<place_name>"}}
             - AddTheme for the theme: {{"theme_query": "<theme_words>"}}
         • IMPORTANT: Always look for place names/city names in requests, even if they ask for data or stats "for" those places. Extract each place as a separate AddPlace intent.
-        • If they ask what a theme is, use DescribeTheme with {{"theme": "<name>"}}.
+        • DescribeTheme is ONLY for asking about theme definitions/descriptions, like "What is the Population theme?", "Explain Housing statistics", NOT for place queries.
         • RemoveTheme is ONLY for explicitly clearing/removing themes, like "remove the theme", "clear theme", "no theme". NOT for changing themes.
         • For state inspection requests ("what have I selected?", "show my current selection") use ShowState.
         • Listing intents:
@@ -85,6 +86,16 @@ _INTENT_EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
         • Anything else: Chat.  Set arguments.text to the assistant's normal reply.
 
         EXAMPLES:
+        • "Where's newport?" →
+          AddPlace {{"place": "newport"}}
+        • "Show me Bristol" →
+          AddPlace {{"place": "Bristol"}}
+        • "Find Oxford" →
+          AddPlace {{"place": "Oxford"}}
+        • "What about Birmingham?" →
+          AddPlace {{"place": "Birmingham"}}
+        • "The place, newport" →
+          AddPlace {{"place": "newport"}}
         • "Please show Life & Death stats for Southampton and Portsmouth" →
           AddPlace {{"place": "Southampton"}}, AddPlace {{"place": "Portsmouth"}}, AddTheme {{"theme_query": "Life & Death"}}
         • "Population data for London" →
@@ -97,6 +108,10 @@ _INTENT_EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
           AddTheme {{"theme_query": "life & death"}}
         • "Back to population data" →
           AddTheme {{"theme_query": "population"}}
+        • "What is the Population theme?" →
+          DescribeTheme {{"theme": "Population"}}
+        • "Explain Housing statistics" →
+          DescribeTheme {{"theme": "Housing"}}
         • "What other statistics do you have?" →
           ListAllThemes {{}}
         • "What themes are available?" →

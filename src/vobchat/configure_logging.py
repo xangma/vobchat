@@ -107,6 +107,9 @@ class EnhancedLogHandler(logging.Handler):
 
 def configure_enhanced_logging():
     """Configure the enhanced logging system"""
+    import warnings
+    import asyncio
+    
     # Create and configure the root logger
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
@@ -123,6 +126,15 @@ def configure_enhanced_logging():
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(PrettyFormatter())
     logger.addHandler(console_handler)
+    
+    # Suppress asyncio event loop cleanup warnings
+    # These are harmless cleanup warnings that occur during garbage collection
+    asyncio_logger = logging.getLogger('asyncio')
+    asyncio_logger.setLevel(logging.ERROR)
+    
+    # Suppress specific asyncio warnings at the system level
+    warnings.filterwarnings("ignore", message=".*I/O operation on closed.*")
+    warnings.filterwarnings("ignore", category=ResourceWarning, module="asyncio")
     
     return logger
 

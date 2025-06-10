@@ -83,10 +83,49 @@ def agent_node(state: lg_State):
             extracted_payload_obj = extract_intent(user_text, state["messages"])
 
             if extracted_payload_obj.intents:
-                first_intent_obj, *rest = extracted_payload_obj.intents
-                final_intent = first_intent_obj.intent
-                final_args = first_intent_obj.arguments
-                payload_to_route = first_intent_obj.model_dump()
+                # CRITICAL: Implement intent prioritization to handle ambiguous cases
+                # When multiple intents are detected, prioritize certain intents over others
+                all_intents = extracted_payload_obj.intents
+                
+                # Priority order: AddPlace > AddTheme > other intents > DescribeTheme > Chat
+                priority_order = [
+                    AssistantIntent.ADD_PLACE,
+                    AssistantIntent.REMOVE_PLACE, 
+                    AssistantIntent.ADD_THEME,
+                    AssistantIntent.REMOVE_THEME,
+                    AssistantIntent.SHOW_STATE,
+                    AssistantIntent.LIST_SELECTION_THEMES,
+                    AssistantIntent.LIST_ALL_THEMES,
+                    AssistantIntent.RESET,
+                    AssistantIntent.DESCRIBE_THEME,
+                    AssistantIntent.CHAT
+                ]
+                
+                # Find the highest priority intent
+                chosen_intent_obj = None
+                for priority_intent in priority_order:
+                    for intent_obj in all_intents:
+                        if intent_obj.intent == priority_intent:
+                            chosen_intent_obj = intent_obj
+                            break
+                    if chosen_intent_obj:
+                        break
+                
+                # Fallback to first intent if no priority match (shouldn't happen)
+                if not chosen_intent_obj:
+                    chosen_intent_obj = all_intents[0]
+                
+                # Separate the chosen intent from the rest
+                rest = [intent for intent in all_intents if intent != chosen_intent_obj]
+                
+                final_intent = chosen_intent_obj.intent
+                final_args = chosen_intent_obj.arguments
+                payload_to_route = chosen_intent_obj.model_dump()
+                
+                # Log the prioritization decision
+                if len(all_intents) > 1:
+                    intent_names = [intent.intent.value for intent in all_intents]
+                    logging.info(f"agent_node: Prioritized '{final_intent.value}' over other intents: {intent_names}")
                 # Store the extracted payload in case it's needed later (e.g. by the target node)
                 # This replaces any pre-set payload as LLM extraction takes precedence on new text
                 state["last_intent_payload"] = payload_to_route

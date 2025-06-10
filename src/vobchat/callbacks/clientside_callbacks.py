@@ -32,7 +32,7 @@ def register_clientside_callbacks(app: Dash):
 
             let add_trigger_data = window.dash_clientside.no_update;
             let remove_trigger_data = window.dash_clientside.no_update;
-            
+
             const triggered = dash_clientside.callback_context.triggered;
             if (!triggered || triggered.length === 0) {
                 return [window.dash_clientside.no_update, window.dash_clientside.no_update, window.dash_clientside.no_update, window.dash_clientside.no_update]; // No trigger
@@ -159,7 +159,7 @@ def register_clientside_callbacks(app: Dash):
             }
         }
         """,
-        Output("map-state", "data"),
+        Output("map-state", "data", allow_duplicate=True),
         Output("toggle-unselected", "children"),
         Output("map-click-add-trigger", "data"),
         Output("map-click-remove-trigger", "data"),
@@ -353,22 +353,16 @@ def register_clientside_callbacks(app: Dash):
         """
         function() {
             if (!window.ctrlKeyListenerAttached) {
-                const buttonContainer = document.getElementById('unit-filter-buttons-container');
-                if (buttonContainer) {
-                    buttonContainer.addEventListener("click", function(event) {
-                        const button = event.target.closest('.unit-filter-button');
-                        if (button) {
-                            const isCtrl = event.ctrlKey || event.metaKey;
-                            dash_clientside.set_props("ctrl-pressed-store", {data: isCtrl});
-                            // console.log(`Client: Ctrl pressed: ${isCtrl} for button`); // Reduce noise
-                        }
-                    });
-                     window.ctrlKeyListenerAttached = true;
-                     console.log("Client: Ctrl key listener attached via delegation.");
-                } else {
-                     console.warn("Client: Could not find '#unit-filter-buttons-container' for ctrl key listener.");
-                     // Fallback might be needed if container ID changes
-                }
+                // Delegate to document so dynamically rendered buttons are always handled
+                document.addEventListener("click", function(event) {
+                    const button = event.target.closest('.unit-filter-button');
+                    if (button) {
+                        const isCtrl = event.ctrlKey || event.metaKey;
+                        dash_clientside.set_props("ctrl-pressed-store", {data: isCtrl});
+                    }
+                });
+                window.ctrlKeyListenerAttached = true;
+                console.log("Client: Ctrl key listener attached to document delegation.");
             }
             return window.dash_clientside.no_update;
         }
@@ -385,41 +379,80 @@ def register_clientside_callbacks(app: Dash):
         console.log("Client: Visualization container style changed:", vizContainerStyle);
         console.log("Client: mapState:", mapState);
         console.log("Client: Selected polygons:", mapState?.selected_polygons);
-        
+
+        // Reset hidden-refresh guard when panel becomes visible again
+        if (vizContainerStyle?.display !== 'none') {
+            window._vizHiddenRefreshed = false;
+        }
+
+        // When hidden, invalidate size once and refresh layer styles (e.g. after deselect), skipping resize/zoom
+        if (vizContainerStyle?.display === 'none') {
+            console.log("Client: Visualization panel hidden - forcing layer styles refresh, skipping resize/zoom loops");
+            if (!window._vizHiddenRefreshed) {
+                window._vizHiddenRefreshed = true;
+                try {
+                    const mapEl = document.getElementById('leaflet-map');
+                    const map = mapEl?._leaflet_map;
+                    if (map) {
+                        console.log("Client: Visualization hidden - invalidating map size before refresh");
+                        map.invalidateSize();
+                    }
+                    if (map && window.polygon_management?.updateMapWithBounds && window.geojsonLayerReady && mapState) {
+                        const bounds = map.getBounds();
+                        const unitTypes = mapState.unit_types || ['MOD_REG'];
+                        const yearRange = mapState.year_range ? { min: mapState.year_range[0], max: mapState.year_range[1] } : null;
+                        console.log("Client: Visualization hidden - refreshing layer styles");
+                        window.polygon_management.updateMapWithBounds(map, unitTypes, bounds, mapState, yearRange);
+                    }
+                } catch (e) {
+                    console.error("Client: Error forcing layer styles refresh on hidden visualization:", e);
+                }
+            }
+            if (window.vizResizeTimeout) {
+                clearTimeout(window.vizResizeTimeout);
+            }
+            return window.dash_clientside.no_update;
+        }
+
         if (window.vizResizeTimeout) {
             clearTimeout(window.vizResizeTimeout);
         }
         window.vizResizeTimeout = setTimeout(function() {
             const mapElement = document.getElementById('leaflet-map');
             const map = mapElement?._leaflet_map;
-            
+
             if (map) {
                 console.log("Client: Visualization panel size changed, invalidating map size and checking for selected polygons");
                 map.invalidateSize();
-                
+
                 // Check if we have selected polygons to zoom to
                 if (mapState && mapState.selected_polygons && mapState.selected_polygons.length > 0) {
                     console.log("Client: Found selected polygons for auto-zoom after visualization change:", mapState.selected_polygons);
-                    
-                    // Try direct zoom first
+
+                    // CRITICAL FIX: Avoid redundant zoom operations during programmatic zoom or recent zoom completion
+                    if (window.programmaticZoomInProgress || window.programmaticZoomAnimating) {
+                        console.log("Client: Skipping visualization auto-zoom (programmatic zoom in progress)");
+                        return window.dash_clientside.no_update;
+                    }
+
+                    // Check if we just completed a zoom operation recently (debounce)
+                    const now = Date.now();
+                    if (window.lastZoomEndTime_MapEvents && (now - window.lastZoomEndTime_MapEvents < 2000)) {
+                        console.log("Client: Skipping visualization auto-zoom (recent zoom completion)");
+                        return window.dash_clientside.no_update;
+                    }
+
+                    // CRITICAL FIX: Only use direct zoom methods to prevent map-state modifications that cause loops
                     if (window.polygon_management && window.polygon_management.zoomTo) {
                         const geojsonLayer = window.polygon_management.findGeoJSONLayer(map);
                         if (geojsonLayer) {
                             console.log("Client: Using direct zoom to selected polygons after visualization change");
                             window.polygon_management.zoomTo(map, mapState.selected_polygons, geojsonLayer);
                         } else {
-                            console.warn("Client: GeoJSON layer not found, trying state-based zoom");
-                            // Fallback to state-based zoom
-                            const newState = JSON.parse(JSON.stringify(mapState));
-                            newState.zoom_to_selection = true;
-                            window.dash_clientside.set_props("map-state", {data: newState});
+                            console.log("Client: GeoJSON layer not found, skipping zoom to prevent callback loops");
                         }
                     } else {
-                        console.warn("Client: polygon_management not available, using state-based zoom");
-                        // Fallback to state-based zoom
-                        const newState = JSON.parse(JSON.stringify(mapState));
-                        newState.zoom_to_selection = true;
-                        window.dash_clientside.set_props("map-state", {data: newState});
+                        console.log("Client: polygon_management not available, skipping zoom to prevent callback loops");
                     }
                 } else {
                     console.log("Client: No selected polygons to zoom to after visualization change");
@@ -467,19 +500,19 @@ def register_clientside_callbacks(app: Dash):
                 console.warn("Client (Cb7): GeoJSON layer not ready, skipping moveend update.");
                 return window.dash_clientside.no_update;
             }
-            
+
             // Skip update if this moveend was triggered by a programmatic zoom
             if (window.programmaticZoomInProgress || window.programmaticZoomAnimating) {
                 console.log("Client (Cb7): Skipping moveend update (triggered by programmatic zoom).");
                 return window.dash_clientside.no_update;
             }
-            
+
             // Also skip if zoom_to_selection flag is set (indicating zoom cycle in progress)
             if (mapState.zoom_to_selection) {
                 console.log("Client (Cb7): Skipping moveend update (zoom_to_selection flag set).");
                 return window.dash_clientside.no_update;
             }
-            
+
             // Skip update if a programmatic zoom just completed (debounce mechanism)
             const now = Date.now();
             if (window.lastZoomEndTime_MapEvents && (now - window.lastZoomEndTime_MapEvents < 1000)) {
@@ -512,7 +545,7 @@ def register_clientside_callbacks(app: Dash):
     # REVISED Callback #8: Initiates Fetch/Zoom & Triggers Cleanup Store
     app.clientside_callback(
         """
-        function(mapState) {
+        function(mapState, addTriggerData, removeTriggerData) {
             const context = dash_clientside.callback_context;
             if (!context.triggered || context.triggered.length === 0 || !mapState) {
                 return window.dash_clientside.no_update; // No trigger
@@ -521,6 +554,15 @@ def register_clientside_callbacks(app: Dash):
             if (!mapState.zoom_to_selection) {
                 return [window.dash_clientside.no_update, window.dash_clientside.no_update]; // Not a zoom request, return no_update for both outputs
             }
+
+            // CRITICAL FIX: Debounce rapid-fire callback triggers to prevent cascade
+            const now = Date.now();
+            if (!window.lastCb8Trigger) window.lastCb8Trigger = 0;
+            if (now - window.lastCb8Trigger < 500) { // 500ms debounce
+                console.log("Client (Cb8 - Fetch/Zoom): Debouncing rapid trigger, skipping.");
+                return [window.dash_clientside.no_update, window.dash_clientside.no_update];
+            }
+            window.lastCb8Trigger = now;
 
             const mapElement = document.getElementById('leaflet-map');
             const map = mapElement?._leaflet_map;
@@ -543,24 +585,46 @@ def register_clientside_callbacks(app: Dash):
             const idsToFetch = mapState.selected_polygons || [];
             const unitTypesForFetch = mapState.selected_polygons_unit_types || [];
             const unitType = unitTypesForFetch.length > 0 ? unitTypesForFetch[0] : mapState.unit_types[0] || null;
-            
+
             console.log(`Client (Cb8 - Fetch/Zoom): mapState.selected_polygons =`, mapState.selected_polygons);
             console.log(`Client (Cb8 - Fetch/Zoom): idsToFetch =`, idsToFetch);
 
             if (idsToFetch.length === 0 || !unitType) {
                 console.warn("Client (Cb8 - Fetch/Zoom): No IDs or unit type provided.");
                  // Reset flags directly in map-state if nothing to fetch (this is also okay)
-                 try {
+                try {
                     let newState = JSON.parse(JSON.stringify(mapState));
                     delete newState.zoom_to_selection;
                     //delete newState.programmatic_unit_change_pending;
                     window.dash_clientside.set_props("map-state", {data: newState}); // Update map-state directly ONLY on error
-                    const layer = polygonManagement.findGeoJSONLayer(map);
-                    if(layer) polygonManagement.refreshLayerStyles(layer, mapState.selected_polygons);
                     console.warn("Client (Cb8 - Fetch/Zoom): Resetting state flags due to missing IDs/unit type.");
                 } catch(e){ console.error("Client (Cb8 - Fetch/Zoom): Error resetting state flags:", e); }
                 return [window.dash_clientside.no_update, window.dash_clientside.no_update];
             }
+
+            // CRITICAL FIX: Check if polygons are already selected and visible to avoid redundant operations
+            const geojsonLayer = polygonManagement.findGeoJSONLayer(map);
+            if (geojsonLayer) {
+                // Check if all requested polygons are already on the layer with correct styling
+                const currentLayerIds = [];
+                geojsonLayer.eachLayer(layer => {
+                    if (layer.feature && layer.feature.properties) {
+                        currentLayerIds.push(String(layer.feature.properties.g_unit_id || layer.feature.id));
+                    }
+                });
+
+                const allAlreadyPresent = idsToFetch.every(id => currentLayerIds.includes(String(id)));
+                const selectionUnchanged = JSON.stringify(idsToFetch.sort()) === JSON.stringify((window.lastZoomSelection || []).sort());
+
+                if (allAlreadyPresent && selectionUnchanged) {
+                    console.log("Client (Cb8 - Fetch/Zoom): All polygons already present with same selection. Skipping redundant fetch/zoom.");
+                    // Trigger cleanup via store so Cb10 can clear the zoom_to_selection flag
+                    return [window.dash_clientside.no_update, {triggered_by_cb8: true}];
+                }
+            }
+
+            // Store current selection for next comparison
+            window.lastZoomSelection = idsToFetch.slice();
 
             console.log(`Client (Cb8 - Fetch/Zoom): Fetching ${idsToFetch.length} polygons by ID for unit type ${unitType}.`);
             const yearRange = mapState.year_range ? { min: mapState.year_range[0], max: mapState.year_range[1] } : null;
@@ -575,7 +639,7 @@ def register_clientside_callbacks(app: Dash):
                     if (geojsonLayer) {
                         polygonManagement.zoomTo(map, idsToFetch, geojsonLayer); // This sets programmaticZoomAnimating = true
                         console.log("Client (Cb8 - Fetch/Zoom): Zoom initiated.");
-                        
+
                         // Cleanup is now handled by the zoomend event in polygon_management.js
                         // No need to trigger cleanup immediately - wait for zoom to complete
 
@@ -615,38 +679,55 @@ def register_clientside_callbacks(app: Dash):
         Input("map-state", "data"),
         prevent_initial_call=True
     )
-    
-    # REVISED Callback #9: Handles Refresh (Condition slightly simplified)
+
+    # REVISED Callback #9: Handles Refresh on user clicks and map events
     app.clientside_callback(
         """
-        function(mapState) {
+        function(addTriggerData, removeTriggerData, moveendTriggerData, cleanupTriggerData, unitFilterClicks, mapState) {
             const context = dash_clientside.callback_context;
             if (!context.triggered || context.triggered.length === 0 || !mapState) {
                 return window.dash_clientside.no_update;
             }
+            console.log("Client (Cb9 - Refresh) invoked. Context triggers:", context.triggered);
 
-            // --- Condition: Act ONLY if zoom flags are NOT set AND zoom animation is NOT in progress ---
-            // Cb10 now handles clearing the flags, so Cb9 runs after that state update.
-            if (mapState.zoom_to_selection) {
-                 console.log("Client (Cb9 - Refresh): Skipping update (zoom_to_selection flag still set).");
-                 return window.dash_clientside.no_update;
+            const triggeredProps = context.triggered.map(t => t.prop_id);
+            const isSelection = triggeredProps.some(pid =>
+                pid.startsWith('map-click-add-trigger') || pid.startsWith('map-click-remove-trigger')
+            );
+            const isUnitFilterChange = triggeredProps.some(pid =>
+                pid.includes('unit-filter')
+            );
+            console.log(
+                "Client (Cb9 - Refresh) debug: triggeredProps=", triggeredProps,
+                ", isSelection=", isSelection,
+                ", isUnitFilterChange=", isUnitFilterChange,
+                ", zoom_to_selection=", mapState.zoom_to_selection,
+                ", programmaticZoomAnimating=", window.programmaticZoomAnimating,
+                ", programmaticZoomInProgress=", window.programmaticZoomInProgress
+            );
+
+            // --- Condition: Skip until any non-selection-driven zoom cycle completes ---
+            // (Allow immediate style-refresh for a click selection or unit filter change even if zoom_to_selection is pending.)
+            if (mapState.zoom_to_selection && !isSelection && !isUnitFilterChange) {
+                console.log("Client (Cb9 - Refresh): Skipping update (zoom_to_selection flag still set).");
+                return window.dash_clientside.no_update;
             }
-            
-            if (window.programmaticZoomAnimating || window.programmaticZoomInProgress) {
-                 console.log(`Client (Cb9 - Refresh): Skipping update (JS zoom flags still active - animating: ${window.programmaticZoomAnimating}, inProgress: ${window.programmaticZoomInProgress}).`);
-                 // Add a fallback: if flags have been stuck for too long, reset them
-                 const now = Date.now();
-                 if (!window.lastZoomFlagCheck) window.lastZoomFlagCheck = now;
-                 if (now - window.lastZoomFlagCheck > 3000) { // 3 second timeout
-                     console.warn("Client (Cb9 - Refresh): Zoom flags stuck for >3s, force clearing them.");
-                     window.programmaticZoomAnimating = false;
-                     window.programmaticZoomInProgress = false;
-                     window.lastZoomFlagCheck = now;
-                     // Don't return no_update, let it continue to refresh
-                 } else {
-                     window.lastZoomFlagCheck = now;
-                     return window.dash_clientside.no_update;
-                 }
+
+            if ((window.programmaticZoomAnimating || window.programmaticZoomInProgress) && !isSelection && !isUnitFilterChange) {
+                console.log(`Client (Cb9 - Refresh): Skipping update (JS zoom flags still active - animating: ${window.programmaticZoomAnimating}, inProgress: ${window.programmaticZoomInProgress}).`);
+                // Add a fallback: if flags have been stuck for too long, reset them
+                const now = Date.now();
+                if (!window.lastZoomFlagCheck) window.lastZoomFlagCheck = now;
+                if (now - window.lastZoomFlagCheck > 3000) { // 3 second timeout
+                    console.warn("Client (Cb9 - Refresh): Zoom flags stuck for >3s, force clearing them.");
+                    window.programmaticZoomAnimating = false;
+                    window.programmaticZoomInProgress = false;
+                    window.lastZoomFlagCheck = now;
+                    // Don't return no_update, let it continue to refresh
+                } else {
+                    window.lastZoomFlagCheck = now;
+                    return window.dash_clientside.no_update;
+                }
             } else {
                 // Reset timeout tracker when flags are clear
                 window.lastZoomFlagCheck = null;
@@ -679,10 +760,15 @@ def register_clientside_callbacks(app: Dash):
         }
         """,
         Output('refresh-handled', 'data'),
-        Input("map-state", "data"),
+        Input("map-click-add-trigger", "data"),
+        Input("map-click-remove-trigger", "data"),
+        Input("map-moveend-trigger", "data"),
+        Input("zoom-cleanup-trigger-store", "data"),
+        Input({'type': 'unit-filter', 'unit': ALL}, 'n_clicks'),
+        State("map-state", "data"),
         prevent_initial_call=True
     )
-    
+
 
     # *** NEW Callback #10: Performs State Cleanup Triggered by zoom completion ***
     app.clientside_callback(
@@ -727,6 +813,64 @@ def register_clientside_callbacks(app: Dash):
         State("map-state", "data"), # Get the current map-state to modify
         prevent_initial_call=True
     )
+
+    # Callback #11 - Place Disambiguation Auto-Zoom (clientside for performance)
+    app.clientside_callback(
+        """
+        function(mapState) {
+            console.log("Client (Cb11): Place disambiguation auto-zoom callback triggered");
+
+            if (!mapState || !mapState.place_disambiguation || !mapState.show_place_disambiguation) {
+                console.log("Client (Cb11): No place disambiguation data, no auto-zoom needed");
+                return window.dash_clientside.no_update;
+            }
+
+            const places = mapState.place_disambiguation || [];
+            console.log("Client (Cb11): Processing auto-zoom for", places.length, "disambiguation places");
+
+            // Auto-zoom to show all markers
+            if (places.length > 0) {
+                setTimeout(() => {
+                    const mapElement = document.getElementById('leaflet-map');
+                    const map = mapElement?._leaflet_map;
+
+                    if (map) {
+                        console.log("Client (Cb11): Auto-zooming to show disambiguation markers");
+
+                        // Calculate bounds for all markers
+                        const lats = places.filter(p => p.lat && p.lon && !isNaN(p.lat) && !isNaN(p.lon)).map(p => p.lat);
+                        const lons = places.filter(p => p.lat && p.lon && !isNaN(p.lat) && !isNaN(p.lon)).map(p => p.lon);
+
+                        if (lats.length > 0 && lons.length > 0) {
+                            const minLat = Math.min(...lats);
+                            const maxLat = Math.max(...lats);
+                            const minLon = Math.min(...lons);
+                            const maxLon = Math.max(...lons);
+
+                            // Add some padding
+                            const latPadding = (maxLat - minLat) * 0.1 || 0.01;
+                            const lonPadding = (maxLon - minLon) * 0.1 || 0.01;
+
+                            const bounds = [
+                                [minLat - latPadding, minLon - lonPadding],
+                                [maxLat + latPadding, maxLon + lonPadding]
+                            ];
+
+                            console.log("Client (Cb11): Fitting map to bounds:", bounds);
+                            map.fitBounds(bounds, {padding: [20, 20]});
+                        }
+                    }
+                }, 500); // Small delay to ensure markers are rendered
+            }
+
+            return window.dash_clientside.no_update;
+        }
+        """,
+        Output('place-disambiguation-processed', 'data'),  # Dummy output instead of map-state
+        Input("map-state", "data"),
+        prevent_initial_call=True
+    )
+
     # # Add Clientside Callback for scrolling (optional but good UX)
     # app.clientside_callback(
     #     """
@@ -741,7 +885,7 @@ def register_clientside_callbacks(app: Dash):
     #             if (chatContainer) {
     #                  // Check if user is scrolled up significantly
     #                  const isScrolledUp = chatContainer.scrollHeight - chatContainer.scrollTop > chatContainer.clientHeight + 150; // 150px buffer
-                     
+
     #                  if (!isScrolledUp) { // Only scroll if user is near the bottom
     #                     // Using smooth scroll
     #                     // chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
@@ -759,5 +903,5 @@ def register_clientside_callbacks(app: Dash):
     #     Output('scroll-dummy-output', 'children'),
     #     Input('chat-display', 'children'), # Triggered by chat display updates
     #     prevent_initial_call=True
-    
+
     # )

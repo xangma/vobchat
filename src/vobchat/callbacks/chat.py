@@ -262,6 +262,9 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                     # Decide whether to stop or continue; currently continues.
             elif is_retrigger and initial_map_state.get('selected_polygons') and latest_state.next:
                 logger.info(f"Retrigger detected: Workflow is interrupted with next nodes: {latest_state.next}. Not syncing state to preserve interrupt.")
+            elif is_retrigger and initial_map_state.get('unit_types'):
+                # CRITICAL FIX: Handle unit type changes during retrigger
+                logger.info("Retrigger detected: Unit type changes may need map polygon refresh.")
 
 
             # --- Prepare inputs for the LangGraph workflow based on how this function was triggered ---
@@ -383,7 +386,7 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                 history.insert(0, html.Div(f"Streaming Error: {str(stream_exc)}", style={"color": "orange"}))
                 # Allow execution to continue to try and fetch the final state
 
-           # --- Post-Stream State Retrieval and Interrupt Handling ---
+            # --- Post-Stream State Retrieval and Interrupt Handling ---
             try:
                 logger.info("Post-stream processing: retrieving final workflow state.")
                 # Get the final state of the workflow for this thread
@@ -471,6 +474,54 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                                 })
                                 logger.info(f"After theme interrupt update - retrigger_chat: {app_state_async.get('retrigger_chat')}")
 
+                            # Clear any existing place disambiguation state from previous interrupts
+                            if not interrupt_updates.get("place_coordinates"):
+                                if map_state_async.get("show_place_disambiguation"):
+                                    logger.debug("Clearing place disambiguation state")
+                                    map_state_async.update({
+                                        "place_disambiguation": [],
+                                        "show_place_disambiguation": False
+                                    })
+
+                            # 1.5. Place Disambiguation with Coordinates: Show places on map for disambiguation
+                            if interrupt_updates.get("place_coordinates"):
+                                logger.debug("Place disambiguation interrupt with coordinates")
+                                place_coords = interrupt_updates.get("place_coordinates", [])
+                                logger.info(f"Processing place disambiguation with {len(place_coords)} coordinate locations")
+
+                                # Update map state to show disambiguation points
+                                map_state_async.update({
+                                    "place_disambiguation": place_coords,  # Add coordinates for map display
+                                    "show_place_disambiguation": True  # Flag to show disambiguation mode
+                                })
+
+                                # Keep existing button functionality
+                                options = interrupt_updates.get("options", [])
+                                buttons_to_render_async = [
+                                    dbc.Button(
+                                        opt["label"],
+                                        id={
+                                            "option_type": opt["option_type"],
+                                            "type": "dynamic-button-user-choice",
+                                            "index": opt["value"]
+                                        },
+                                        color="secondary",
+                                        className="unit-filter-button me-2 mb-2",
+                                        outline=True,
+                                        value=opt["value"],
+                                        style={"color": opt.get("color", "#333")}
+                                    )
+                                    for opt in options
+                                ]
+
+                                prompt_text = interrupt_updates.get("message", "Please choose:")
+                                interrupt_message = html.Div(f"{prompt_text}", className="speech-bubble ai-bubble")
+
+                                app_state_async.update({
+                                    "button_options": options,
+                                    "retrigger_chat": False,
+                                })
+
                             # 2. Map Selection Interrupt: Update map state to show/select units
                             elif interrupt_updates.get("current_node") == "select_unit_on_map":
                                 logger.debug("Map selection interrupt")
@@ -478,43 +529,33 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                                 selected_place_g_units = interrupt_updates.get("selected_place_g_units", [])
                                 selected_place_g_unit_types = interrupt_updates.get("selected_place_g_unit_types", [])
 
-                                # CRITICAL: Merge workflow selection with existing map selection for incremental processing
-                                # This ensures all processed units remain selected during incremental workflow execution
+                                # CRITICAL: Use workflow selection as authoritative for polygon state
+                                # This ensures removals are properly handled and workflow state is trusted
                                 workflow_polygons = [str(g_unit) for g_unit in selected_place_g_units]
                                 workflow_unit_types = selected_place_g_unit_types[:]  # Copy the list
-                                
-                                # Get existing map selection to preserve previously processed units
+
+                                # Get existing map selection for logging comparison
                                 existing_polygons = map_state_async.get("selected_polygons", [])
-                                existing_unit_types = map_state_async.get("selected_polygons_unit_types", [])
-                                
-                                # Merge workflow units with existing map selection (avoid duplicates)
-                                merged_polygons = list(existing_polygons)  # Start with existing
-                                merged_unit_types = list(existing_unit_types)
-                                
-                                for i, g_unit_str in enumerate(workflow_polygons):
-                                    if g_unit_str not in merged_polygons:
-                                        merged_polygons.append(g_unit_str)
-                                        if i < len(workflow_unit_types):
-                                            merged_unit_types.append(workflow_unit_types[i])
 
-                                logger.info(f"Map selection interrupt: Merging workflow units {workflow_polygons} with existing {existing_polygons}")
-                                logger.info(f"Map selection interrupt: Result: {merged_polygons}")
+                                logger.info(f"Map selection interrupt: Setting authoritative workflow units {workflow_polygons} (was {existing_polygons})")
 
-                                # Set the merged selection (preserves incremental processing)
-                                map_state_async["selected_polygons"] = merged_polygons
-                                map_state_async["selected_polygons_unit_types"] = merged_unit_types
+                                # Set the authoritative selection from workflow (don't merge with existing)
+                                map_state_async["selected_polygons"] = workflow_polygons
+                                map_state_async["selected_polygons_unit_types"] = workflow_unit_types
 
-                                # Store unit types
-                                map_state_async["unit_types"] = selected_place_g_unit_types
-                                
+                                # CRITICAL: Keep filter selection (unit_types) separate from polygon types
+                                # map_state_async["unit_types"] represents the user's active filter choice
+                                # selected_place_g_unit_types represents actual types of selected polygons
+                                # These are different concepts - don't override polygon types with filter selection
+
                                 # ENHANCED: Always zoom to show all selected polygons after each place is processed
                                 # This provides immediate visual feedback for each polygon selection
                                 current_place_index = interrupt_updates.get("current_place_index", 0)
                                 extracted_place_names = interrupt_updates.get("extracted_place_names", [])
                                 total_places = len(extracted_place_names)
-                                
-                                # Always trigger zoom when new polygons are added to show immediate feedback
-                                if merged_polygons:
+
+                                # Always trigger zoom when polygons are selected to show immediate feedback
+                                if workflow_polygons:
                                     logger.info(f"Map selection interrupt: Setting zoom_to_selection=True for immediate visual feedback (place {current_place_index + 1} of {total_places})")
                                     map_state_async["zoom_to_selection"] = True # Flag to tell the map component to zoom
                                     # Reset the workflow zoom flag for the next potential workflow run
@@ -526,8 +567,8 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                                 # Flag indicating a programmatic change is pending (might be used by map callbacks)
                                 # map_state_async["programmatic_unit_change_pending"] = interrupt_updates.get("selected_place_g_unit_types", [])
                                 interrupt_updates.update({
-                                    "selected_polygons": merged_polygons,
-                                    "selected_polygons_unit_types": merged_unit_types,
+                                    "selected_polygons": workflow_polygons,
+                                    "selected_polygons_unit_types": workflow_unit_types,
                                 })
                                 # Set the retrigger flag in app_state. This will be picked up by the
                                 # 'retrigger_chat_callback' which will then trigger this main 'update_chat'
@@ -746,27 +787,14 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
 
         if ctx_trigger == 'map-click-add-trigger.data' and map_add_payload is not None:
             logger.info(f"Map click (Add) detected. Payload: {map_add_payload}")
-            place_name = map_add_payload.get("name", map_add_payload.get("id", "Unknown Place"))
+            # Build AddPlace intent for any polygon click, using name and optional polygon_id
+            id_str = str(map_add_payload.get("id", ""))
             unit_type = map_add_payload.get("type")
-
-            # Check if this is a direct polygon ID selection (no actual place name)
-            is_polygon_id = place_name and place_name.isdigit()
-            if is_polygon_id:
-                # For polygon IDs, directly update the state without going through place lookup
-                polygon_id = int(place_name)
-                place_display_name = f"Polygon {place_name}"
-                logger.info(f"Direct polygon selection: {place_display_name}")
-
-                # Directly add to selection state
-                map_intent_payload = None  # Skip intent processing
-                # We'll handle this case separately below
-            else:
-                # Normal place name - use existing workflow
-                # But also preserve polygon ID if available
-                place_args = {"place": place_name, "unit_type": unit_type}
-                if "id" in map_add_payload and map_add_payload["id"].isdigit():
-                    place_args["polygon_id"] = int(map_add_payload["id"])
-                map_intent_payload = {"intent": AssistantIntent.ADD_PLACE.value, "arguments": place_args}
+            place_name = map_add_payload.get("name", map_add_payload.get("id", "Unknown Place"))
+            place_args = {"place": place_name, "unit_type": unit_type}
+            if id_str.isdigit():
+                place_args["polygon_id"] = int(id_str)
+            map_intent_payload = {"intent": AssistantIntent.ADD_PLACE.value, "arguments": place_args}
             state_updates_for_map_click = {
                 "last_intent_payload": map_intent_payload,
                 "retrigger_chat": True, # Set the retrigger flag to true
@@ -780,23 +808,14 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
 
         elif ctx_trigger == 'map-click-remove-trigger.data' and map_remove_payload is not None:
             logger.info(f"Map click (Remove) detected. Payload: {map_remove_payload}")
-            place_name = map_remove_payload.get("name", map_remove_payload.get("id", "Unknown Place"))
+            # Build RemovePlace intent for any polygon deselect, using name and optional polygon_id
+            id_str = str(map_remove_payload.get("id", ""))
             unit_type = map_remove_payload.get("unit_type")
-
-            # Check if this is a direct polygon ID selection (no actual place name)
-            is_polygon_id = place_name and place_name.isdigit()
-            if is_polygon_id:
-                # For polygon IDs, handle removal directly
-                polygon_id = int(place_name)
-                place_display_name = f"Polygon {place_name}"
-                logger.info(f"Direct polygon removal: {place_display_name}")
-
-                # Directly remove from selection state
-                map_intent_payload = None  # Skip intent processing
-                # We'll handle this case separately below
-            else:
-                # Normal place name - use existing workflow
-                map_intent_payload = {"intent": AssistantIntent.REMOVE_PLACE.value, "arguments": {"place": place_name, "unit_type": unit_type}}
+            place_name = map_remove_payload.get("name", map_remove_payload.get("id", "Unknown Place"))
+            place_args = {"place": place_name, "unit_type": unit_type}
+            if id_str.isdigit():
+                place_args["polygon_id"] = int(id_str)
+            map_intent_payload = {"intent": AssistantIntent.REMOVE_PLACE.value, "arguments": place_args}
             state_updates_for_map_click = {
                 "last_intent_payload": map_intent_payload,
                 "retrigger_chat": True, # Set the retrigger flag to true
@@ -814,145 +833,9 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
             clear_remove_trigger = dash.no_update
 
 
-        # Handle direct polygon operations (bypass the normal workflow)
-        if triggered_by_map_click and (
-            (ctx_trigger == 'map-click-add-trigger.data' and map_add_payload and map_add_payload.get("name", "").isdigit()) or
-            (ctx_trigger == 'map-click-remove-trigger.data' and map_remove_payload and map_remove_payload.get("name", "").isdigit())
-        ):
-            try:
-                # Get current state
-                latest_state = asyncio.run(compiled_workflow.aget_state(config))
-                current_state_values = latest_state.values if latest_state else {}
-
-                if ctx_trigger == 'map-click-add-trigger.data':
-                    polygon_id = int(map_add_payload.get("name"))
-                    unit_type = map_add_payload.get("type")
-                    place_display_name = f"Polygon {polygon_id}"
-
-                    # Directly add to the relevant state lists
-                    selected_units = list(current_state_values.get("selected_place_g_units", []))
-                    selected_names = list(current_state_values.get("extracted_place_names", []))
-                    selected_unit_types = list(current_state_values.get("selected_place_g_unit_types", []))
-                    selected_polygons = list(current_state_values.get("selected_polygons", []))
-                    selected_polygon_types = list(current_state_values.get("selected_polygons_unit_types", []))
-
-                    if polygon_id not in selected_units:
-                        selected_units.append(polygon_id)
-                        selected_names.append(place_display_name)
-                        if unit_type:
-                            selected_unit_types.append(unit_type)
-                            selected_polygon_types.append(unit_type)
-                        if polygon_id not in selected_polygons:
-                            selected_polygons.append(polygon_id)
-
-                        # Create a fake place entry to avoid workflow resolution issues
-                        places = list(current_state_values.get("places", []))
-                        fake_place = {
-                            "name": place_display_name,
-                            "candidate_rows": [],
-                            "g_place": polygon_id,  # Use polygon_id as place ID
-                            "unit_rows": [{"g_unit": polygon_id, "g_unit_type": unit_type}],
-                            "g_unit": polygon_id,
-                            "g_unit_type": unit_type,
-                        }
-                        places.append(fake_place)
-
-                        # Update state directly
-                        direct_state_update = {
-                            "selected_place_g_units": selected_units,
-                            "extracted_place_names": selected_names,
-                            "selected_place_g_unit_types": selected_unit_types,
-                            "selected_polygons": selected_polygons,
-                            "selected_polygons_unit_types": selected_polygon_types,
-                            "places": places,
-                            "current_place_index": len(places),  # Mark as processed
-                            # CRITICAL: Clear selection_idx for direct polygon operations
-                            "selection_idx": None,
-                        }
-
-                        asyncio.run(compiled_workflow.aupdate_state(config=config, values=direct_state_update, as_node="agent_node"))
-
-                        # Add confirmation message
-                        chat_history.insert(0, html.Div(f"Added {place_display_name} to selection", className="speech-bubble ai-bubble"))
-                        logger.info(f"Direct polygon add successful: {place_display_name}")
-
-                elif ctx_trigger == 'map-click-remove-trigger.data':
-                    polygon_id = int(map_remove_payload.get("name"))
-                    place_display_name = f"Polygon {polygon_id}"
-
-                    # Directly remove from the relevant state lists
-                    selected_units = list(current_state_values.get("selected_place_g_units", []))
-                    selected_names = list(current_state_values.get("extracted_place_names", []))
-                    selected_unit_types = list(current_state_values.get("selected_place_g_unit_types", []))
-                    selected_polygons = list(current_state_values.get("selected_polygons", []))
-                    selected_polygon_types = list(current_state_values.get("selected_polygons_unit_types", []))
-
-                    # Remove by polygon ID
-                    indices_to_remove = []
-                    for i, unit_id in enumerate(selected_units):
-                        if unit_id == polygon_id:
-                            indices_to_remove.append(i)
-
-                    # Remove from all lists (in reverse order to maintain indices)
-                    for i in reversed(indices_to_remove):
-                        if i < len(selected_units):
-                            selected_units.pop(i)
-                        if i < len(selected_names):
-                            selected_names.pop(i)
-                        if i < len(selected_unit_types):
-                            selected_unit_types.pop(i)
-                        if i < len(selected_polygon_types):
-                            selected_polygon_types.pop(i)
-
-                    # Also remove from selected_polygons
-                    if polygon_id in selected_polygons:
-                        selected_polygons.remove(polygon_id)
-
-                    # Also remove from places list
-                    places = list(current_state_values.get("places", []))
-                    places = [p for p in places if p.get("g_unit") != polygon_id]
-
-                    # Update state directly
-                    direct_state_update = {
-                        "selected_place_g_units": selected_units,
-                        "extracted_place_names": selected_names,
-                        "selected_place_g_unit_types": selected_unit_types,
-                        "selected_polygons": selected_polygons,
-                        "selected_polygons_unit_types": selected_polygon_types,
-                        "places": places,
-                        "current_place_index": len(places),  # Update index
-                        # CRITICAL: Clear selection_idx for direct polygon operations
-                        "selection_idx": None,
-                    }
-
-                    asyncio.run(compiled_workflow.aupdate_state(config=config, values=direct_state_update, as_node="agent_node"))
-
-                    # Add confirmation message
-                    chat_history.insert(0, html.Div(f"Removed {place_display_name} from selection", className="speech-bubble ai-bubble"))
-                    logger.info(f"Direct polygon remove successful: {place_display_name}")
-
-            except Exception as direct_polygon_exc:
-                logger.error(f"Error in direct polygon operation: {direct_polygon_exc}", exc_info=True)
-                error_message = html.Div(f"Error processing polygon selection: {str(direct_polygon_exc)}", style={"color": "red"})
-                chat_history.insert(0, error_message)
-
-            # For direct polygon operations, return immediately without running the workflow
-            return (
-                chat_history,           # Updated chat history with confirmation
-                "",                     # Clear user input
-                app_state,              # Keep current app state
-                map_state,              # Keep current map state
-                place_state,            # Keep current place state
-                None,                   # Clear retrigger data
-                buttons or [],          # Keep current buttons
-                counts_store,           # Keep current counts
-                thread_id,              # Keep thread ID
-                clear_add_trigger,      # Clear the add trigger
-                clear_remove_trigger,   # Clear the remove trigger
-            )
 
         # Use asyncio.run to call the async state update *before* calling _run_async_logic (for normal workflow)
-        elif triggered_by_map_click and state_updates_for_map_click.get("last_intent_payload"):
+        if triggered_by_map_click and state_updates_for_map_click.get("last_intent_payload"):
             try:
                 logger.info(f"Updating persistent state for map click with payload: {state_updates_for_map_click}")
                 # *** Use asyncio.run here for the async state update ***

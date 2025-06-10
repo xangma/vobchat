@@ -67,13 +67,17 @@ function setupMapEventListeners(map) {
             // This ensures Cb10 runs at the right time to clear zoom_to_selection flag
             if (window.dash_clientside && window.dash_clientside.set_props) {
                 try {
-                    console.log("JS: map.on('zoomend') - Triggering delayed cleanup via store.");
-                    window.dash_clientside.set_props("zoom-cleanup-trigger-store", { 
-                        data: { 
-                            timestamp: Date.now(), 
+                    window._zoomCleanupCount = (window._zoomCleanupCount || 0) + 1;
+                    console.log(
+                        "JS: map.on('zoomend') - Triggering delayed cleanup via store – count:",
+                        window._zoomCleanupCount
+                    );
+                    window.dash_clientside.set_props("zoom-cleanup-trigger-store", {
+                        data: {
+                            timestamp: Date.now(),
                             triggered_by_cb8: true,
-                            zoom_completed: true 
-                        } 
+                            zoom_completed: true
+                        }
                     });
                 } catch (err) {
                     console.error("JS: map.on('zoomend') - Error triggering cleanup:", err);
@@ -249,12 +253,12 @@ window.polygon_management = {
         const context = { hideout: { selected: currentSelection } };
         let appliedCount = 0;
         let selectedCount = 0;
-        
+
         // Debug: Add stack trace to see which function called this
         const stack = new Error().stack;
         const caller = stack.split('\n')[2] ? stack.split('\n')[2].trim() : 'unknown';
         console.log(`JS: refreshLayerStyles: Processing ${Object.keys(geojsonLayer._layers).length} layers with selection:`, currentSelection, `Called from: ${caller}`);
-        
+
         Object.values(geojsonLayer._layers).forEach(layer => {
             if (layer.feature && typeof layer.setStyle === 'function') {
                 const featureId = layer.feature.id;
@@ -262,21 +266,12 @@ window.polygon_management = {
                 const featureName = layer.feature.properties?.g_unit_name || 'unnamed';
                 const isSelected = currentSelection.includes(featureIdStr);
                 if (isSelected) selectedCount++;
-                
-                // Debug specific features we're tracking
-                if (featureIdStr === '10135760' || featureIdStr === '10073297') {
-                    console.log(`JS: refreshLayerStyles: DEBUG - Feature ${featureId} (${featureName}): isSelected = ${isSelected}, in selection = ${currentSelection.includes(featureIdStr)}`);
-                }
-                
+
                 try {
                     const style = styleFunction(layer.feature, context);
                     if (style) {
                         layer.setStyle(style);
                         appliedCount++;
-                        // Log for selected features and our tracked features
-                        if (isSelected || featureIdStr === '10135760' || featureIdStr === '10073297') {
-                            console.log(`JS: refreshLayerStyles: Applied ${isSelected ? 'SELECTED' : 'UNSELECTED'} style to feature ${featureId} (${featureName})`);
-                        }
                     } else {
                         console.warn("JS: Style function returned undefined for feature:", layer.feature.id);
                     }
@@ -424,7 +419,7 @@ window.polygon_management = {
     fetchPolygonsByIds: function (map, mapState, unitType, ids, yearRange = null, selectedPolygons = null) { // Added selectedPolygons parameter
         const requestId = `req-id-${Date.now().toString(36)}`;
         console.log(`JS (${requestId}): Fetching polygons by ID. UnitType: ${unitType}, Count: ${ids.length}`);
-        
+
         // Debug cache contents before processing
         this.debugCacheContents();
 
@@ -529,57 +524,25 @@ window.polygon_management = {
                 const currentLayerIds = new Set(Object.values(geojsonLayer._layers).map(l => l.feature?.id).filter(id => id != null).map(id => String(id)));
                 console.log(`JS (${requestId}): DEBUG - Current layer IDs: [${Array.from(currentLayerIds).join(', ')}]`);
                 console.log(`JS (${requestId}): DEBUG - Features to add IDs: [${featuresToAdd.map(f => f.id).join(', ')}]`);
-                
+
                 const featuresToAddFiltered = featuresToAdd.filter(f => {
                     const isAlreadyOnLayer = f.id != null && currentLayerIds.has(String(f.id));
                     console.log(`JS (${requestId}): DEBUG - Feature ${f.id}: already on layer = ${isAlreadyOnLayer}`);
                     return f.id != null && !isAlreadyOnLayer;
                 });
-                
+
 
                 if (featuresToAddFiltered.length > 0) {
                     console.log(`JS (${requestId}): Adding ${featuresToAddFiltered.length} features (cached + fetched) to map layer.`);
                     const geoJsonData = { type: "FeatureCollection", features: featuresToAddFiltered };
                     geojsonLayer.addData(geoJsonData);
                     featuresActuallyAddedToLayer.push(...featuresToAddFiltered);
-                    
-                    // Refresh styles for the whole layer after adding features
-                    try {
-                        const currentSelection = selectedPolygons || mapState?.selected_polygons || [];
-                        this.refreshLayerStyles(geojsonLayer, currentSelection);
-                        console.log(`JS (${requestId}): Refreshed styles after adding features by ID.`);
-                    } catch (e) {
-                        console.warn(`JS (${requestId}): Could not refresh styles after adding features:`, e);
-                    }
+
                 } else {
                     console.log(`JS (${requestId}): All requested/fetched features were already on the layer.`);
-                    // Still refresh styles even if no new features were added, to ensure highlighting is applied
-                    try {
-                        const currentSelection = selectedPolygons || mapState?.selected_polygons || [];
-                        // Use setTimeout to ensure DOM has updated before style refresh
-                        const self = this;
-                        setTimeout(() => {
-                            self.refreshLayerStyles(geojsonLayer, currentSelection);
-                            console.log(`JS (${requestId}): Refreshed styles for existing features (delayed).`);
-                        }, 10);
-                    } catch (e) {
-                        console.warn(`JS (${requestId}): Could not refresh styles for existing features:`, e);
-                    }
                 }
             } else {
                 console.log(`JS (${requestId}): No features (cached or fetched) to add to layer.`);
-                // Still refresh styles to ensure highlighting is applied
-                try {
-                    const currentSelection = selectedPolygons || mapState?.selected_polygons || [];
-                    // Use setTimeout to ensure DOM has updated before style refresh
-                    const self = this;
-                    setTimeout(() => {
-                        self.refreshLayerStyles(geojsonLayer, currentSelection);
-                        console.log(`JS (${requestId}): Refreshed styles for polygon highlighting (delayed).`);
-                    }, 10);
-                } catch (e) {
-                    console.warn(`JS (${requestId}): Could not refresh styles:`, e);
-                }
             }
 
             // Return only the features that were actually added in this run
@@ -668,15 +631,15 @@ window.polygon_management = {
 
         console.log(`JS: zoomTo: DEBUG - Selected IDs for zoom: [${selectedIds ? selectedIds.join(', ') : 'ALL'}]`);
         console.log(`JS: zoomTo: DEBUG - Layer has ${Object.keys(layerToUse._layers).length} total features`);
-        
+
         Object.values(layerToUse._layers).forEach(layer => {
             if (layer.feature && typeof layer.getBounds === 'function') {
                 const featureId = layer.feature.id;
                 const featureName = layer.feature.properties?.g_unit_name || 'unnamed';
                 const includeFeature = !useSelection || (featureId != null && selectedIds.includes(String(featureId)));
-                
+
                 console.log(`JS: zoomTo: DEBUG - Feature ${featureId} (${featureName}): included = ${includeFeature}`);
-                
+
                 if (includeFeature) {
                     try {
                         targetBounds.extend(layer.getBounds());

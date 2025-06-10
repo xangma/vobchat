@@ -127,7 +127,7 @@ def ShowState_node(state: lg_State):
 def ListThemesForSelection_node(state: lg_State):
     g_units = state.get("selected_place_g_units", [])
     if not g_units:
-        _append_ai(state, "Pick a place first so I can list its themes.")
+        _append_ai(state, "No place selected yet.")
         return state
 
     rows = []
@@ -207,10 +207,23 @@ def AddPlace_node(state: lg_State):
         return state
 
     # ── extend the existing queues ─────────────────────────────────
-    names    = state.get("extracted_place_names", [])
-    counties = state.get("extracted_counties", [])
-    unit_types = state.get("extracted_unit_types", [])
-    polygon_ids = state.get("extracted_polygon_ids", [])
+    # CRITICAL: For map clicks with polygon_id, replace existing data instead of extending
+    # This prevents stale unit types from accumulating
+    is_map_click_replacement = "polygon_id" in args and len(names_to_add) == 1
+    
+    if is_map_click_replacement:
+        # Replace existing data for map click replacements
+        names = []
+        counties = []
+        unit_types = []
+        polygon_ids = []
+        logger.info("AddPlace_node: Map click replacement detected - clearing existing extracted data")
+    else:
+        # Extend existing data for text-based additions
+        names    = state.get("extracted_place_names", [])
+        counties = state.get("extracted_counties", [])
+        unit_types = state.get("extracted_unit_types", [])
+        polygon_ids = state.get("extracted_polygon_ids", [])
 
     for idx, p in enumerate(names_to_add):
         names.append(p)
@@ -490,12 +503,17 @@ def RemovePlace_node(state: lg_State):
         except Exception:          # defensive - fallback to clearing
             cubes_filtered = pd.DataFrame(columns=["g_unit"])
 
+    # CRITICAL: Persist the filtered cube data back to state to prevent old data from persisting
     if len(cubes_filtered) > 0:
         show_viz = True
-        cubes_filtered = cubes_filtered.to_json(orient="records")
+        cubes_filtered_json = cubes_filtered.to_json(orient="records")
+        state["selected_cubes"] = cubes_filtered_json  # Persist filtered cubes
+        logger.info(f"RemovePlace_node: Filtered and persisted {len(cubes_filtered)} cube rows for remaining units {remaining_units}")
     else:
         show_viz = False
-        cubes_filtered = []
+        cubes_filtered_json = []
+        state["selected_cubes"] = None  # Clear all cube data when no units remain
+        logger.info("RemovePlace_node: Cleared all cube data (no remaining units)")
 
     interrupt(value={
     "message": f"Removed {place} from the selection.",

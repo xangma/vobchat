@@ -4,14 +4,14 @@
 document.addEventListener('DOMContentLoaded', function() {
     console.log("DOM loaded, initializing visualization enhancements");
     initializeVisualizationEnhancements();
-    
+
     // Set up a mutation observer to watch for visualization area being added to the DOM
     const bodyObserver = new MutationObserver(function(mutations) {
         mutations.forEach(function(mutation) {
             if (mutation.addedNodes && mutation.addedNodes.length) {
                 for (let i = 0; i < mutation.addedNodes.length; i++) {
                     const node = mutation.addedNodes[i];
-                    if (node.id === 'visualization-area' || 
+                    if (node.id === 'visualization-area' ||
                         (node.querySelector && node.querySelector('#visualization-area'))) {
                         console.log("Visualization area detected in DOM changes");
                         setTimeout(initializeVisualizationEnhancements, 100);
@@ -21,22 +21,22 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     });
-    
+
     // Start observing the document with the configured parameters
     bodyObserver.observe(document.body, { childList: true, subtree: true });
 });
 
 // Also check periodically for the visualization area to appear
-setInterval(function() {
-    const visualizationArea = document.getElementById('visualization-area');
-    if (visualizationArea) {
-        const computedStyle = window.getComputedStyle(visualizationArea);
-        if (computedStyle.display !== 'none' && !visualizationArea.querySelector('.viz-control-panel')) {
-            console.log("Visualization area is visible but missing controls - reinitializing");
-            initializeVisualizationEnhancements();
-        }
-    }
-}, 1000);
+// setInterval(function() {
+//     const visualizationArea = document.getElementById('visualization-area');
+//     if (visualizationArea) {
+//         const computedStyle = window.getComputedStyle(visualizationArea);
+//         if (computedStyle.display !== 'none' && !visualizationArea.querySelector('.viz-control-panel')) {
+//             console.log("Visualization area is visible but missing controls - reinitializing");
+//             initializeVisualizationEnhancements();
+//         }
+//     }
+// }, 1000);
 
 function initializeVisualizationEnhancements() {
     // Wait for the visualization area to be available
@@ -54,8 +54,8 @@ function initializeVisualizationEnhancements() {
     makeVisualizationResizable();
 
     // Listen for visibility changes
-    observeVisualizationVisibility();
-    
+    // observeVisualizationVisibility();
+
     // Force a check of current visibility status
     updateVisualizationControls(visualizationArea.style.display !== 'none');
 }
@@ -63,15 +63,15 @@ function initializeVisualizationEnhancements() {
 function createVisualizationControls() {
     const visualizationArea = document.getElementById('visualization-area');
     if (!visualizationArea) return;
-    
+
     // Check if control panel already exists
     if (visualizationArea.querySelector('.viz-control-panel')) {
         console.log("Control panel already exists, skipping creation");
         return;
     }
-    
+
     console.log("Creating visualization control panel");
-    
+
     // Create a control panel for the visualization area
     const controlPanel = document.createElement('div');
     controlPanel.className = 'viz-control-panel';
@@ -94,7 +94,7 @@ function createVisualizationControls() {
             </button>
         </div>
     `;
-    
+
     // Save original position and size before any transforms (if not already saved)
     if (!visualizationArea.dataset.originalPosition) {
         visualizationArea.dataset.originalPosition = JSON.stringify({
@@ -105,40 +105,40 @@ function createVisualizationControls() {
             height: '100%'
         });
     }
-    
+
     // Add the control panel to the visualization area
     visualizationArea.insertBefore(controlPanel, visualizationArea.firstChild);
-    
+
     // Add event listeners for the control buttons
     const popoutButton = controlPanel.querySelector('.viz-popout');
     const minimizeButton = controlPanel.querySelector('.viz-minimize');
     const maximizeButton = controlPanel.querySelector('.viz-maximize');
     const closeButton = controlPanel.querySelector('.viz-close');
-    
+
     if (popoutButton) popoutButton.addEventListener('click', openVisualizationInNewWindow);
     if (minimizeButton) minimizeButton.addEventListener('click', minimizeVisualization);
     if (maximizeButton) maximizeButton.addEventListener('click', maximizeVisualization);
     if (closeButton) closeButton.addEventListener('click', closeVisualization);
-    
+
 }
 
 function makeVisualizationDraggable() {
     const visualizationArea = document.getElementById('visualization-area');
     const handle = visualizationArea.querySelector('.viz-control-handle');
-    
+
     let isDragging = false;
     let offsetX, offsetY;
-    
+
     handle.addEventListener('mousedown', function(e) {
         // Only make draggable when in floating mode
         if (visualizationArea.classList.contains('viz-floating')) {
             isDragging = true;
-            
+
             // Calculate the offset from the mouse position to the visualization area's top-left corner
             const rect = visualizationArea.getBoundingClientRect();
             offsetX = e.clientX - rect.left;
             offsetY = e.clientY - rect.top;
-            
+
             // Set initial position if not already positioned
             if (!visualizationArea.style.position || visualizationArea.style.position === 'relative') {
                 visualizationArea.style.position = 'fixed';
@@ -147,27 +147,27 @@ function makeVisualizationDraggable() {
                 visualizationArea.style.width = rect.width + 'px';
                 visualizationArea.style.height = rect.height + 'px';
             }
-            
+
             // Add a temporary class for styling during drag
             visualizationArea.classList.add('viz-dragging');
-            
+
             // Prevent text selection during drag
             e.preventDefault();
         }
     });
-    
+
     document.addEventListener('mousemove', function(e) {
         if (!isDragging) return;
-        
+
         // Calculate new position
         const newLeft = e.clientX - offsetX;
         const newTop = e.clientY - offsetY;
-        
+
         // Update position
         visualizationArea.style.left = newLeft + 'px';
         visualizationArea.style.top = newTop + 'px';
     });
-    
+
     document.addEventListener('mouseup', function() {
         if (isDragging) {
             isDragging = false;
@@ -179,19 +179,19 @@ function makeVisualizationDraggable() {
 function makeVisualizationResizable() {
     const visualizationArea = document.getElementById('visualization-area');
     if (!visualizationArea) return;
-    
+
     // Check if resize handles already exist
     if (visualizationArea.querySelector('.viz-resize-handles')) {
         console.log("Resize handles already exist, skipping creation");
         return;
     }
-    
+
     console.log("Creating visualization resize handles");
-    
+
     // Add resize handles
     const resizeHandles = document.createElement('div');
     resizeHandles.className = 'viz-resize-handles';
-    
+
     // Create resize handles for different directions
     const directions = ['n', 'e', 's', 'w', 'ne', 'se', 'sw', 'nw'];
     directions.forEach(direction => {
@@ -199,14 +199,14 @@ function makeVisualizationResizable() {
         handle.className = `viz-resize-handle viz-resize-${direction}`;
         resizeHandles.appendChild(handle);
     });
-    
+
     visualizationArea.appendChild(resizeHandles);
-    
+
     // Set up resize functionality
     let isResizing = false;
     let currentHandle = null;
     let startX, startY, startWidth, startHeight, startTop, startLeft;
-    
+
     // Add event listeners to all resize handles
     const handles = visualizationArea.querySelectorAll('.viz-resize-handle');
     handles.forEach(handle => {
@@ -215,7 +215,7 @@ function makeVisualizationResizable() {
             if (visualizationArea.classList.contains('viz-floating')) {
                 isResizing = true;
                 currentHandle = this;
-                
+
                 const rect = visualizationArea.getBoundingClientRect();
                 startX = e.clientX;
                 startY = e.clientY;
@@ -223,114 +223,114 @@ function makeVisualizationResizable() {
                 startHeight = rect.height;
                 startTop = rect.top;
                 startLeft = rect.left;
-                
+
                 // Add a class for styling during resize
                 visualizationArea.classList.add('viz-resizing');
-                
+
                 // Prevent text selection during resize
                 e.preventDefault();
             }
         });
     });
-    
+
     document.addEventListener('mousemove', function(e) {
         if (!isResizing) return;
-        
+
         // Calculate changes in position and size
         const deltaX = e.clientX - startX;
         const deltaY = e.clientY - startY;
-        
+
         // Determine which direction to resize based on the handle class
-        if (currentHandle.classList.contains('viz-resize-e') || 
-            currentHandle.classList.contains('viz-resize-ne') || 
+        if (currentHandle.classList.contains('viz-resize-e') ||
+            currentHandle.classList.contains('viz-resize-ne') ||
             currentHandle.classList.contains('viz-resize-se')) {
             // East (right) resize
             visualizationArea.style.width = (startWidth + deltaX) + 'px';
         }
-        
-        if (currentHandle.classList.contains('viz-resize-w') || 
-            currentHandle.classList.contains('viz-resize-nw') || 
+
+        if (currentHandle.classList.contains('viz-resize-w') ||
+            currentHandle.classList.contains('viz-resize-nw') ||
             currentHandle.classList.contains('viz-resize-sw')) {
             // West (left) resize
             visualizationArea.style.width = (startWidth - deltaX) + 'px';
             visualizationArea.style.left = (startLeft + deltaX) + 'px';
         }
-        
-        if (currentHandle.classList.contains('viz-resize-n') || 
-            currentHandle.classList.contains('viz-resize-ne') || 
+
+        if (currentHandle.classList.contains('viz-resize-n') ||
+            currentHandle.classList.contains('viz-resize-ne') ||
             currentHandle.classList.contains('viz-resize-nw')) {
             // North (top) resize
             visualizationArea.style.height = (startHeight - deltaY) + 'px';
             visualizationArea.style.top = (startTop + deltaY) + 'px';
         }
-        
-        if (currentHandle.classList.contains('viz-resize-s') || 
-            currentHandle.classList.contains('viz-resize-se') || 
+
+        if (currentHandle.classList.contains('viz-resize-s') ||
+            currentHandle.classList.contains('viz-resize-se') ||
             currentHandle.classList.contains('viz-resize-sw')) {
             // South (bottom) resize
             visualizationArea.style.height = (startHeight + deltaY) + 'px';
         }
     });
-    
+
     document.addEventListener('mouseup', function() {
         if (isResizing) {
             isResizing = false;
             currentHandle = null;
             visualizationArea.classList.remove('viz-resizing');
-            
+
             // Trigger a window resize event to redraw the plot
             window.dispatchEvent(new Event('resize'));
         }
     });
 }
 
-function observeVisualizationVisibility() {
-    const visualizationArea = document.getElementById('visualization-area');
-    
-    // Create a MutationObserver to watch for style changes
-    const observer = new MutationObserver(function(mutations) {
-        mutations.forEach(function(mutation) {
-            if (mutation.attributeName === 'style') {
-                const computedStyle = window.getComputedStyle(visualizationArea);
-                const isVisible = computedStyle.display !== 'none';
-                console.log("Visualization visibility changed:", isVisible);
-                updateVisualizationControls(isVisible);
-                
-                // If becoming visible and doesn't have control panel, recreate it
-                if (isVisible && !visualizationArea.querySelector('.viz-control-panel')) {
-                    console.log("Recreating visualization controls");
-                    createVisualizationControls();
-                    makeVisualizationDraggable();
-                    makeVisualizationResizable();
-                }
-            }
-        });
-    });
-    
-    // Start observing with more detailed configuration
-    observer.observe(visualizationArea, { 
-        attributes: true,
-        attributeFilter: ['style', 'class', 'data-was-hidden'],
-        attributeOldValue: true
-    });
-    
-    // Initial update
-    const computedStyle = window.getComputedStyle(visualizationArea);
-    const isVisible = computedStyle.display !== 'none';
-    updateVisualizationControls(isVisible);
-}
+// function observeVisualizationVisibility() {
+//     const visualizationArea = document.getElementById('visualization-area');
+
+//     // Create a MutationObserver to watch for style changes
+//     const observer = new MutationObserver(function(mutations) {
+//         mutations.forEach(function(mutation) {
+//             if (mutation.attributeName === 'style') {
+//                 const computedStyle = window.getComputedStyle(visualizationArea);
+//                 const isVisible = computedStyle.display !== 'none';
+//                 console.log("Visualization visibility changed:", isVisible);
+//                 updateVisualizationControls(isVisible);
+
+//                 // If becoming visible and doesn't have control panel, recreate it
+//                 if (isVisible && !visualizationArea.querySelector('.viz-control-panel')) {
+//                     console.log("Recreating visualization controls");
+//                     createVisualizationControls();
+//                     makeVisualizationDraggable();
+//                     makeVisualizationResizable();
+//                 }
+//             }
+//         });
+//     });
+
+//     // Start observing with more detailed configuration
+//     observer.observe(visualizationArea, {
+//         attributes: true,
+//         attributeFilter: ['style', 'class', 'data-was-hidden'],
+//         attributeOldValue: true
+//     });
+
+//     // Initial update
+//     const computedStyle = window.getComputedStyle(visualizationArea);
+//     const isVisible = computedStyle.display !== 'none';
+//     updateVisualizationControls(isVisible);
+// }
 
 function updateVisualizationControls(isVisible) {
     const visualizationArea = document.getElementById('visualization-area');
     if (!visualizationArea) return;
-    
+
     const resizeHandles = visualizationArea.querySelector('.viz-resize-handles');
     const controlPanel = visualizationArea.querySelector('.viz-control-panel');
-    
+
     console.log("Updating visualization controls:", isVisible);
     console.log("Control panel exists:", !!controlPanel);
     console.log("Resize handles exist:", !!resizeHandles);
-    
+
     if (isVisible) {
         // If becoming visible but missing controls, recreate them
         if (!controlPanel) {
@@ -339,7 +339,7 @@ function updateVisualizationControls(isVisible) {
         } else {
             controlPanel.style.display = '';
         }
-        
+
         if (!resizeHandles) {
             console.log("Creating missing resize handles");
             makeVisualizationResizable();
@@ -357,15 +357,15 @@ function openVisualizationInNewWindow() {
     // Get the current visualization content
     const visualizationArea = document.getElementById('visualization-area');
     const plotElement = document.getElementById('data-plot');
-    
+
     if (!plotElement) {
         console.warn('No plot element found to pop out');
         return;
     }
-    
+
     // Create a new window
     const newWindow = window.open('', 'DDME Visualization', 'width=800,height=600');
-    
+
     // Create content for the new window
     const html = `
         <!DOCTYPE html>
@@ -412,30 +412,30 @@ function openVisualizationInNewWindow() {
                 document.getElementById('closeButton').addEventListener('click', function() {
                     window.close();
                 });
-                
+
                 // Connect to parent window for data updates
                 window.addEventListener('message', function(event) {
                     if (event.data.type === 'plotlyData') {
                         Plotly.newPlot(
-                            'visualization-content', 
-                            event.data.data, 
-                            event.data.layout, 
+                            'visualization-content',
+                            event.data.data,
+                            event.data.layout,
                             event.data.config
                         );
                     }
                 });
-                
+
                 // Let parent know we're ready
                 window.opener.postMessage({ type: 'vizWindowReady' }, '*');
             </script>
         </body>
         </html>
     `;
-    
+
     // Write the HTML to the new window
     newWindow.document.write(html);
     newWindow.document.close();
-    
+
     // Setup message handler to send plot data to the new window
     window.addEventListener('message', function(event) {
         if (event.data.type === 'vizWindowReady') {
@@ -444,10 +444,10 @@ function openVisualizationInNewWindow() {
                 const plotlyDiv = document.getElementById('data-plot')._fullLayout._container;
                 const data = JSON.parse(JSON.stringify(plotlyDiv.data));
                 const layout = JSON.parse(JSON.stringify(plotlyDiv.layout));
-                
+
                 // Add responsive layout settings
                 layout.autosize = true;
-                
+
                 // Send the data to the new window
                 newWindow.postMessage({
                     type: 'plotlyData',
@@ -464,7 +464,7 @@ function openVisualizationInNewWindow() {
             }
         }
     });
-    
+
     // Focus the new window
     newWindow.focus();
 }
@@ -472,14 +472,14 @@ function openVisualizationInNewWindow() {
 function minimizeVisualization() {
     const visualizationArea = document.getElementById('visualization-area');
     const plotArea = document.getElementById('data-plot').parentNode;
-    
+
     if (!visualizationArea.classList.contains('viz-minimized')) {
         // Save current size before minimizing
         visualizationArea.dataset.savedStyle = JSON.stringify({
             width: visualizationArea.style.width,
             height: visualizationArea.style.height
         });
-        
+
         // Minimize by reducing height and keeping header visible
         plotArea.style.display = 'none';
         visualizationArea.style.height = '60px';
@@ -491,18 +491,18 @@ function minimizeVisualization() {
             visualizationArea.style.width = savedStyle.width;
             visualizationArea.style.height = savedStyle.height;
         }
-        
+
         plotArea.style.display = '';
         visualizationArea.classList.remove('viz-minimized');
     }
-    
+
     // Trigger resize event to redraw the plot
     window.dispatchEvent(new Event('resize'));
 }
 
 function maximizeVisualization() {
     const visualizationArea = document.getElementById('visualization-area');
-    
+
     if (!visualizationArea.classList.contains('viz-maximized')) {
         // Save current state before maximizing
         visualizationArea.dataset.savedStyle = JSON.stringify({
@@ -512,7 +512,7 @@ function maximizeVisualization() {
             width: visualizationArea.style.width,
             height: visualizationArea.style.height
         });
-        
+
         // Maximize to fill the entire screen
         visualizationArea.style.position = 'fixed';
         visualizationArea.style.top = '0';
@@ -541,21 +541,21 @@ function maximizeVisualization() {
             visualizationArea.style.height = originalPosition.height;
             visualizationArea.classList.remove('viz-floating');
         }
-        
+
         visualizationArea.style.zIndex = '';
         visualizationArea.classList.remove('viz-maximized');
     }
-    
+
     // Trigger resize event to redraw the plot
     window.dispatchEvent(new Event('resize'));
 }
 
 function closeVisualization() {
     const visualizationArea = document.getElementById('visualization-area');
-    
+
     // Hide the visualization area
     visualizationArea.style.display = 'none';
-    
+
     // Reset to original position
     if (visualizationArea.dataset.originalPosition) {
         const originalPosition = JSON.parse(visualizationArea.dataset.originalPosition);
@@ -565,17 +565,17 @@ function closeVisualization() {
         visualizationArea.style.width = originalPosition.width;
         visualizationArea.style.height = originalPosition.height;
     }
-    
+
     // Remove all transformation classes
     visualizationArea.classList.remove('viz-floating');
     visualizationArea.classList.remove('viz-maximized');
     visualizationArea.classList.remove('viz-minimized');
-    
+
     // Clear cube selection
     const cubeSelector = document.getElementById('cube-selector');
     if (cubeSelector) cubeSelector.value = null;
-    
-    // Trigger the clear visualization event 
+
+    // Trigger the clear visualization event
     const clearButton = document.getElementById('clear-plot-button');
     if (clearButton) clearButton.click();
 }

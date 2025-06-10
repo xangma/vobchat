@@ -10,7 +10,7 @@ import re  # For regular expression operations (e.g., postcode validation)
 import pandas as pd  # For data manipulation, primarily with database results
 from typing_extensions import TypedDict  # For defining the structure of the workflow state
 import logging  # For logging information and debugging
-# Import constant definitions for unit types from a local utility module  
+# Import constant definitions for unit types from a local utility module
 from vobchat.utils.constants import UNIT_TYPES
 # Import the function to get themes dynamically from database
 from vobchat.tools import get_all_themes
@@ -93,9 +93,9 @@ memory = MemorySaver() # This instance isn't actually used later, AsyncRedisSave
 # Specifies the model name and the API endpoint for the Ollama service.
 logger.info("Initializing language model...")
 model = ChatOllama(
-    model="deepseek-r1:latest",  # The specific Ollama model to use
+    model="deepseek-r1-wt:latest",  # The specific Ollama model to use
     base_url="http://localhost:11434/",  # URL of the Ollama API server
-    # default_options={"format": "json"},
+    # default_options={"format": "json"},``
     # base_url="https://148.197.150.162/ollama_api/",  # URL of the Ollama API server
     # client_kwargs={"verify": False}  # Disables SSL verification if needed (use cautiously)
 )
@@ -200,7 +200,7 @@ def _load_themes_from_db():
         # Fallback to minimal themes if database fails
         _themes_cache = {
             "T_POP": "Population",
-            "T_WK": "Work & Poverty", 
+            "T_WK": "Work & Poverty",
             "T_HOUS": "Housing"
         }
 
@@ -322,6 +322,25 @@ def multi_place_tool_call(state: lg_State) -> lg_State:
     unit_types  = state.get("extracted_unit_types", [])
     polygon_ids = state.get("extracted_polygon_ids", [])   # may be shorter
 
+    # Check if this is a map click replacement scenario (single place with polygon_id)
+    has_polygon_ids = any(pid is not None for pid in polygon_ids)
+    is_single_place_from_map = len(place_names) == 1 and has_polygon_ids
+    
+    if is_single_place_from_map:
+        # CRITICAL: Clear existing selections when replacing via map click
+        # This prevents stale unit types from persisting when user deselects and selects new polygons
+        old_units = state.get("selected_place_g_units", [])
+        old_unit_types = state.get("selected_place_g_unit_types", [])
+        old_places = state.get("selected_place_g_places", [])
+        logger.info(f"multi_place_tool_call: Map click replacement detected - clearing old selections: units={old_units}, unit_types={old_unit_types}, places={old_places}")
+        
+        state["selected_place_g_units"] = []
+        state["selected_place_g_unit_types"] = []
+        state["selected_place_g_places"] = []
+        logger.info("multi_place_tool_call: Cleared existing place selections for map click replacement")
+    else:
+        logger.info(f"multi_place_tool_call: Not a map click replacement (places={len(place_names)}, has_polygon_ids={has_polygon_ids}) - preserving existing selections")
+
     places: list[dict] = []
 
     for idx, place_name in enumerate(place_names):
@@ -331,9 +350,11 @@ def multi_place_tool_call(state: lg_State) -> lg_State:
         try:
             df = pd.read_json(
                 io.StringIO(
-                    find_places_by_name({"place_name": place_name,
-                                         "county": county,
-                                         "unit_type": unit_type})
+                    find_places_by_name.invoke({
+                        "place_name": place_name,
+                        "county": county,
+                        "unit_type": unit_type
+                    })
                 ),
                 orient="records",
             )
@@ -343,13 +364,16 @@ def multi_place_tool_call(state: lg_State) -> lg_State:
                          exc_info=True)
             candidate_rows = []
 
+        place_unit_type = unit_type if polygon_id else None
+        logger.info(f"multi_place_tool_call: Creating place '{place_name}' with g_unit={polygon_id}, g_unit_type='{place_unit_type}' (from unit_types[{idx}]='{unit_type}')")
+        
         places.append({
             "name":            place_name,
             "candidate_rows":  candidate_rows,
             "g_place":         None,
             "unit_rows":       [],        # filled later
             "g_unit":          polygon_id,  # Use polygon_id from map click if available
-            "g_unit_type":     unit_type if polygon_id else None,
+            "g_unit_type":     place_unit_type,
         })
 
     state["places"]        = places
@@ -428,6 +452,7 @@ def select_unit_on_map(state: lg_State) -> lg_State | Command:
             logger.info(f"select_unit_on_map: DEBUG - first_missing_index = {first_missing_index}")
             # Issue an interrupt to signal the frontend.
             # IMPORTANT: Must pass current_place_index to preserve it through the interrupt
+            logger.info(f"select_unit_on_map: About to interrupt with state data - units={state.get('selected_place_g_units', [])}, unit_types={state.get('selected_place_g_unit_types', [])}, places={state.get('selected_place_g_places', [])}")
             interrupt(value={
                  # Message might be displayed or just used internally by frontend.
                 # "message": f"Please confirm or select the area for '{state['extracted_place_names'][first_missing_index]}' on the map.",
@@ -636,7 +661,23 @@ def find_cubes_node(state: lg_State) -> lg_State | Command:
     # ──────────────────────────────────────────────────────────────────────────
     combined_df_list: list[pd.DataFrame] = []
     if not existing_cubes_df.empty:
-        combined_df_list.append(existing_cubes_df)
+        # CRITICAL: Filter existing cubes to only include currently selected units
+        # This prevents cube data from previously removed units from persisting
+        existing_cubes_filtered = existing_cubes_df[existing_cubes_df["g_unit"].isin(all_selected_unit_ids)]
+        if not existing_cubes_filtered.empty:
+            combined_df_list.append(existing_cubes_filtered)
+            logger.info(
+                "Filtered existing cubes: %d rows (from %d) for currently selected units %s",
+                len(existing_cubes_filtered),
+                len(existing_cubes_df),
+                all_selected_unit_ids,
+            )
+        else:
+            logger.info(
+                "No existing cubes match currently selected units %s (had %d rows for other units)",
+                all_selected_unit_ids,
+                len(existing_cubes_df),
+            )
     combined_df_list.extend(newly_fetched_dfs)
 
     if not combined_df_list:
@@ -755,8 +796,11 @@ def resolve_place_and_unit(state: lg_State) -> lg_State | Command:
             state["selected_place_g_units"] = selected_units
 
             selected_unit_types = state.get("selected_place_g_unit_types", [])
-            selected_unit_types.append(place.get("g_unit_type"))
+            new_unit_type = place.get("g_unit_type")
+            logger.info(f"resolve_place_and_unit: Adding unit_type '{new_unit_type}' to existing types {selected_unit_types}")
+            selected_unit_types.append(new_unit_type)
             state["selected_place_g_unit_types"] = selected_unit_types
+            logger.info(f"resolve_place_and_unit: Updated selected_place_g_unit_types to {state['selected_place_g_unit_types']}")
 
             # Also add to selected_place_g_places (using g_unit as placeholder since we don't have g_place)
             selected_places = state.get("selected_place_g_places", [])
@@ -792,9 +836,52 @@ def resolve_place_and_unit(state: lg_State) -> lg_State | Command:
                 }
                 for j, r in enumerate(rows)
             ]
+
+            # CRITICAL: Add coordinate data for map visualization of place disambiguation
+            place_coordinates = []
+            for j, r in enumerate(rows):
+                # Use lat/lon directly from PostGIS geometry if available
+                if r.get('lat') is not None and r.get('lon') is not None:
+                    try:
+                        lat = float(r['lat'])
+                        lon = float(r['lon'])
+
+                        # Validate coordinates
+                        import math
+                        if math.isnan(lat) or math.isnan(lon):
+                            logger.warning(f"NaN coordinates from database for {r['g_name']}: lat={lat}, lon={lon}")
+                            continue
+
+                        if math.isinf(lat) or math.isinf(lon):
+                            logger.warning(f"Infinite coordinates from database for {r['g_name']}: lat={lat}, lon={lon}")
+                            continue
+
+                        # Validate UK geographic bounds
+                        if not (49 <= lat <= 61 and -8 <= lon <= 2):
+                            logger.warning(f"Coordinates outside UK bounds for {r['g_name']}: lat={lat}, lon={lon}")
+                            continue
+
+                        logger.info(f"Using database geometry coordinates for {r['g_name']}: lat={lat}, lon={lon}")
+                        place_coordinates.append({
+                            "index": j,
+                            "name": r['g_name'],
+                            "county": r['county_name'],
+                            "lat": lat,
+                            "lon": lon,
+                            "g_place": r['g_place']
+                        })
+
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Error processing geometry coordinates for {r['g_name']}: {e}")
+                        continue
+
+                else:
+                    logger.info(f"Skipping {r['g_name']} - no geometry coordinates in database")
+
             interrupt(value={
                 "message": f"More than one “{place['name']}”. Please choose:",
                 "options": options,
+                "place_coordinates": place_coordinates,  # Add coordinates for map display
                 "current_node": "resolve_place_and_unit",
                 "current_place_index": i,
                 # CRITICAL: Clear selection_idx through interrupt to prevent stale values
@@ -1343,7 +1430,7 @@ def create_workflow(lg_state: TypedDict):
         CompiledStateGraph: The compiled LangGraph workflow instance ready for execution.
     """
     logger.info("Creating workflow graph...")
-    
+
     # Preload themes from database for immediate availability
     logger.info("Preloading themes from database...")
     themes = get_themes_dict()

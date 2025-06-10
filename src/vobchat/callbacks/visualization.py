@@ -22,17 +22,18 @@ def register_visualization_callbacks(app, compiled_workflow):
         Output("place-state", "data"),
         Output("visualization-area", "data-was-hidden"), # Keep this if JS uses it
         Input("app-state", "data"),
-        Input("map-state", "data"),  # Add map-state as input to trigger on polygon changes
+        # CRITICAL FIX: Remove map-state input to break circular dependency with clientside callback
+        # The visualization gets unit info from workflow state, not map state
         State("thread-id", "data"),
         State("place-state", "data"),
         State("visualization-area", "data-was-hidden"),
         State("cube-selector", "value"), # Add current cube selector value as State
         prevent_initial_call=True
     )
-    def handle_visualization_request(app_state, map_state, thread_id, place_state, current_visibility_data_attr, current_cube_selection):
+    def handle_visualization_request(app_state, thread_id, place_state, current_visibility_data_attr, current_cube_selection):
         import logging
         logger = logging.getLogger(__name__)
-        
+
         # Define styles for visible/hidden states
         # Style for the outer container
         visible_container_style = {"flex": "0 0 40%", "display": "flex"}
@@ -43,11 +44,12 @@ def register_visualization_callbacks(app, compiled_workflow):
 
         logger.info(f"Visualization callback triggered - app_state: {app_state is not None}, show_visualization: {app_state.get('show_visualization') if app_state else 'None'}")
         logger.info(f"Place state cubes: {bool(place_state.get('cubes') if place_state else False)}")
-        
+
         if not app_state or app_state.get("show_visualization") is False:
             logger.info("Hiding visualization - app_state missing or show_visualization=False")
             # Return styles to hide BOTH container and inner area
-            return hidden_container_style, hidden_area_style, [], [], place_state, "true"
+            return no_update, no_update, [], [], place_state, "true"
+            # return hidden_container_style, hidden_area_style, [], [], place_state, "true"
 
         try:
             config = {"configurable": {"thread_id": thread_id}}
@@ -62,7 +64,7 @@ def register_visualization_callbacks(app, compiled_workflow):
             cubes_df = pd.read_json(cubes, orient='records')
             cube_ids = cubes_df['Cube_ID'].tolist()
             logger.info(f"Processed cubes_df: {len(cubes_df)} rows, cube_ids: {cube_ids}")
-            
+
             # Preserve current cube selection if it's valid, otherwise use first cube as default
             if current_cube_selection and isinstance(current_cube_selection, list) and len(current_cube_selection) > 0:
                 # Check if current selection is still valid (all selected cubes exist in available options)
@@ -104,7 +106,7 @@ def register_visualization_callbacks(app, compiled_workflow):
 
             cube_ids = [cid for cid in cube_ids if cube_has_data(cid)]
             cubes_df  = cubes_df[cubes_df['Cube_ID'].isin(cube_ids)]
-            
+
             # Remove duplicates from cubes_df to prevent duplicate options
             cubes_df = cubes_df.drop_duplicates(subset=['Cube_ID'])
 
@@ -133,7 +135,7 @@ def register_visualization_callbacks(app, compiled_workflow):
     def update_visualization(selected_cubes, place_state):
         if not place_state.get("cube_data"):
              raise PreventUpdate
-             
+
         # If no cubes are selected, show an empty chart with a message
         if not selected_cubes:
             return go.Figure().update_layout(
