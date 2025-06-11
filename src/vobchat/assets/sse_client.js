@@ -12,7 +12,7 @@ class WorkflowSSEClient {
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 5;
         this.reconnectDelay = 1000; // Start with 1 second
-        
+
         // Event handlers
         this.onMessage = null;
         this.onInterrupt = null;
@@ -21,43 +21,43 @@ class WorkflowSSEClient {
         this.onConnected = null;
         this.onDisconnected = null;
     }
-    
+
     connect(threadId) {
         if (this.isConnected && this.threadId === threadId) {
             console.log('SSE: Already connected to thread', threadId);
             return;
         }
-        
+
         this.disconnect(); // Close existing connection
-        
+
         this.threadId = threadId;
         console.log('SSE: Connecting to thread', threadId);
-        
+
         const url = `/api/sse/connect?thread_id=${encodeURIComponent(threadId)}`;
         this.eventSource = new EventSource(url);
-        
+
         this.eventSource.onopen = (event) => {
             console.log('SSE: Connection opened', event);
             this.isConnected = true;
             this.reconnectAttempts = 0;
             this.reconnectDelay = 1000;
-            
+
             if (this.onConnected) {
                 this.onConnected(threadId);
             } else {
                 console.log('SSE: Connection opened for thread', threadId, '- no onConnected handler');
             }
         };
-        
+
         this.eventSource.addEventListener('connected', (event) => {
             console.log('SSE: Received connected event', event.data);
         });
-        
+
         this.eventSource.addEventListener('message', (event) => {
             try {
                 const data = JSON.parse(event.data);
                 console.log('SSE: Received message event', data);
-                
+
                 if (this.onMessage) {
                     this.onMessage(data.content, data.is_partial);
                 }
@@ -65,12 +65,12 @@ class WorkflowSSEClient {
                 console.error('SSE: Error parsing message event', e);
             }
         });
-        
+
         this.eventSource.addEventListener('interrupt', (event) => {
             try {
                 const data = JSON.parse(event.data);
                 console.log('SSE: Received interrupt event', data);
-                
+
                 if (this.onInterrupt) {
                     this.onInterrupt(data.data);
                 }
@@ -78,12 +78,12 @@ class WorkflowSSEClient {
                 console.error('SSE: Error parsing interrupt event', e);
             }
         });
-        
+
         this.eventSource.addEventListener('state_update', (event) => {
             try {
                 const data = JSON.parse(event.data);
                 console.log('SSE: Received state update event', data);
-                
+
                 if (this.onStateUpdate) {
                     this.onStateUpdate(data.data);
                 }
@@ -91,12 +91,12 @@ class WorkflowSSEClient {
                 console.error('SSE: Error parsing state update event', e);
             }
         });
-        
+
         this.eventSource.addEventListener('error', (event) => {
             try {
                 const data = JSON.parse(event.data);
                 console.error('SSE: Received error event', data);
-                
+
                 if (this.onError) {
                     this.onError(data.error);
                 }
@@ -104,52 +104,52 @@ class WorkflowSSEClient {
                 console.error('SSE: Error parsing error event', e);
             }
         });
-        
+
         this.eventSource.onerror = (event) => {
             console.error('SSE: Connection error', event);
             this.isConnected = false;
-            
+
             if (this.onDisconnected) {
                 this.onDisconnected();
             } else {
                 console.log('SSE: Connection error - no onDisconnected handler');
             }
-            
+
             // Attempt to reconnect
             this.attemptReconnect();
         };
     }
-    
+
     disconnect() {
         if (this.eventSource) {
             console.log('SSE: Disconnecting');
             this.eventSource.close();
             this.eventSource = null;
         }
-        
+
         this.isConnected = false;
         this.threadId = null;
     }
-    
+
     attemptReconnect() {
         if (this.reconnectAttempts >= this.maxReconnectAttempts) {
             console.error('SSE: Max reconnect attempts reached');
             return;
         }
-        
+
         this.reconnectAttempts++;
         console.log(`SSE: Attempting reconnect ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${this.reconnectDelay}ms`);
-        
+
         setTimeout(() => {
             if (this.threadId) {
                 this.connect(this.threadId);
             }
         }, this.reconnectDelay);
-        
+
         // Exponential backoff
         this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000); // Max 30 seconds
     }
-    
+
     sendUserInput(inputData) {
         // Send user input via regular HTTP request since SSE is one-way
         // Merge in the latest interrupt context for selection_idx/button clicks
@@ -174,7 +174,7 @@ class WorkflowSSEClient {
             })
         });
     }
-    
+
     startWorkflow(workflowInput) {
         // Start new workflow execution
         return fetch('/api/workflow/start', {
@@ -215,18 +215,18 @@ window.workflowSSE.onDisconnected = function() {
 // Integration with Dash callbacks
 window.workflowSSE.onMessage = function(content, isPartial) {
     console.log('SSE: Received message', content, 'isPartial:', isPartial);
-    
+
     // Update chat display directly
     const chatDisplay = document.getElementById('chat-display');
     if (!chatDisplay) {
         console.warn('SSE: chat-display element not found');
         return;
     }
-    
+
     // Create or update AI message bubble for streaming
     // Use a specific class to identify streaming messages vs interrupt messages
     let messageDiv = chatDisplay.querySelector('.ai-bubble.streaming:first-child');
-    
+
     if (isPartial) {
         if (!messageDiv) {
             // Create new AI bubble for partial message
@@ -253,11 +253,11 @@ window.workflowSSE.onMessage = function(content, isPartial) {
 
 window.workflowSSE.onInterrupt = function(interruptData) {
     console.log('SSE: Processing interrupt', interruptData);
-    
+
     // Track interrupt and persist so button clicks can send full context
     window.workflowSSE._lastInterruptTime = Date.now();
     window.workflowSSE.setLatestInterrupt(interruptData);
-    
+
     // Handle different types of interrupts
     if (interruptData.options) {
         // Multi-choice interrupt - render buttons
@@ -275,7 +275,7 @@ window.workflowSSE.onInterrupt = function(interruptData) {
             console.error('Could not clear options container', e);
         }
     }
-    
+
     if (interruptData.current_node === 'select_unit_on_map') {
         // Map selection interrupt - update map state
         try {
@@ -285,7 +285,7 @@ window.workflowSSE.onInterrupt = function(interruptData) {
             console.error('SSE: Error in updateMapFromInterrupt:', e);
         }
     }
-    
+
     // CRITICAL: Always update visualization state based on interrupt data
     // This handles both data delivery (when cubes present) and removal (when units empty)
     if (interruptData.cubes || interruptData.selected_place_g_units !== undefined) {
@@ -296,26 +296,41 @@ window.workflowSSE.onInterrupt = function(interruptData) {
             console.error('SSE: Error in updateVisualizationFromInterrupt:', e);
         }
     }
-    
+
     console.log('SSE: About to process interrupt message');
-    
+
     // Process interrupt message for chat display
     let message = interruptData.message;
     console.log('SSE: Initial message from interrupt:', message);
-    
+
     // Handle specific node cases
     if (interruptData.current_node === 'select_unit_on_map') {
         console.log('SSE: Processing select_unit_on_map node');
         // Don't override removal messages or other explicit messages
         if (!message || (!message.includes('Removed') && !message.includes('removed'))) {
-            const placeName = interruptData.extracted_place_names?.[0] || 'the place';
-            message = `I found "${placeName}". Please select it on the map to continue.`;
+            // CRITICAL: For unit type selections, don't ask user to select on map again
+            // Check if this is a unit type button selection result
+            const hasSelectedUnits = interruptData.selected_place_g_units && interruptData.selected_place_g_units.length > 0;
+            const hasUnitTypes = interruptData.selected_place_g_unit_types && interruptData.selected_place_g_unit_types.length > 0;
+
+            if (hasSelectedUnits && hasUnitTypes && message && message.includes('Using')) {
+                // Keep the existing message that shows unit type selection result
+                console.log('SSE: Keeping unit type selection message:', message);
+            } else if (hasSelectedUnits && hasUnitTypes) {
+                // Show that we're proceeding with the selection
+                const placeName = interruptData.extracted_place_names?.[0] || 'the area';
+                const unitType = interruptData.selected_place_g_unit_types[0];
+                // message = `Using ${unitType} data for ${placeName}.`;
+            } else {
+                const placeName = interruptData.extracted_place_names?.[0] || 'the place';
+                // message = `I found "${placeName}". Please select it on the map to continue.`;
+            }
         }
         console.log('SSE: select_unit_on_map message after processing:', message);
     } else if (!message && interruptData.current_node) {
         message = `Please make a selection to continue.`;
     }
-    
+
     // Add interrupt message to chat using direct DOM manipulation
     console.log('SSE: About to add message to chat:', message);
     if (message) {
@@ -337,41 +352,41 @@ window.workflowSSE.onInterrupt = function(interruptData) {
 
 window.workflowSSE.onStateUpdate = function(stateData) {
     console.log('SSE: Processing state update', stateData);
-    
+
     // CRITICAL: Check if this state update contradicts recent interrupt data
     // If interrupt data indicates removal (empty arrays) but state update has data,
     // prioritize the interrupt data as it represents the most recent workflow action
     if (window.workflowSSE.latestInterruptData) {
         const interruptUnits = window.workflowSSE.latestInterruptData.selected_place_g_units || [];
         const stateUnits = stateData.selected_place_g_units || [];
-        
+
         // If interrupt shows empty selection but state update has units, it's likely stale
         if (interruptUnits.length === 0 && stateUnits.length > 0) {
             console.log('SSE: Ignoring stale state update - interrupt shows removal but state has units');
             console.log('SSE: Interrupt units:', interruptUnits, 'State units:', stateUnits);
             return;
         }
-        
+
         // If interrupt shows different units than state, prefer interrupt (more recent workflow action)
-        if (interruptUnits.length > 0 && stateUnits.length > 0 && 
+        if (interruptUnits.length > 0 && stateUnits.length > 0 &&
             JSON.stringify(interruptUnits.sort()) !== JSON.stringify(stateUnits.sort())) {
             console.log('SSE: Ignoring conflicting state update - interrupt and state show different units');
             console.log('SSE: Interrupt units:', interruptUnits, 'State units:', stateUnits);
             return;
         }
     }
-    
+
     // Update relevant Dash components based on state changes
     if (stateData.selected_place_g_units !== undefined || stateData.selected_polygons !== undefined) {
         updateMapState(stateData);
     }
-    
+
     if (stateData.show_visualization !== undefined) {
         try {
             // Get current app state from the store element directly
             const appStateStore = document.querySelector('#app-state');
             const currentAppState = (appStateStore && appStateStore._dash_value && appStateStore._dash_value.data) || {};
-            
+
             if (typeof dash_clientside !== 'undefined' && dash_clientside.set_props) {
                 dash_clientside.set_props('app-state', {
                     data: {
@@ -389,7 +404,7 @@ window.workflowSSE.onStateUpdate = function(stateData) {
 
 window.workflowSSE.onError = function(error) {
     console.error('SSE: Workflow error', error);
-    
+
     // Show error in chat using direct DOM manipulation
     const chatDisplay = document.getElementById('chat-display');
     if (chatDisplay) {
@@ -404,9 +419,9 @@ window.workflowSSE.onError = function(error) {
 // Helper functions
 function renderInterruptButtons(interruptData) {
     console.log('SSE: Rendering interrupt buttons', interruptData);
-    
+
     const options = interruptData.options || [];
-    
+
     const buttons = options.map(opt => {
         // Create button object in the format Dash expects
         return {
@@ -429,7 +444,7 @@ function renderInterruptButtons(interruptData) {
             namespace: 'dash_bootstrap_components'
         };
     });
-    
+
     try {
         if (typeof dash_clientside !== 'undefined' && dash_clientside.set_props) {
             dash_clientside.set_props('options-container', {children: buttons});
@@ -448,19 +463,67 @@ function updateMapFromInterrupt(interruptData) {
         selected_polygons_unit_types: interruptData.selected_place_g_unit_types || [],
         zoom_to_selection: interruptData.selected_place_g_units?.length > 0  // Only zoom if there are selections
     };
-    
+
+    // CRITICAL: Also update unit_types when unit types change from workflow
+    // This ensures the unit filter buttons reflect the new selection
+    if (interruptData.selected_place_g_unit_types && interruptData.selected_place_g_unit_types.length > 0) {
+        // Get unique unit types from the selection
+        const uniqueUnitTypes = [...new Set(interruptData.selected_place_g_unit_types)];
+        mapUpdates.unit_types = uniqueUnitTypes;
+        console.log('SSE: Updating unit_types from interrupt to:', uniqueUnitTypes);
+    }
+
     console.log('SSE: Updating map from interrupt with:', mapUpdates);
-    
+
     try {
         // Get current map state from the store element directly
         const mapStateStore = document.querySelector('#map-state');
         const currentMapState = (mapStateStore && mapStateStore._dash_value && mapStateStore._dash_value.data) || {};
+        const oldUnitTypes = currentMapState.unit_types || [];
         const newMapState = {...currentMapState, ...mapUpdates};
-        
+
+        // CRITICAL: Check if unit types are changing to trigger immediate map refresh
+        const newUnitTypes = newMapState.unit_types || [];
+        const unitTypesChanged = JSON.stringify(oldUnitTypes.sort()) !== JSON.stringify(newUnitTypes.sort());
+
         // Update map state using Dash's set_props
         if (typeof dash_clientside !== 'undefined' && dash_clientside.set_props) {
             dash_clientside.set_props('map-state', {data: newMapState});
             console.log('SSE: Updated map state from interrupt:', mapUpdates);
+
+            // CRITICAL FIX: If unit types changed, coordinate with Callback #8 for proper polygon fetching
+            if (unitTypesChanged) {
+                console.log('SSE: Unit types changed from', oldUnitTypes, 'to', newUnitTypes, '- coordinating with Callback #8 for polygon refresh');
+
+                // If there are selected polygons, let Callback #8 handle the refresh via zoom_to_selection flag
+                // Callback #8 will fetch the selected polygons for the new unit type and then refresh the map
+                if (newMapState.selected_polygons && newMapState.selected_polygons.length > 0 && newMapState.zoom_to_selection) {
+                    console.log('SSE: Selected polygons exist - letting Callback #8 handle unit type change refresh');
+                    // No immediate refresh needed - Callback #8 will handle it via fetchPolygonsByIds
+                } else {
+                    // No selected polygons - refresh immediately to clear old polygons
+                    setTimeout(() => {
+                        const mapElement = document.getElementById('leaflet-map');
+                        const map = mapElement?._leaflet_map;
+
+                        if (map && window.polygon_management && window.polygon_management.updateMapWithBounds && window.geojsonLayerReady) {
+                            const bounds = map.getBounds();
+                            const yearRange = newMapState.year_range ? { min: newMapState.year_range[0], max: newMapState.year_range[1] } : null;
+
+                            console.log('SSE: No selected polygons - calling updateMapWithBounds for unit type change');
+                            window.polygon_management.updateMapWithBounds(map, newUnitTypes, bounds, newMapState, yearRange)
+                                .then(() => {
+                                    console.log('SSE: Map refresh completed for unit type change with no selections');
+                                })
+                                .catch(error => {
+                                    console.error('SSE: Error refreshing map for unit type change:', error);
+                                });
+                        } else {
+                            console.warn('SSE: Cannot refresh map - prerequisites not met');
+                        }
+                    }, 100); // Small delay to ensure map state update has propagated
+                }
+            }
         } else {
             console.warn('SSE: dash_clientside not available for map state update');
         }
@@ -475,14 +538,14 @@ function updateVisualizationFromInterrupt(interruptData) {
             // Get current place state
             const placeStateStore = document.querySelector('#place-state');
             const currentPlaceState = (placeStateStore && placeStateStore._dash_value && placeStateStore._dash_value.data) || {};
-            
+
             // Use interrupt data for selected units - this is authoritative
             // If interrupt has empty units array, it means units were removed
             const selectedUnits = interruptData.selected_place_g_units || [];
-            
+
             console.log('SSE: Updating visualization with interrupt data - selected units:', selectedUnits);
             console.log('SSE: Interrupt has cubes:', !!interruptData.cubes);
-            
+
             // Determine the new place state data based on interrupt
             let newPlaceState;
             if (selectedUnits.length === 0) {
@@ -502,28 +565,28 @@ function updateVisualizationFromInterrupt(interruptData) {
                     selected_place_g_units: selectedUnits
                 };
             }
-            
+
             // Update place state
             dash_clientside.set_props('place-state', {
                 data: newPlaceState
             });
-            
+
             // Get current app state and update visualization flag
             const appStateStore = document.querySelector('#app-state');
             const currentAppState = (appStateStore && appStateStore._dash_value && appStateStore._dash_value.data) || {};
-            
+
             // Use interrupt's show_visualization flag if provided, otherwise determine based on data
-            const shouldShowVisualization = interruptData.show_visualization !== undefined 
-                ? interruptData.show_visualization 
+            const shouldShowVisualization = interruptData.show_visualization !== undefined
+                ? interruptData.show_visualization
                 : !!(newPlaceState.cubes && selectedUnits.length > 0);
-            
+
             dash_clientside.set_props('app-state', {
                 data: {
                     ...currentAppState,
                     show_visualization: shouldShowVisualization
                 }
             });
-            
+
             console.log('SSE: Updated visualization from interrupt - show_visualization:', shouldShowVisualization);
         } else {
             console.warn('SSE: dash_clientside not available for visualization update');
@@ -538,18 +601,24 @@ function updateMapState(stateData) {
         // Get current map state from the store element directly
         const mapStateStore = document.querySelector('#map-state');
         const currentMapState = (mapStateStore && mapStateStore._dash_value && mapStateStore._dash_value.data) || {};
-        
+
         const updates = {};
         if (stateData.selected_place_g_units) {
             updates.selected_polygons = stateData.selected_place_g_units.map(String);
         }
         if (stateData.selected_place_g_unit_types) {
             updates.selected_polygons_unit_types = stateData.selected_place_g_unit_types;
+
+            // CRITICAL: Also update unit_types when unit types change from state updates
+            // This ensures consistency between workflow state and map filter state
+            const uniqueUnitTypes = [...new Set(stateData.selected_place_g_unit_types)];
+            updates.unit_types = uniqueUnitTypes;
+            console.log('SSE: Updating unit_types from state update to:', uniqueUnitTypes);
         }
-        
+
         if (Object.keys(updates).length > 0) {
             const newMapState = {...currentMapState, ...updates};
-            
+
             if (typeof dash_clientside !== 'undefined' && dash_clientside.set_props) {
                 dash_clientside.set_props('map-state', {data: newMapState});
                 console.log('SSE: Updated map state from state update:', updates);
@@ -584,7 +653,7 @@ function trySSEAutoConnect() {
     } catch (e) {
         console.log('SSE: No connect signal available yet');
     }
-    
+
     // Check if we have a thread ID from any callbacks or stores
     try {
         // Look for thread-id store data
@@ -616,17 +685,17 @@ function setupSSEMonitoring() {
                 }
             });
         });
-        
+
         threadObserver.observe(threadIdStore, {
             attributes: true,
             childList: true,
             subtree: true,
             attributeOldValue: true
         });
-        
+
         console.log('SSE: Monitoring thread-id store for changes');
     }
-    
+
     // Monitor sse-connection-status store for connect signals
     const sseConnectionStore = document.querySelector('#sse-connection-status');
     if (sseConnectionStore) {
@@ -638,14 +707,14 @@ function setupSSEMonitoring() {
                 }
             });
         });
-        
+
         sseObserver.observe(sseConnectionStore, {
             attributes: true,
             childList: true,
             subtree: true,
             attributeOldValue: true
         });
-        
+
         console.log('SSE: Monitoring sse-connection-status store for changes');
     }
 }
@@ -654,14 +723,14 @@ function setupSSEMonitoring() {
 if (!trySSEAutoConnect()) {
     // Set up monitoring for changes
     setupSSEMonitoring();
-    
+
     // Also try periodically as fallback
     const connectInterval = setInterval(() => {
         if (trySSEAutoConnect()) {
             clearInterval(connectInterval);
         }
     }, 1000); // Check every second
-    
+
     // Stop trying after 60 seconds
     setTimeout(() => clearInterval(connectInterval), 60000);
 }

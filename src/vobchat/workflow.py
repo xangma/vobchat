@@ -72,6 +72,14 @@ from geoalchemy2 import Geometry
 # -------------------------------
 logger = logging.getLogger(__name__)
 
+# Helper function for creating streamable AI messages
+def _create_streamable_message(content: str) -> AIMessage:
+    """Create an AI message marked as streamable for user-facing content."""
+    return AIMessage(
+        content=content,
+        response_metadata={"stream_mode": "stream"}
+    )
+
 # ----------------------------------------------------------------------------------------
 # CONFIGURATION & SETUP
 # ----------------------------------------------------------------------------------------
@@ -264,7 +272,10 @@ def postcode_tool_call(state: lg_State) -> lg_State:
         # If no postcode is present (shouldn't happen if routed correctly, but good practice to check).
         logger.warning("No valid postcode found in state for postcode_tool_call")
         state["messages"].append(
-            AIMessage(content="I couldn't find a postcode to search for.")
+            AIMessage(
+                content="I couldn't find a postcode to search for.",
+                response_metadata={"stream_mode": "stream"}
+            )
         )
         return state # Return early
 
@@ -325,7 +336,7 @@ def multi_place_tool_call(state: lg_State) -> lg_State:
     # Check if this is a map click replacement scenario (single place with polygon_id)
     has_polygon_ids = any(pid is not None for pid in polygon_ids)
     is_single_place_from_map = len(place_names) == 1 and has_polygon_ids
-    
+
     if is_single_place_from_map:
         # CRITICAL: Clear existing selections when replacing via map click
         # This prevents stale unit types from persisting when user deselects and selects new polygons
@@ -333,7 +344,7 @@ def multi_place_tool_call(state: lg_State) -> lg_State:
         old_unit_types = state.get("selected_place_g_unit_types", [])
         old_places = state.get("selected_place_g_places", [])
         logger.info(f"multi_place_tool_call: Map click replacement detected - clearing old selections: units={old_units}, unit_types={old_unit_types}, places={old_places}")
-        
+
         state["selected_place_g_units"] = []
         state["selected_place_g_unit_types"] = []
         state["selected_place_g_places"] = []
@@ -366,7 +377,7 @@ def multi_place_tool_call(state: lg_State) -> lg_State:
 
         place_unit_type = unit_type if polygon_id else None
         logger.info(f"multi_place_tool_call: Creating place '{place_name}' with g_unit={polygon_id}, g_unit_type='{place_unit_type}' (from unit_types[{idx}]='{unit_type}')")
-        
+
         places.append({
             "name":            place_name,
             "candidate_rows":  candidate_rows,
@@ -441,19 +452,45 @@ def select_unit_on_map(state: lg_State) -> lg_State | Command:
         # If the last intent was AddPlace with polygon_id, the place was already selected on the map
         last_intent = state.get("last_intent_payload", {})
         is_map_click = (
-            last_intent.get("intent") == "AddPlace" and 
+            last_intent.get("intent") == "AddPlace" and
             last_intent.get("arguments", {}).get("polygon_id") is not None
         )
-        
+
         # Also check if we have polygon_ids in extracted data (indicates map click origin)
         polygon_ids = state.get("extracted_polygon_ids", [])
         has_polygon_ids = any(pid is not None for pid in polygon_ids)
-        
+
         if is_map_click or has_polygon_ids:
             logger.info(f"select_unit_on_map: Map click detected (is_map_click={is_map_click}, has_polygon_ids={has_polygon_ids}), skipping map interrupt")
             # For map clicks, assume the units are already selected on the map and continue
             # No need to interrupt for map selection since user already clicked the map
         else:
+            # CRITICAL: For button-based unit type changes, send interrupt to update map state immediately
+            # This ensures the frontend gets updated unit types and selected units
+            current_place_index = state.get("current_place_index")
+            extracted_place_names = state.get("extracted_place_names", [])
+
+            # Check if this was a unit type button click (e.g., LG_DIST button)
+            # by looking for preserved unit type selection from resolve_place_and_unit
+            last_unit_type_selection = state.get("last_unit_type_selection")
+            is_unit_type_selection = bool(last_unit_type_selection)
+
+            if is_unit_type_selection or current_place_index is None:
+                logger.info(f"select_unit_on_map: Unit type selection or button click detected, sending map update interrupt")
+                # Send interrupt to update map state with new selections
+                interrupt(value={
+                    # "message": f"Using {last_unit_type_selection or 'selected'} data for {extracted_place_names[0] if extracted_place_names else 'the area'}.",
+                    "selected_place_g_places": state.get("selected_place_g_places", []),
+                    "selected_place_g_units": state.get("selected_place_g_units", []),
+                    "selected_place_g_unit_types": state.get("selected_place_g_unit_types", []),
+                    "current_place_index": current_place_index,
+                    "extracted_place_names": extracted_place_names,
+                    "current_node": "select_unit_on_map",
+                    "selection_idx": None,
+                    "last_unit_type_selection": None,  # Clear after use
+                })
+                return state
+
             # Find all units that are in the workflow but not yet on the map
             missing_units = []
             for i, unit_id in enumerate(selected_workflow_units):
@@ -463,7 +500,6 @@ def select_unit_on_map(state: lg_State) -> lg_State | Command:
             if missing_units:
                 # Take the first missing unit and trigger interrupt for it
                 first_missing_index, first_missing_unit = missing_units[0]
-                current_place_index = state.get("current_place_index")
                 logger.info(f"Unit {first_missing_unit} (index {first_missing_index}) not found in map selections. Issuing interrupt to update map.")
                 logger.info(f"select_unit_on_map: DEBUG - current_place_index in state = {current_place_index}")
                 logger.info(f"select_unit_on_map: DEBUG - first_missing_index = {first_missing_index}")
@@ -537,7 +573,7 @@ def find_cubes_node(state: lg_State) -> lg_State | Command:
     ]
 
     # CRITICAL: Always use workflow units as authoritative source for find_cubes_node
-    # This node is called after place/unit resolution is complete, so workflow_units 
+    # This node is called after place/unit resolution is complete, so workflow_units
     # contains the definitive selection state including any removals
     all_selected_unit_ids: list[int] = sorted(set(workflow_units))
     logger.info(f"find_cubes_node: Using workflow units as authoritative: {all_selected_unit_ids}")
@@ -1034,10 +1070,19 @@ def resolve_place_and_unit(state: lg_State) -> lg_State | Command:
     state.setdefault("selected_place_g_places", []).append(place["g_place"])
 
     # CRITICAL: Use Command to ensure selection_idx clearing is persisted to checkpointer
+    # But preserve the selection type for select_unit_on_map to detect button clicks
+    last_selection = state.get("selection_idx")
+    is_unit_type_selection = (
+        last_selection and
+        isinstance(last_selection, str) and
+        last_selection in ["LG_DIST", "MOD_DIST", "CONSTITUENCY", "WARD", "PARL_CONST", "MOD_REG", "COUNTY"]
+    )
+
     state_update = {
         "places": places,
         "current_place_index": i + 1,
         "selection_idx": None,  # CRITICAL: Clear for next place
+        "last_unit_type_selection": last_selection if is_unit_type_selection else None,  # Preserve for select_unit_on_map
         "options": [],  # Clear consumed options
         "selected_place_g_units": state["selected_place_g_units"],
         "selected_place_g_unit_types": state["selected_place_g_unit_types"],

@@ -1,6 +1,5 @@
 from enum import Enum
 from typing import Optional, List, Dict, Any
-import json
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
@@ -50,7 +49,13 @@ class AssistantIntentPayload(BaseModel):
 _MODEL_NAME = "deepseek-r1-wt:latest"  # keep in sync with workflow.py
 _BASE_URL = "http://localhost:11434/"
 
-_llm = ChatOllama(model=_MODEL_NAME, base_url=_BASE_URL, format="json", temperature=0.0, max_tokens=512)
+# CRITICAL: Use a separate non-streaming LLM instance for intent extraction
+# This prevents the JSON parsing from getting stuck in streaming mode
+_intent_llm = ChatOllama(
+    model=_MODEL_NAME,
+    base_url=_BASE_URL,
+    temperature=0.0
+)
 
 intent_list = ", \n".join([f"{intent.value}" for intent in AssistantIntent])
 
@@ -138,54 +143,59 @@ _INTENT_EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
     ),
 ])
 
+# Create a structured output chain instead of using format="json"
+_intent_extraction_chain = _INTENT_EXTRACT_PROMPT | _intent_llm.with_structured_output(
+    schema=AssistantIntentPayload
+)
+
 def extract_intent(user_text: str, messages: list[AnyMessage]) -> AssistantIntentPayload:
     """
     Call the LLM, read the raw text, then parse / validate it with Pydantic.
     If the model doesn't give valid JSON we fall back to the Chat intent.
     """
 
-    # 1. build the prompt (template already has {intent_list} substituted)
-
-    history_snippet = "\n".join(m.content for m in messages[:-1])   # tune N
-    messages_llm = _INTENT_EXTRACT_PROMPT.format_messages(
-        intent_list=intent_list,
-        history=history_snippet,
-        text=user_text,
-    )
-
-    # 2. get the LLM's reply
-    llm_reply: AIMessage = _llm.invoke(messages_llm)     # returns AIMessage
-    raw = llm_reply.content.strip()
-    logger.info(f"Raw LLM response: '{raw}'")
-
-    # 3. try JSON → pydantic
+    # 1. Use the structured output chain to get direct Pydantic object
     try:
-        if not raw:
-            logger.warning("LLM returned empty response")
-            # If empty response, fall back to Chat intent
+        history_snippet = "\n".join(str(m.content) for m in messages[:-1])   # Convert to string and tune N
+
+        # 2. get the LLM's reply using structured output chain
+        logger.info(f"Extracting intent for user text: '{user_text}'")
+
+        try:
+            # CRITICAL: Use structured output chain to avoid JSON parsing issues
+            import time
+            start_time = time.time()
+            logger.info("Starting LLM intent extraction using structured output chain")
+
+            # Invoke the chain directly with the input parameters
+            intent_payload = _intent_extraction_chain.invoke({
+                "intent_list": intent_list,
+                "history": history_snippet,
+                "text": user_text,
+            })
+
+            end_time = time.time()
+            logger.info(f"LLM intent extraction completed in {end_time - start_time:.2f}s")
+
+            # Ensure we got a proper AssistantIntentPayload object
+            if isinstance(intent_payload, AssistantIntentPayload):
+                logger.info(f"Extracted intents: {[intent.intent.value for intent in intent_payload.intents]}")
+                return intent_payload
+            else:
+                logger.warning(f"Structured output returned unexpected type: {type(intent_payload)}")
+                # Fallback to Chat intent
+                return AssistantIntentPayload(
+                    intents=[SingleIntent(intent=AssistantIntent.CHAT, arguments={"text": "I'm having trouble understanding. Could you please rephrase your request?"})],
+                )
+        except Exception as llm_error:
+            logger.error(f"LLM invocation failed: {llm_error}")
+            # Fallback to Chat intent if LLM fails
             return AssistantIntentPayload(
-                intents=[SingleIntent(intent=AssistantIntent.CHAT, arguments={"text": "I'm having trouble understanding. Could you please rephrase your request?"})],
+                intents=[SingleIntent(intent=AssistantIntent.CHAT, arguments={"text": f"I'm having trouble processing your request: {user_text}. Could you please try rephrasing?"})],
             )
-
-        data = json.loads(raw)
-        logger.info(f"Parsed LLM reply: {data}")
-
-        # Validate that we have intents
-        if not data or "intents" not in data or not data["intents"]:
-            logger.warning("LLM reply missing 'intents' field or empty intents")
-            return AssistantIntentPayload(
-                intents=[SingleIntent(intent=AssistantIntent.CHAT, arguments={"text": "I'm having trouble understanding. Could you please rephrase your request?"})],
-            )
-
-        return AssistantIntentPayload.model_validate(data)
-    except json.JSONDecodeError as e:
-        logger.warning(f"Failed to parse LLM response as JSON: {e}. Raw response: '{raw}'")
-        # fallback: treat entire reply as a free-form assistant answer
-        return AssistantIntentPayload(
-            intents=[SingleIntent(intent=AssistantIntent.CHAT, arguments={"text": raw})],
-        )
-    except Exception as e:
-        logger.error(f"Error processing LLM response: {e}. Raw response: '{raw}'")
+    except Exception as prompt_error:
+        logger.error(f"Error building prompt: {prompt_error}")
+        # Fallback to Chat intent if prompt building fails
         return AssistantIntentPayload(
             intents=[SingleIntent(intent=AssistantIntent.CHAT, arguments={"text": "I'm having trouble understanding. Could you please rephrase your request?"})],
         )

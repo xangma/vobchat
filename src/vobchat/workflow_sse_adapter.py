@@ -88,11 +88,18 @@ class WorkflowSSEAdapter:
             start_time = time.time()
             print(f"DEBUG: Workflow execution started at {start_time:.3f}")
             
-            # Create a fresh workflow instance for this execution
+            # Choose workflow instance based on whether this is a new execution or resumption
             workflow_create_start = time.time()
-            workflow_instance = await self._create_fresh_workflow()
+            if workflow_input is None:
+                # Resuming from interrupt - use existing compiled workflow to preserve state
+                workflow_instance = self.compiled_workflow
+                print(f"DEBUG: Using existing workflow instance for resumption")
+            else:
+                # New execution - create fresh workflow instance
+                workflow_instance = await self._create_fresh_workflow()
+                print(f"DEBUG: Created fresh workflow instance for new execution")
             workflow_create_end = time.time()
-            print(f"DEBUG: Workflow creation took {workflow_create_end - workflow_create_start:.3f}s")
+            print(f"DEBUG: Workflow selection took {workflow_create_end - workflow_create_start:.3f}s")
             
             # Stream workflow messages and state updates
             stream_start = time.time()
@@ -100,37 +107,69 @@ class WorkflowSSEAdapter:
             
             stream_iter_start = time.time()
             message_count = 0
-            async for msg, metadata in workflow_instance.astream(
+            streamed_message_contents = set()  # Track already streamed message contents to avoid duplicates
+            
+            # For workflow resumption, we need to avoid re-streaming messages that were already sent
+            # Get the current state to see what messages already exist
+            if workflow_input is None:
+                try:
+                    current_state = await workflow_instance.aget_state(config)
+                    if current_state and current_state.values and "messages" in current_state.values:
+                        existing_messages = current_state.values["messages"]
+                        for msg in existing_messages:
+                            if hasattr(msg, 'content') and msg.content:
+                                streamed_message_contents.add(str(msg.content))
+                                print(f"DEBUG: Marking existing message as already streamed: {str(msg.content)[:50]}...")
+                except Exception as e:
+                    print(f"DEBUG: Error getting existing messages for resumption: {e}")
+                    # Continue without pre-populating - duplicate detection will still work
+            # CRITICAL: Use "values" streaming mode instead of "messages" 
+            # This prevents internal LLM operations (like intent extraction) from streaming
+            # while still allowing us to get state updates and final results
+            async for state_update in workflow_instance.astream(
                 workflow_input,
                 config=config,
-                stream_mode="messages"
+                stream_mode="values"  # Stream state updates, not LLM messages
             ):
                 message_count += 1
                 msg_time = time.time()
-                print(f"DEBUG: Received message {message_count} at {msg_time:.3f} (type: {type(msg).__name__})")
-                # Handle AI message chunks for progressive text display
-                if isinstance(msg, AIMessageChunk) and msg.content:
-                    sse_manager.broadcast_event(
-                        MessageEvent(
-                            content=msg.content,
-                            thread_id=thread_id,
-                            is_partial=True
-                        )
-                    )
-                    yield {"type": "message_chunk", "content": msg.content}
+                print(f"DEBUG: Received state update {message_count} at {msg_time:.3f}")
                 
-                # Handle complete AI messages
-                elif isinstance(msg, AIMessage) and msg.content:
-                    sse_manager.broadcast_event(
-                        MessageEvent(
-                            content=msg.content,
-                            thread_id=thread_id,
-                            is_partial=False
-                        )
-                    )
-                    yield {"type": "message", "content": msg.content}
+                # Check if there are new messages in the state to stream to user
+                if isinstance(state_update, dict) and "messages" in state_update:
+                    messages = state_update["messages"]
+                    if messages:
+                        last_message = messages[-1]
+                        # Only stream AI messages marked as streamable
+                        if isinstance(last_message, AIMessage) and last_message.content:
+                            content = str(last_message.content)
+                            
+                            # Check if we've already streamed this exact message content
+                            if content in streamed_message_contents:
+                                print(f"DEBUG: Skipping duplicate message: {content[:50]}...")
+                                continue
+                            
+                            # Check message metadata for streaming preference
+                            stream_mode = "stream"  # Default to streaming
+                            if hasattr(last_message, 'response_metadata') and last_message.response_metadata:
+                                stream_mode = last_message.response_metadata.get('stream_mode', 'stream')
+                            
+                            # Only stream messages marked as "stream" mode
+                            if stream_mode == "stream":
+                                print(f"DEBUG: Streaming user-facing message: {content[:50]}...")
+                                streamed_message_contents.add(content)  # Mark as streamed
+                                sse_manager.broadcast_event(
+                                    MessageEvent(
+                                        content=content,
+                                        thread_id=thread_id,
+                                        is_partial=False
+                                    )
+                                )
+                                yield {"type": "message", "content": content}
+                            else:
+                                print(f"DEBUG: Skipping internal message (mode={stream_mode}): {content[:50]}...")
             
-            # Get final state after streaming using the fresh workflow instance
+            # Get final state after streaming using the workflow instance
             final_state_start = time.time()
             print(f"DEBUG: Getting final state at {final_state_start:.3f}")
             final_state = await workflow_instance.aget_state(config)

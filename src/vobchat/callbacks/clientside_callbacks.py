@@ -637,8 +637,30 @@ def register_clientside_callbacks(app: Dash):
                     console.log("Client (Cb8 - Fetch/Zoom): Fetch by ID completed.");
                     const geojsonLayer = polygonManagement.findGeoJSONLayer(map);
                     if (geojsonLayer) {
+                        // First zoom to the selected polygons
                         polygonManagement.zoomTo(map, idsToFetch, geojsonLayer); // This sets programmaticZoomAnimating = true
                         console.log("Client (Cb8 - Fetch/Zoom): Zoom initiated.");
+
+                        // CRITICAL FIX: After zooming, refresh the map with context polygons of the new unit type
+                        // This ensures surrounding polygons are also visible for context
+                        setTimeout(() => {
+                            const currentBounds = map.getBounds();
+                            const currentUnitTypes = mapState.unit_types || [unitType];
+                            console.log("Client (Cb8 - Fetch/Zoom): Refreshing context polygons after zoom");
+                            polygonManagement.updateMapWithBounds(map, currentUnitTypes, currentBounds, mapState, yearRange)
+                                .then(() => {
+                                    console.log("Client (Cb8 - Fetch/Zoom): Context polygon refresh completed");
+                                    // Ensure selected polygons remain highlighted after context refresh
+                                    const refreshedLayer = polygonManagement.findGeoJSONLayer(map);
+                                    if (refreshedLayer && mapState.selected_polygons && mapState.selected_polygons.length > 0) {
+                                        polygonManagement.refreshLayerStyles(refreshedLayer, mapState.selected_polygons);
+                                        console.log("Client (Cb8 - Fetch/Zoom): Re-applied selection styling after context refresh");
+                                    }
+                                })
+                                .catch(error => {
+                                    console.error("Client (Cb8 - Fetch/Zoom): Error refreshing context polygons:", error);
+                                });
+                        }, 1000); // Wait for zoom animation to complete
 
                         // Cleanup is now handled by the zoomend event in polygon_management.js
                         // No need to trigger cleanup immediately - wait for zoom to complete

@@ -27,7 +27,12 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _append_ai(state: lg_State, text: str):
-    state.setdefault("messages", []).append(AIMessage(content=text))
+    # Mark user-facing messages as streamable
+    message = AIMessage(
+        content=text,
+        response_metadata={"stream_mode": "stream"}
+    )
+    state.setdefault("messages", []).append(message)
 
 
 def _maybe_route_to_cubes(state: lg_State):
@@ -244,7 +249,6 @@ def AddPlace_node(state: lg_State):
     _append_ai(state, f"Okay - adding {plural}. Let me find them …")
 
     update = {
-        "messages": state["messages"],
         "extracted_place_names": names,
         "extracted_counties": counties,
         "extracted_unit_types": unit_types,

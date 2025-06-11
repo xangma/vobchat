@@ -303,7 +303,12 @@ def agent_node(state: lg_State):
     if final_intent is AssistantIntent.CHAT:
         txt = final_args.get("text", "Okay.") # Default chat response
         logging.info(f"agent_node: Handling CHAT intent.")
-        state.setdefault("messages", []).append(AIMessage(content=txt))
+        # Mark chat responses as streamable
+        chat_message = AIMessage(
+            content=txt,
+            response_metadata={"stream_mode": "stream"}
+        )
+        state.setdefault("messages", []).append(chat_message)
         state["last_intent_payload"] = {} # Clear the payload after processing
         # CRITICAL: Clear selection_idx for CHAT intent to prevent stale values
         state["selection_idx"] = None

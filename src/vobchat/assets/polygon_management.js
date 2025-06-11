@@ -518,11 +518,34 @@ window.polygon_management = {
                 return Promise.reject('GeoJSON layer not found');
             }
 
+            // CRITICAL FIX: Check if we need to clear old polygons of different unit types
+            const currentLayerUnitTypes = new Set();
+            const currentLayerIds = new Set();
+            
+            Object.values(geojsonLayer._layers).forEach(layer => {
+                if (layer.feature && layer.feature.properties) {
+                    const layerUnitType = layer.feature.properties.g_unit_type;
+                    const layerId = layer.feature.id;
+                    if (layerUnitType) currentLayerUnitTypes.add(layerUnitType);
+                    if (layerId != null) currentLayerIds.add(String(layerId));
+                }
+            });
+            
+            console.log(`JS (${requestId}): DEBUG - Current layer unit types: [${Array.from(currentLayerUnitTypes).join(', ')}]`);
+            console.log(`JS (${requestId}): DEBUG - Current layer IDs: [${Array.from(currentLayerIds).join(', ')}]`);
+            console.log(`JS (${requestId}): DEBUG - Target unit type: ${unitType}`);
+            
+            // If the target unit type is different from existing unit types, clear old polygons
+            if (currentLayerUnitTypes.size > 0 && !currentLayerUnitTypes.has(unitType)) {
+                console.log(`JS (${requestId}): Unit type changed from [${Array.from(currentLayerUnitTypes).join(', ')}] to ${unitType} - clearing old polygons`);
+                geojsonLayer.clearLayers();
+                // Update the tracking sets after clearing
+                currentLayerUnitTypes.clear();
+                currentLayerIds.clear();
+            }
+
             const featuresActuallyAddedToLayer = [];
             if (featuresToAdd.length > 0) {
-                // Filter out features already on the layer to avoid duplicates
-                const currentLayerIds = new Set(Object.values(geojsonLayer._layers).map(l => l.feature?.id).filter(id => id != null).map(id => String(id)));
-                console.log(`JS (${requestId}): DEBUG - Current layer IDs: [${Array.from(currentLayerIds).join(', ')}]`);
                 console.log(`JS (${requestId}): DEBUG - Features to add IDs: [${featuresToAdd.map(f => f.id).join(', ')}]`);
 
                 const featuresToAddFiltered = featuresToAdd.filter(f => {
@@ -543,6 +566,12 @@ window.polygon_management = {
                 }
             } else {
                 console.log(`JS (${requestId}): No features (cached or fetched) to add to layer.`);
+            }
+
+            // CRITICAL FIX: Refresh styles after adding features to ensure selection styling is applied
+            if (featuresActuallyAddedToLayer.length > 0 && selectedPolygons && selectedPolygons.length > 0) {
+                console.log(`JS (${requestId}): Refreshing layer styles after adding ${featuresActuallyAddedToLayer.length} features to ensure selection highlighting`);
+                this.refreshLayerStyles(geojsonLayer, selectedPolygons);
             }
 
             // Return only the features that were actually added in this run
