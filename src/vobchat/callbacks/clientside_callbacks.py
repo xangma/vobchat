@@ -871,37 +871,94 @@ def register_clientside_callbacks(app: Dash):
         prevent_initial_call=True
     )
 
-    # # Add Clientside Callback for scrolling (optional but good UX)
-    # app.clientside_callback(
-    #     """
-    #     scrollToBottom: function(children) {
-    #     // Debounce mechanism
-    #     if (window.scrollTimeout) {
-    #         clearTimeout(window.scrollTimeout);
-    #     }
-    #     window.scrollTimeout = setTimeout(() => {
-    #         try {
-    #             const chatContainer = document.getElementById('chat-display'); // Or the ID of your scrollable container
-    #             if (chatContainer) {
-    #                  // Check if user is scrolled up significantly
-    #                  const isScrolledUp = chatContainer.scrollHeight - chatContainer.scrollTop > chatContainer.clientHeight + 150; // 150px buffer
-
-    #                  if (!isScrolledUp) { // Only scroll if user is near the bottom
-    #                     // Using smooth scroll
-    #                     // chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
-    #                     // Or instant scroll:
-    #                     chatContainer.scrollTop = chatContainer.scrollHeight;
-    #                  }
-    #             }
-    #         } catch (e) {
-    #             console.error("Scroll error:", e);
-    #         }
-    #     }, 100); // Adjust debounce delay (ms) as needed
-    #     return null; // No Dash output needed
-    # }
-    #     """,
-    #     Output('scroll-dummy-output', 'children'),
-    #     Input('chat-display', 'children'), # Triggered by chat display updates
-    #     prevent_initial_call=True
-
-    # )
+    # SSE Initialization Callback
+    app.clientside_callback(
+        """
+        function(threadId) {
+            console.log("SSE Initialization callback triggered with thread ID:", threadId);
+            
+            if (!threadId) {
+                console.log("No thread ID available for SSE connection");
+                return window.dash_clientside.no_update;
+            }
+            
+            // Initialize SSE connection
+            if (window.workflowSSE && !window.workflowSSE.isConnected) {
+                console.log("Connecting to SSE for thread:", threadId);
+                window.workflowSSE.connect(threadId);
+                
+                return {
+                    status: "connected",
+                    thread_id: threadId,
+                    timestamp: Date.now()
+                };
+            } else if (window.workflowSSE && window.workflowSSE.threadId !== threadId) {
+                console.log("Reconnecting SSE for new thread:", threadId);
+                window.workflowSSE.connect(threadId);
+                
+                return {
+                    status: "reconnected", 
+                    thread_id: threadId,
+                    timestamp: Date.now()
+                };
+            }
+            
+            return window.dash_clientside.no_update;
+        }
+        """,
+        Output('sse-connection-status', 'data', allow_duplicate=True),
+        Input('thread-id', 'data'),
+        prevent_initial_call=False
+    )
+    
+    # SSE Button Click Handler
+    app.clientside_callback(
+        """
+        function(buttonClicks, threadId) {
+            const context = dash_clientside.callback_context;
+            if (!context.triggered || context.triggered.length === 0 || !threadId) {
+                return window.dash_clientside.no_update;
+            }
+            
+            const triggeredId = context.triggered[0].prop_id;
+            if (!triggeredId.includes('dynamic-button-user-choice')) {
+                return window.dash_clientside.no_update;
+            }
+            
+            try {
+                // Parse the button ID to get selection index
+                const buttonIdStr = triggeredId.split('.')[0];
+                const buttonId = JSON.parse(buttonIdStr);
+                const selectionIdx = buttonId.index;
+                
+                console.log("SSE: Sending button selection via SSE:", selectionIdx);
+                
+                // Send selection via SSE
+                if (window.workflowSSE && window.workflowSSE.isConnected) {
+                    window.workflowSSE.sendUserInput({
+                        selection_idx: selectionIdx,
+                        button_type: buttonId.option_type
+                    }).then(response => {
+                        console.log("SSE: Button selection sent successfully");
+                    }).catch(error => {
+                        console.error("SSE: Error sending button selection:", error);
+                    });
+                }
+                
+                return {
+                    action: "button_click",
+                    selection: selectionIdx,
+                    timestamp: Date.now()
+                };
+                
+            } catch (e) {
+                console.error("SSE: Error processing button click:", e);
+                return window.dash_clientside.no_update;
+            }
+        }
+        """,
+        Output('sse-event-processor', 'data', allow_duplicate=True),
+        Input({'type': 'dynamic-button-user-choice', 'option_type': ALL, 'index': ALL}, 'n_clicks'),
+        State('thread-id', 'data'),
+        prevent_initial_call=True
+    )

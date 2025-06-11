@@ -66,4 +66,9 @@ def create_stores():
         dcc.Store(id='map-click-remove-trigger'),
         dcc.Store(id='visualization-zoom-trigger'),
         dcc.Store(id='visualization-resize-debouncer'),
+        
+        # SSE-related stores
+        dcc.Store(id='sse-connection-status'),
+        dcc.Store(id='sse-event-processor'),
+        dcc.Store(id='place-disambiguation-processed'),
     ])

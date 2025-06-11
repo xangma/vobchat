@@ -1,0 +1,314 @@
+# src/vobchat/workflow_sse_adapter.py
+
+import asyncio
+import json
+import logging
+from typing import Dict, Any, Optional, AsyncGenerator
+from langchain_core.messages import AIMessage, HumanMessage, AIMessageChunk
+from langgraph.types import interrupt
+from redis.asyncio import Redis
+from vobchat.utils.redis_checkpoint import AsyncRedisSaver
+
+from vobchat.sse_manager import (
+    sse_manager, 
+    MessageEvent, 
+    InterruptEvent, 
+    StateUpdateEvent, 
+    ErrorEvent
+)
+from vobchat.state_schema import lg_State
+
+logger = logging.getLogger(__name__)
+
+class WorkflowSSEAdapter:
+    """Adapter that converts workflow events to SSE streams"""
+    
+    def __init__(self, compiled_workflow):
+        self.compiled_workflow = compiled_workflow
+        self.base_workflow = None
+        # Cache for fresh workflow instances per event loop
+        self._workflow_cache = {}
+        
+    def set_base_workflow(self, base_workflow):
+        """Store reference to the base workflow graph for recompilation"""
+        self.base_workflow = base_workflow
+    
+    async def _create_fresh_workflow(self):
+        """Create a fresh workflow instance with new Redis connection for this execution"""
+        if not self.base_workflow:
+            # Fallback to existing compiled workflow
+            return self.compiled_workflow
+            
+        # Use current event loop as cache key to avoid recompilation in same loop
+        import asyncio
+        try:
+            current_loop = asyncio.get_running_loop()
+            loop_id = id(current_loop)
+            
+            # Check if we already have a workflow for this event loop
+            if loop_id in self._workflow_cache:
+                import time
+                cache_time = time.time()
+                print(f"DEBUG: Using cached workflow for event loop {loop_id} at {cache_time:.3f}")
+                return self._workflow_cache[loop_id]
+            
+            # Create a fresh Redis connection for this event loop
+            import time
+            redis_start = time.time()
+            fresh_conn = Redis(host="localhost", port=6379, db=0)
+            fresh_checkpointer = AsyncRedisSaver(conn=fresh_conn)
+            redis_end = time.time()
+            print(f"DEBUG: Redis connection took {redis_end - redis_start:.3f}s")
+            
+            # Compile the workflow with the fresh checkpointer
+            compile_start = time.time()
+            fresh_workflow = self.base_workflow.compile(checkpointer=fresh_checkpointer)
+            compile_end = time.time()
+            print(f"DEBUG: Workflow compilation took {compile_end - compile_start:.3f}s")
+            
+            # Cache the compiled workflow for this event loop
+            self._workflow_cache[loop_id] = fresh_workflow
+            print(f"DEBUG: Created and cached fresh workflow for event loop {loop_id}")
+            return fresh_workflow
+        except Exception as e:
+            print(f"DEBUG: Failed to create fresh workflow: {e}, using fallback")
+            return self.compiled_workflow
+        
+    async def stream_workflow_execution(
+        self, 
+        workflow_input: Dict[str, Any], 
+        config: Dict[str, Any],
+        thread_id: str
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Stream workflow execution via SSE instead of using interrupts
+        """
+        try:
+            import time
+            start_time = time.time()
+            print(f"DEBUG: Workflow execution started at {start_time:.3f}")
+            
+            # Create a fresh workflow instance for this execution
+            workflow_create_start = time.time()
+            workflow_instance = await self._create_fresh_workflow()
+            workflow_create_end = time.time()
+            print(f"DEBUG: Workflow creation took {workflow_create_end - workflow_create_start:.3f}s")
+            
+            # Stream workflow messages and state updates
+            stream_start = time.time()
+            print(f"DEBUG: Starting workflow stream at {stream_start:.3f}")
+            
+            stream_iter_start = time.time()
+            message_count = 0
+            async for msg, metadata in workflow_instance.astream(
+                workflow_input,
+                config=config,
+                stream_mode="messages"
+            ):
+                message_count += 1
+                msg_time = time.time()
+                print(f"DEBUG: Received message {message_count} at {msg_time:.3f} (type: {type(msg).__name__})")
+                # Handle AI message chunks for progressive text display
+                if isinstance(msg, AIMessageChunk) and msg.content:
+                    sse_manager.broadcast_event(
+                        MessageEvent(
+                            content=msg.content,
+                            thread_id=thread_id,
+                            is_partial=True
+                        )
+                    )
+                    yield {"type": "message_chunk", "content": msg.content}
+                
+                # Handle complete AI messages
+                elif isinstance(msg, AIMessage) and msg.content:
+                    sse_manager.broadcast_event(
+                        MessageEvent(
+                            content=msg.content,
+                            thread_id=thread_id,
+                            is_partial=False
+                        )
+                    )
+                    yield {"type": "message", "content": msg.content}
+            
+            # Get final state after streaming using the fresh workflow instance
+            final_state_start = time.time()
+            print(f"DEBUG: Getting final state at {final_state_start:.3f}")
+            final_state = await workflow_instance.aget_state(config)
+            final_state_end = time.time()
+            print(f"DEBUG: Got final state at {final_state_end:.3f} (took {final_state_end - final_state_start:.3f}s)")
+            
+            # Check for interrupts and convert them to SSE events
+            interrupt_start = time.time()
+            if final_state and final_state.tasks:
+                interrupt_task = final_state.tasks[-1]
+                if interrupt_task.interrupts:
+                    interrupt_data = interrupt_task.interrupts[0].value
+                    print(f"DEBUG: Processing interrupt at {interrupt_start:.3f}")
+                    
+                    # Send interrupt as SSE event instead of blocking
+                    interrupt_broadcast_start = time.time()
+                    sse_manager.broadcast_event(
+                        InterruptEvent(
+                            interrupt_data=interrupt_data,
+                            thread_id=thread_id
+                        )
+                    )
+                    interrupt_broadcast_end = time.time()
+                    print(f"DEBUG: Interrupt broadcast took {interrupt_broadcast_end - interrupt_broadcast_start:.3f}s")
+                    
+                    yield {
+                        "type": "interrupt",
+                        "data": interrupt_data
+                    }
+            
+            # Send final state update
+            state_update_start = time.time()
+            if final_state and final_state.values:
+                print(f"DEBUG: Processing state update at {state_update_start:.3f}")
+                
+                # Filter state to only include relevant frontend data
+                extract_start = time.time()
+                frontend_state = self._extract_frontend_state(final_state.values)
+                extract_end = time.time()
+                print(f"DEBUG: State extraction took {extract_end - extract_start:.3f}s")
+                
+                broadcast_start = time.time()
+                sse_manager.broadcast_event(
+                    StateUpdateEvent(
+                        state_updates=frontend_state,
+                        thread_id=thread_id
+                    )
+                )
+                broadcast_end = time.time()
+                print(f"DEBUG: State broadcast took {broadcast_end - broadcast_start:.3f}s")
+                
+                yield {
+                    "type": "state_update",
+                    "data": frontend_state
+                }
+            
+            end_time = time.time()
+            print(f"DEBUG: Workflow execution completed at {end_time:.3f} (total: {end_time - start_time:.3f}s)")
+                
+        except Exception as e:
+            error_time = time.time()
+            print(f"DEBUG: Workflow error at {error_time:.3f}: {e}")
+            logger.error(f"Error in workflow SSE streaming: {e}", exc_info=True)
+            
+            # Send error event
+            sse_manager.broadcast_event(
+                ErrorEvent(
+                    error=str(e),
+                    thread_id=thread_id
+                )
+            )
+            
+            yield {
+                "type": "error",
+                "error": str(e)
+            }
+    
+    def _extract_frontend_state(self, workflow_state: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract only the state data needed by the frontend"""
+        frontend_keys = [
+            "selected_place_g_units",
+            "selected_place_g_unit_types", 
+            "selected_place_g_places",
+            "selected_polygons",
+            "selected_polygons_unit_types",
+            "extracted_place_names",
+            "current_place_index",
+            "current_node",
+            "selected_theme",
+            "options",
+            "cubes",
+            "selected_cubes",
+            "show_visualization"
+        ]
+        
+        return {
+            key: workflow_state.get(key)
+            for key in frontend_keys
+            if key in workflow_state
+        }
+    
+    async def handle_user_input(
+        self, 
+        thread_id: str, 
+        input_data: Dict[str, Any],
+        config: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Handle user input (button clicks, text input) and resume workflow"""
+        try:
+            # Update workflow state with user input
+            await self.compiled_workflow.aupdate_state(
+                config=config,
+                values=input_data
+            )
+            
+            # Resume workflow execution
+            results = []
+            async for result in self.stream_workflow_execution(
+                workflow_input=None,  # Resume without new input
+                config=config,
+                thread_id=thread_id
+            ):
+                results.append(result)
+            
+            return {"status": "success", "results": results}
+            
+        except Exception as e:
+            logger.error(f"Error handling user input: {e}", exc_info=True)
+            
+            sse_manager.broadcast_event(
+                ErrorEvent(
+                    error=f"Error processing input: {str(e)}",
+                    thread_id=thread_id
+                )
+            )
+            
+            return {"status": "error", "error": str(e)}
+
+class SSEInterruptHandler:
+    """Replacement for LangGraph interrupt() that sends SSE events instead"""
+    
+    @staticmethod
+    def interrupt_via_sse(value: Dict[str, Any], thread_id: str):
+        """Send interrupt data via SSE instead of blocking workflow"""
+        try:
+            # Send interrupt event immediately
+            sse_manager.broadcast_event_sync(
+                InterruptEvent(
+                    interrupt_data=value,
+                    thread_id=thread_id
+                )
+            )
+            logger.info(f"Sent interrupt via SSE for thread {thread_id}: {list(value.keys())}")
+            
+        except Exception as e:
+            logger.error(f"Error sending interrupt via SSE: {e}")
+            
+        # Don't actually interrupt the workflow - let it continue
+        # The frontend will handle the interrupt event
+
+# Monkey patch the interrupt function to use SSE
+original_interrupt = interrupt
+
+def sse_interrupt(value: Dict[str, Any]):
+    """SSE-based interrupt that doesn't block workflow execution"""
+    # Try to get thread_id from current context
+    # This is a simplified approach - in practice you might need more sophisticated context tracking
+    import contextvars
+    
+    # For now, we'll need to pass thread_id explicitly
+    # This will be handled by modifying the workflow nodes
+    logger.warning("SSE interrupt called without thread_id context - falling back to original interrupt")
+    return original_interrupt(value)
+
+# Export the adapter for use in callbacks
+def create_workflow_sse_adapter(compiled_workflow, base_workflow=None):
+    """Factory function to create workflow SSE adapter"""
+    adapter = WorkflowSSEAdapter(compiled_workflow)
+    if base_workflow:
+        adapter.set_base_workflow(base_workflow)
+    return adapter

@@ -437,40 +437,57 @@ def select_unit_on_map(state: lg_State) -> lg_State | Command:
 
     # Check if there are any workflow-selected units that need to be added to the map
     if selected_workflow_units:
-        # Find all units that are in the workflow but not yet on the map
-        missing_units = []
-        for i, unit_id in enumerate(selected_workflow_units):
-            if str(unit_id) not in selected_map_polygons_str:
-                missing_units.append((i, unit_id))
+        # CRITICAL: Check if this is a map-originated workflow (map click)
+        # If the last intent was AddPlace with polygon_id, the place was already selected on the map
+        last_intent = state.get("last_intent_payload", {})
+        is_map_click = (
+            last_intent.get("intent") == "AddPlace" and 
+            last_intent.get("arguments", {}).get("polygon_id") is not None
+        )
+        
+        # Also check if we have polygon_ids in extracted data (indicates map click origin)
+        polygon_ids = state.get("extracted_polygon_ids", [])
+        has_polygon_ids = any(pid is not None for pid in polygon_ids)
+        
+        if is_map_click or has_polygon_ids:
+            logger.info(f"select_unit_on_map: Map click detected (is_map_click={is_map_click}, has_polygon_ids={has_polygon_ids}), skipping map interrupt")
+            # For map clicks, assume the units are already selected on the map and continue
+            # No need to interrupt for map selection since user already clicked the map
+        else:
+            # Find all units that are in the workflow but not yet on the map
+            missing_units = []
+            for i, unit_id in enumerate(selected_workflow_units):
+                if str(unit_id) not in selected_map_polygons_str:
+                    missing_units.append((i, unit_id))
 
-        if missing_units:
-            # Take the first missing unit and trigger interrupt for it
-            first_missing_index, first_missing_unit = missing_units[0]
-            current_place_index = state.get("current_place_index")
-            logger.info(f"Unit {first_missing_unit} (index {first_missing_index}) not found in map selections. Issuing interrupt to update map.")
-            logger.info(f"select_unit_on_map: DEBUG - current_place_index in state = {current_place_index}")
-            logger.info(f"select_unit_on_map: DEBUG - first_missing_index = {first_missing_index}")
-            # Issue an interrupt to signal the frontend.
-            # IMPORTANT: Must pass current_place_index to preserve it through the interrupt
-            logger.info(f"select_unit_on_map: About to interrupt with state data - units={state.get('selected_place_g_units', [])}, unit_types={state.get('selected_place_g_unit_types', [])}, places={state.get('selected_place_g_places', [])}")
-            interrupt(value={
-                 # Message might be displayed or just used internally by frontend.
-                # "message": f"Please confirm or select the area for '{state['extracted_place_names'][first_missing_index]}' on the map.",
-                 # Pass the current state of selections for context.
-                "selected_place_g_places": state.get("selected_place_g_places", []),
-                "selected_place_g_units": state.get("selected_place_g_units", []),
-                "selected_place_g_unit_types": state.get("selected_place_g_unit_types", []),
-                 # Pass the CORRECT current_place_index to preserve state through interrupt
-                "current_place_index": current_place_index,
-                 # Pass total number of places for timing logic
-                "extracted_place_names": state.get("extracted_place_names", []),
-                 # Pass node name for potential resume logic.
-                "current_node": "select_unit_on_map",
-                # CRITICAL: Clear selection_idx through interrupt to ensure it's persisted
-                "selection_idx": None,
-            })
-            # Execution stops here, waits for frontend map interaction and retrigger.
-            return state
+            if missing_units:
+                # Take the first missing unit and trigger interrupt for it
+                first_missing_index, first_missing_unit = missing_units[0]
+                current_place_index = state.get("current_place_index")
+                logger.info(f"Unit {first_missing_unit} (index {first_missing_index}) not found in map selections. Issuing interrupt to update map.")
+                logger.info(f"select_unit_on_map: DEBUG - current_place_index in state = {current_place_index}")
+                logger.info(f"select_unit_on_map: DEBUG - first_missing_index = {first_missing_index}")
+                # Issue an interrupt to signal the frontend.
+                # IMPORTANT: Must pass current_place_index to preserve it through the interrupt
+                logger.info(f"select_unit_on_map: About to interrupt with state data - units={state.get('selected_place_g_units', [])}, unit_types={state.get('selected_place_g_unit_types', [])}, places={state.get('selected_place_g_places', [])}")
+                interrupt(value={
+                     # Message might be displayed or just used internally by frontend.
+                    # "message": f"Please confirm or select the area for '{state['extracted_place_names'][first_missing_index]}' on the map.",
+                     # Pass the current state of selections for context.
+                    "selected_place_g_places": state.get("selected_place_g_places", []),
+                    "selected_place_g_units": state.get("selected_place_g_units", []),
+                    "selected_place_g_unit_types": state.get("selected_place_g_unit_types", []),
+                     # Pass the CORRECT current_place_index to preserve state through interrupt
+                    "current_place_index": current_place_index,
+                     # Pass total number of places for timing logic
+                    "extracted_place_names": state.get("extracted_place_names", []),
+                     # Pass node name for potential resume logic.
+                    "current_node": "select_unit_on_map",
+                    # CRITICAL: Clear selection_idx through interrupt to ensure it's persisted
+                    "selection_idx": None,
+                })
+                # Execution stops here, waits for frontend map interaction and retrigger.
+                return state
 
     # Only proceed with routing if no interrupt was issued (i.e., all units are on map or no units exist)
     logger.info(f"All workflow units are already selected on map or no units exist. Proceeding with routing.")
@@ -1732,5 +1749,5 @@ def create_workflow(lg_state: TypedDict):
         logger.warning("Could not generate or save Mermaid PNG diagram", exc_info=True) # Non-critical error
 
     logger.info("Workflow creation and compilation completed.")
-    # Return the compiled workflow object.
-    return compiled_workflow
+    # Return both the compiled workflow and the base graph for fresh compilation
+    return compiled_workflow, workflow
