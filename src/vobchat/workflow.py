@@ -536,16 +536,11 @@ def find_cubes_node(state: lg_State) -> lg_State | Command:
         int(p) for p in state.get("selected_polygons", []) if str(p).isdigit()
     ]
 
-    # CRITICAL: Use map state as authoritative source when available
-    # This prevents stale workflow units from contaminating the selection
-    if map_selected_units_int:
-        # Map state exists and is authoritative - use it as the primary source
-        all_selected_unit_ids: list[int] = sorted(set(map_selected_units_int))
-        logger.info(f"find_cubes_node: Using map-selected units as authoritative: {all_selected_unit_ids}")
-    else:
-        # Fallback to workflow units when no map selection exists
-        all_selected_unit_ids: list[int] = sorted(set(workflow_units))
-        logger.info(f"find_cubes_node: Using workflow units as fallback: {all_selected_unit_ids}")
+    # CRITICAL: Always use workflow units as authoritative source for find_cubes_node
+    # This node is called after place/unit resolution is complete, so workflow_units 
+    # contains the definitive selection state including any removals
+    all_selected_unit_ids: list[int] = sorted(set(workflow_units))
+    logger.info(f"find_cubes_node: Using workflow units as authoritative: {all_selected_unit_ids}")
 
     if not all_selected_unit_ids:
         logger.warning("No units selected to find cubes for.")
@@ -751,6 +746,9 @@ def find_cubes_node(state: lg_State) -> lg_State | Command:
             "last_intent_payload": {},
             # CRITICAL: Clear selection_idx through interrupt to prevent stale values
             "selection_idx": None,
+            # Include selected units so SSE client can update place-state correctly
+            "selected_place_g_units": state.get("selected_place_g_units", []),
+            "selected_place_g_unit_types": state.get("selected_place_g_unit_types", []),
         }
     )
 
@@ -1070,6 +1068,15 @@ def _theme_already_matches(current_theme_json: str, query: str) -> bool:
 
 
 def resolve_theme(state: lg_State) -> lg_State | Command:
+    logger.info(
+        "VOBCHAT DEBUG: resolve_theme: selection_idx=%s current_node=%s options type=%s options len=%s keys=%s",
+        state.get("selection_idx"),
+        state.get("current_node"),
+        type(state.get("options")).__name__,
+        len(state.get("options") or []),
+        list(state.keys()),
+    )
+    logger.info(f"VOBCHAT RAW STATE: {state}")
     """Choose a theme and, if no units are known yet, prompt for a place."""
     # ------------------------------------------------------------------
     # Step 0 · CRITICAL: Ensure all places are processed before theme processing

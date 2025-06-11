@@ -264,14 +264,10 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
 
             # Start workflow in background thread using a single shared event loop
             thread_setup_start = time.time()
-            def run_workflow():
+            # Run the async workflow processing in the background
+            def process_workflow_sync():
                 try:
-                    print(f"DEBUG: Background workflow thread started for {thread_id}")
-                    print(f"DEBUG: About to start workflow - using cached client info")
-                    print(f"DEBUG: Final check - client for thread {thread_id}: {client_id if client_id else 'None'}")
-
-                    # Use a more robust approach for async execution
-                    async def async_workflow():
+                    async def async_process():
                         print(f"DEBUG: Starting async workflow execution")
                         results = []
                         async for result in workflow_adapter.stream_workflow_execution(
@@ -285,37 +281,17 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
                         logger.info(f"Workflow completed for thread {thread_id}, {len(results)} events")
                         return results
 
-                    # Always run in a fresh event loop to avoid conflicts
-                    def run_with_new_loop():
-                        """Run async workflow in a completely new event loop"""
-                        # Create a fresh event loop for this thread
-                        new_loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(new_loop)
-                        try:
-                            print(f"DEBUG: Running workflow with fresh event loop")
-                            result = new_loop.run_until_complete(async_workflow())
-                            print(f"DEBUG: Fresh event loop completed: {result}")
-                            return result
-                        finally:
-                            # Clean up the loop
-                            try:
-                                new_loop.close()
-                            except Exception as cleanup_error:
-                                print(f"DEBUG: Error closing loop: {cleanup_error}")
-
-                    thread_start_time = time.time()
-                    print(f"DEBUG: Starting background thread at {thread_start_time:.3f}")
-                    result = run_with_new_loop()
-                    thread_end_time = time.time()
-                    print(f"DEBUG: Background thread completed at {thread_end_time:.3f} (took {thread_end_time - thread_start_time:.3f}s)")
+                    # Use asyncio.run for cleaner event loop management
+                    asyncio.run(async_process())
 
                 except Exception as e:
+                    logger.error(f"Error in background workflow processing: {e}", exc_info=True)
                     print(f"DEBUG: ERROR in workflow execution: {e}")
-                    logger.error(f"Error in workflow execution: {e}", exc_info=True)
                     import traceback
                     traceback.print_exc()
 
-            workflow_thread = threading.Thread(target=run_workflow, daemon=True)
+            # Start background processing in a separate thread
+            workflow_thread = threading.Thread(target=process_workflow_sync, daemon=True)
             thread_start_time = time.time()
             workflow_thread.start()
             thread_start_end = time.time()

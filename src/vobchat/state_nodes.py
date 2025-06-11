@@ -524,9 +524,9 @@ def RemovePlace_node(state: lg_State):
     "selected_place_g_places": state.get("selected_place_g_places", []),
     "selected_place_g_units": state.get("selected_place_g_units", []),
     "selected_place_g_unit_types": state.get("selected_place_g_unit_types", []),
-    # "cubes": cubes_filtered,            # ↓ front-end will overwrite its store
-    # "selected_cubes": cubes_filtered,   # ↓ persist for future turns
-    # "show_visualization_signal": show_viz,
+    # CRITICAL: Include filtered cube data so SSE client can update visualization correctly
+    "cubes": cubes_filtered_json if cubes_filtered_json else None,
+    "show_visualization": show_viz,
     "selected_polygons": state.get("selected_polygons", []),
     "selected_polygons_unit_types": state.get("selected_polygons_unit_types", []),
     "current_node": "select_unit_on_map",

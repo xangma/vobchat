@@ -1,6 +1,10 @@
 // src/vobchat/assets/sse_client.js
 
 class WorkflowSSEClient {
+    // Store the latest interrupt so we know the current options/node for user input
+    setLatestInterrupt(interruptData) {
+        this.latestInterruptData = interruptData;
+    }
     constructor() {
         this.eventSource = null;
         this.threadId = null;
@@ -148,6 +152,17 @@ class WorkflowSSEClient {
     
     sendUserInput(inputData) {
         // Send user input via regular HTTP request since SSE is one-way
+        // Merge in the latest interrupt context for selection_idx/button clicks
+        let payload = { ...inputData };
+        if (this.latestInterruptData && (inputData.selection_idx !== undefined)) {
+            // Always add current_node and options from latest interrupt for button clicks
+            if (this.latestInterruptData.current_node) {
+                payload.current_node = this.latestInterruptData.current_node;
+            }
+            if (Array.isArray(this.latestInterruptData.options)) {
+                payload.options = this.latestInterruptData.options;
+            }
+        }
         return fetch('/api/workflow/input', {
             method: 'POST',
             headers: {
@@ -155,7 +170,7 @@ class WorkflowSSEClient {
             },
             body: JSON.stringify({
                 thread_id: this.threadId,
-                input_data: inputData
+                input_data: payload
             })
         });
     }
@@ -239,8 +254,9 @@ window.workflowSSE.onMessage = function(content, isPartial) {
 window.workflowSSE.onInterrupt = function(interruptData) {
     console.log('SSE: Processing interrupt', interruptData);
     
-    // Track interrupt timing to prevent stale state updates
+    // Track interrupt and persist so button clicks can send full context
     window.workflowSSE._lastInterruptTime = Date.now();
+    window.workflowSSE.setLatestInterrupt(interruptData);
     
     // Handle different types of interrupts
     if (interruptData.options) {
@@ -270,8 +286,9 @@ window.workflowSSE.onInterrupt = function(interruptData) {
         }
     }
     
-    if (interruptData.cubes) {
-        // Data visualization interrupt
+    // CRITICAL: Always update visualization state based on interrupt data
+    // This handles both data delivery (when cubes present) and removal (when units empty)
+    if (interruptData.cubes || interruptData.selected_place_g_units !== undefined) {
         try {
             updateVisualizationFromInterrupt(interruptData);
             console.log('SSE: Visualization update completed successfully');
@@ -321,12 +338,27 @@ window.workflowSSE.onInterrupt = function(interruptData) {
 window.workflowSSE.onStateUpdate = function(stateData) {
     console.log('SSE: Processing state update', stateData);
     
-    // Skip state updates that conflict with recent interrupt data
-    // This prevents stale state from overriding correct interrupt state
-    if (window.workflowSSE._lastInterruptTime && 
-        Date.now() - window.workflowSSE._lastInterruptTime < 1000) {
-        console.log('SSE: Skipping potentially stale state update (recent interrupt)');
-        return;
+    // CRITICAL: Check if this state update contradicts recent interrupt data
+    // If interrupt data indicates removal (empty arrays) but state update has data,
+    // prioritize the interrupt data as it represents the most recent workflow action
+    if (window.workflowSSE.latestInterruptData) {
+        const interruptUnits = window.workflowSSE.latestInterruptData.selected_place_g_units || [];
+        const stateUnits = stateData.selected_place_g_units || [];
+        
+        // If interrupt shows empty selection but state update has units, it's likely stale
+        if (interruptUnits.length === 0 && stateUnits.length > 0) {
+            console.log('SSE: Ignoring stale state update - interrupt shows removal but state has units');
+            console.log('SSE: Interrupt units:', interruptUnits, 'State units:', stateUnits);
+            return;
+        }
+        
+        // If interrupt shows different units than state, prefer interrupt (more recent workflow action)
+        if (interruptUnits.length > 0 && stateUnits.length > 0 && 
+            JSON.stringify(interruptUnits.sort()) !== JSON.stringify(stateUnits.sort())) {
+            console.log('SSE: Ignoring conflicting state update - interrupt and state show different units');
+            console.log('SSE: Interrupt units:', interruptUnits, 'State units:', stateUnits);
+            return;
+        }
     }
     
     // Update relevant Dash components based on state changes
@@ -440,26 +472,59 @@ function updateMapFromInterrupt(interruptData) {
 function updateVisualizationFromInterrupt(interruptData) {
     try {
         if (typeof dash_clientside !== 'undefined' && dash_clientside.set_props) {
-            // Update place state with cube data
+            // Get current place state
+            const placeStateStore = document.querySelector('#place-state');
+            const currentPlaceState = (placeStateStore && placeStateStore._dash_value && placeStateStore._dash_value.data) || {};
+            
+            // Use interrupt data for selected units - this is authoritative
+            // If interrupt has empty units array, it means units were removed
+            const selectedUnits = interruptData.selected_place_g_units || [];
+            
+            console.log('SSE: Updating visualization with interrupt data - selected units:', selectedUnits);
+            console.log('SSE: Interrupt has cubes:', !!interruptData.cubes);
+            
+            // Determine the new place state data based on interrupt
+            let newPlaceState;
+            if (selectedUnits.length === 0) {
+                // Complete removal case - clear all visualization data
+                console.log('SSE: Clearing visualization data (complete removal detected)');
+                newPlaceState = {
+                    cubes: null,
+                    cube_data: null,
+                    selected_place_g_units: []
+                };
+            } else {
+                // Partial removal or addition case - use filtered cube data from interrupt
+                console.log('SSE: Updating visualization data (partial removal or addition)');
+                newPlaceState = {
+                    cubes: interruptData.cubes || currentPlaceState.cubes,
+                    cube_data: interruptData.cubes || currentPlaceState.cube_data,
+                    selected_place_g_units: selectedUnits
+                };
+            }
+            
+            // Update place state
             dash_clientside.set_props('place-state', {
-                data: {
-                    cubes: interruptData.cubes,
-                    cube_data: interruptData.cubes
-                }
+                data: newPlaceState
             });
             
             // Get current app state and update visualization flag
             const appStateStore = document.querySelector('#app-state');
             const currentAppState = (appStateStore && appStateStore._dash_value && appStateStore._dash_value.data) || {};
             
+            // Use interrupt's show_visualization flag if provided, otherwise determine based on data
+            const shouldShowVisualization = interruptData.show_visualization !== undefined 
+                ? interruptData.show_visualization 
+                : !!(newPlaceState.cubes && selectedUnits.length > 0);
+            
             dash_clientside.set_props('app-state', {
                 data: {
                     ...currentAppState,
-                    show_visualization: true
+                    show_visualization: shouldShowVisualization
                 }
             });
             
-            console.log('SSE: Updated visualization from interrupt');
+            console.log('SSE: Updated visualization from interrupt - show_visualization:', shouldShowVisualization);
         } else {
             console.warn('SSE: dash_clientside not available for visualization update');
         }

@@ -90,6 +90,7 @@ def register_sse_routes(server, compiled_workflow, base_workflow):
             thread_id = data.get('thread_id')
             input_data = data.get('input_data', {})
             print(f"DEBUG: Parsed thread_id: {thread_id}, input_data: {input_data}")
+            print(f"VOBCHAT DEBUG API RAW INPUT: {data}")
 
             if not thread_id:
                 print(f"DEBUG: No thread_id provided")

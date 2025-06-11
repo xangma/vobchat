@@ -294,6 +294,58 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                     if current_node == "resolve_theme":
                         target_node = "resolve_theme"
                         logger.info(f"Button click: Theme selection button, routing to resolve_theme")
+                        # Patch: persist theme selection context to the workflow state
+                        theme_options = app_state_async.get("button_options")
+                        workflow_update = {
+                            "selection_idx": current_selection_idx,
+                            "current_node": "resolve_theme",
+                        }
+                        if theme_options:
+                            workflow_update["options"] = theme_options
+                        else:
+                            logger.warning("No theme options found in app_state_async['button_options'] – button click may not advance workflow!")
+                        logger.info(f"VOBCHAT CHAT aupdate_state values: {workflow_update}")
+                        await compiled_workflow.aupdate_state(
+                            config=current_config, values=workflow_update, as_node=target_node
+                        )
+                        workflow_input = None
+                    elif current_node == "resolve_place_and_unit":
+                        target_node = "resolve_place_and_unit"
+                        logger.info(f"Button click: Place/unit selection button, routing to resolve_place_and_unit")
+                        await compiled_workflow.aupdate_state(config=current_config, values={"selection_idx": current_selection_idx}, as_node=target_node)
+                        workflow_input = None
+                    elif current_node == "ask_followup_node":
+                        target_node = "ask_followup_node"
+                        logger.info(f"Button click: Followup selection button, routing to ask_followup_node")
+                        await compiled_workflow.aupdate_state(config=current_config, values={"selection_idx": current_selection_idx}, as_node=target_node)
+                        workflow_input = None
+                    else:
+                        logger.info(f"Button click: Unknown context '{current_node}', letting workflow handle routing naturally")
+                        await compiled_workflow.aupdate_state(config=current_config, values={"selection_idx": current_selection_idx})
+                        workflow_input = None
+                else:
+                    logger.warning(f"Button click: Workflow not interrupted, setting selection_idx={current_selection_idx}")
+                    workflow_input = {"selection_idx": current_selection_idx}
+            # Case 3: Retrigger after map selection - resume the workflow
+            if is_retrigger and initial_map_state.get('selected_polygons'):
+                # Use the state we already retrieved
+                current_state = latest_state
+                current_units = current_state.values.get("selected_place_g_units", []) if current_state else []
+                logger.info(f"Retrigger continuation: current units in state = {current_units}")
+
+                # Check if workflow is in interrupted state
+                if current_state and current_state.next:
+                    logger.info(f"Workflow has next nodes to execute: {current_state.next}")
+                    # Resume the workflow with None input to continue from interrupt
+                    workflow_input = None
+                elif current_state and hasattr(current_state, 'tasks') and current_state.tasks:
+                    logger.info(f"Workflow has pending tasks: {[task.name for task in current_state.tasks]}")
+                    # Resume the workflow with None input to continue from interrupt
+                    workflow_input = None
+                else:
+                    logger.info("Workflow not in interrupted state, using empty workflow input to trigger routing")
+                    # Use None input to trigger the routing logic without new messages
+                    workflow_input = None
                     elif current_node == "resolve_place_and_unit":
                         target_node = "resolve_place_and_unit"
                         logger.info(f"Button click: Place/unit selection button, routing to resolve_place_and_unit")
