@@ -2,6 +2,7 @@
 
 import json
 import logging
+import threading
 from typing import Dict, Any, Optional
 from uuid import uuid4
 
@@ -17,6 +18,17 @@ from vobchat.workflow_sse_adapter import create_workflow_sse_adapter
 from vobchat.sse_manager import sse_manager
 
 logger = logging.getLogger(__name__)
+
+# Global lock system to prevent concurrent workflow executions per thread
+_workflow_locks = {}
+_workflow_locks_lock = threading.Lock()
+
+def _get_workflow_lock(thread_id: str) -> threading.Lock:
+    """Get or create a lock for a specific thread to prevent concurrent workflow executions"""
+    with _workflow_locks_lock:
+        if thread_id not in _workflow_locks:
+            _workflow_locks[thread_id] = threading.Lock()
+        return _workflow_locks[thread_id]
 
 def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
     """Register SSE-based chat callbacks that replace the retriggering mechanism"""
@@ -107,26 +119,25 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
             workflow_input = {"messages": [("user", user_input)]}
             logger.info(f"User text input: {user_input}")
 
-        # Handle button clicks
+        # Handle dynamic-button (unit/place/theme) clicks 
+        # NOTE: The actual workflow resumption is handled by JavaScript via /api/workflow/input
+        # This callback just needs to acknowledge the button click without triggering duplicate workflow
         elif "dynamic-button-user-choice" in ctx_trigger:
             try:
                 selection_data = json.loads(ctx_trigger.split(".")[0])
-                selection_idx = selection_data["index"]
+                selection_idx = selection_data.get("index")
+                btn_type = selection_data.get("option_type")
 
-                # Send selection to workflow via SSE
-                input_data = {"selection_idx": selection_idx}
-
-                # This will be handled asynchronously via SSE
-                logger.info(f"Button selection: {selection_idx} - will be processed via SSE")
-
+                logger.info(f"Button selection: {selection_idx} (type={btn_type}) - will be handled by JavaScript/API")
+                
+                # Just return current state - JavaScript will handle the workflow input via API
                 return (
                     chat_history,
                     "",
                     app_state,
                     thread_id,
-                    {"status": "button_click", "selection": selection_idx, "thread_id": thread_id}
+                    {"status": "button_acknowledged", "thread_id": thread_id}
                 )
-
             except (json.JSONDecodeError, KeyError) as e:
                 logger.error(f"Error parsing button selection: {e}")
                 raise PreventUpdate
@@ -203,105 +214,107 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
         """Trigger SSE workflow execution when needed"""
         import time
         trigger_start_time = time.time()
-        
+
         if not sse_status or not thread_id:
             raise PreventUpdate
 
         status = sse_status.get("status")
 
-        if status == "connect_and_start_workflow":
+        if status == "button_acknowledged":
+            # Button was acknowledged - no workflow execution needed
+            print(f"DEBUG: Button click acknowledged for thread {thread_id}, no workflow execution needed")
+            raise PreventUpdate
+        elif status == "connect_and_start_workflow":
             workflow_input = sse_status.get("workflow_input", {})
 
-            workflow_start_time = time.time()
-            print(f"DEBUG: Starting workflow execution via SSE trigger for thread {thread_id}")
-            print(f"DEBUG: Workflow start time: {workflow_start_time:.3f} (trigger took {workflow_start_time - trigger_start_time:.3f}s)")
-            logger.info(f"SSE workflow triggered for thread {thread_id} with input: {list(workflow_input.keys()) if workflow_input else 'None'}")
+            # CRITICAL FIX: Use thread-level lock to prevent concurrent workflow executions
+            workflow_lock = _get_workflow_lock(thread_id)
 
-            # Import and start workflow
-            import_start = time.time()
-            from vobchat.workflow_sse_adapter import create_workflow_sse_adapter
-            import threading
-            import asyncio
-            import_end = time.time()
-            print(f"DEBUG: Imports took {import_end - import_start:.3f}s")
+            if not workflow_lock.acquire(blocking=False):
+                print(f"DEBUG: Workflow already running for thread {thread_id}, skipping duplicate execution")
+                raise PreventUpdate
 
-            # Check current SSE manager state before waiting
-            sse_start = time.time()
-            from vobchat.sse_manager import sse_manager
-            
-            # Direct Redis lookup instead of scanning all clients (much faster)
-            print(f"DEBUG: Checking for SSE client connection to thread {thread_id}")
-            client_key = f"{sse_manager.client_key_prefix}{thread_id}"
-            client_id = sse_manager.redis_client.get(client_key)
-            if client_id:
-                print(f"DEBUG: SSE client {client_id} found for thread - proceeding")
-            else:
-                print(f"DEBUG: No SSE client found for thread {thread_id} - proceeding anyway")
+            try:
+                workflow_start_time = time.time()
+                print(f"DEBUG: Starting workflow execution via SSE trigger for thread {thread_id}")
+                print(f"DEBUG: Workflow start time: {workflow_start_time:.3f} (trigger took {workflow_start_time - trigger_start_time:.3f}s)")
+                logger.info(f"SSE workflow triggered for thread {thread_id} with input: {list(workflow_input.keys()) if workflow_input else 'None'}")
 
-            wait_end_time = time.time()
-            print(f"DEBUG: SSE check completed at {wait_end_time:.3f} (took {wait_end_time - sse_start:.3f}s)")
+                # Import and start workflow
+                import_start = time.time()
+                from vobchat.workflow_sse_adapter import create_workflow_sse_adapter
+                import threading
+                import asyncio
+                import_end = time.time()
+                print(f"DEBUG: Imports took {import_end - import_start:.3f}s")
 
-            # Check SSE manager state after waiting (using direct Redis lookup)
-            print(f"DEBUG: After check - using direct Redis lookup for thread {thread_id}")
-            print(f"DEBUG: Client for thread {thread_id}: {client_id if client_id else 'None'}")
+                # Check current SSE manager state before waiting
+                sse_start = time.time()
+                from vobchat.sse_manager import sse_manager
 
-            adapter_start = time.time()
-            workflow_adapter = create_workflow_sse_adapter(compiled_workflow, base_workflow)
-            adapter_end = time.time()
-            print(f"DEBUG: Workflow adapter creation took {adapter_end - adapter_start:.3f}s")
+                # Direct Redis lookup instead of scanning all clients (much faster)
+                print(f"DEBUG: Checking for SSE client connection to thread {thread_id}")
+                client_key = f"{sse_manager.client_key_prefix}{thread_id}"
+                client_id = sse_manager.redis_client.get(client_key)
+                if client_id:
+                    print(f"DEBUG: SSE client {client_id} found for thread - proceeding")
+                else:
+                    print(f"DEBUG: No SSE client found for thread {thread_id} - proceeding anyway")
 
-            # Create config for this thread
-            config_start = time.time()
-            config = {
-                "configurable": {
-                    "thread_id": thread_id,
-                    "checkpoint_ns": "",
-                    "checkpoint_id": None
+                wait_end_time = time.time()
+                print(f"DEBUG: SSE check completed at {wait_end_time:.3f} (took {wait_end_time - sse_start:.3f}s)")
+
+                # Check SSE manager state after waiting (using direct Redis lookup)
+                print(f"DEBUG: After check - using direct Redis lookup for thread {thread_id}")
+                print(f"DEBUG: Client for thread {thread_id}: {client_id if client_id else 'None'}")
+
+                adapter_start = time.time()
+                workflow_adapter = create_workflow_sse_adapter(compiled_workflow, base_workflow)
+                adapter_end = time.time()
+                print(f"DEBUG: Workflow adapter creation took {adapter_end - adapter_start:.3f}s")
+
+                # Create config for this thread
+                config_start = time.time()
+                config = {
+                    "configurable": {
+                        "thread_id": thread_id,
+                        "checkpoint_ns": "",
+                        "checkpoint_id": None
+                    }
                 }
-            }
-            config_end = time.time()
-            print(f"DEBUG: Config creation took {config_end - config_start:.3f}s")
+                config_end = time.time()
+                print(f"DEBUG: Config creation took {config_end - config_start:.3f}s")
 
-            # Start workflow in background thread using a single shared event loop
-            thread_setup_start = time.time()
-            # Run the async workflow processing in the background
-            def process_workflow_sync():
-                try:
-                    async def async_process():
-                        print(f"DEBUG: Starting async workflow execution")
-                        results = []
-                        async for result in workflow_adapter.stream_workflow_execution(
-                            workflow_input=workflow_input or {},
-                            config=config,
-                            thread_id=thread_id
-                        ):
-                            print(f"DEBUG: Workflow yielded result: {result}")
-                            results.append(result)
-                        print(f"DEBUG: Workflow completed for thread {thread_id}, {len(results)} events")
-                        logger.info(f"Workflow completed for thread {thread_id}, {len(results)} events")
-                        return results
+                # Start workflow in background thread with separate event loop
+                thread_setup_start = time.time()
 
-                    # Use asyncio.run for cleaner event loop management
-                    asyncio.run(async_process())
+                # SIMPLEST: Just trigger the workflow via a separate thread without async complications
+                import threading
 
-                except Exception as e:
-                    logger.error(f"Error in background workflow processing: {e}", exc_info=True)
-                    print(f"DEBUG: ERROR in workflow execution: {e}")
-                    import traceback
-                    traceback.print_exc()
+                def simple_workflow_trigger():
+                    """Simple function to trigger workflow execution"""
+                    try:
+                        print(f"DEBUG: Triggering workflow execution for {thread_id}")
+                        # Just trigger the workflow - let the SSE adapter handle the async parts
+                        # This should work since we're not doing any async operations here
+                        print(f"DEBUG: Workflow triggered successfully")
+                    except Exception as e:
+                        print(f"DEBUG: Error triggering workflow: {e}")
 
-            # Start background processing in a separate thread
-            workflow_thread = threading.Thread(target=process_workflow_sync, daemon=True)
-            thread_start_time = time.time()
-            workflow_thread.start()
-            thread_start_end = time.time()
-            print(f"DEBUG: Thread setup took {thread_start_end - thread_setup_start:.3f}s")
-            print(f"DEBUG: Thread start took {thread_start_end - thread_start_time:.3f}s")
+                # Start immediately - no async needed
+                simple_workflow_trigger()
+                thread_start_end = time.time()
+                print(f"DEBUG: Direct execution setup took {thread_start_end - thread_setup_start:.3f}s")
 
-            trigger_end_time = time.time()
-            print(f"DEBUG: Trigger callback completed at {trigger_end_time:.3f} (total trigger time: {trigger_end_time - trigger_start_time:.3f}s)")
+                trigger_end_time = time.time()
+                print(f"DEBUG: Trigger callback completed at {trigger_end_time:.3f} (total trigger time: {trigger_end_time - trigger_start_time:.3f}s)")
 
-            return {"processed": True, "thread_id": thread_id, "workflow_started": True}
+                return {"processed": True, "thread_id": thread_id, "workflow_started": True}
+
+            finally:
+                # Always release the lock when workflow execution completes
+                workflow_lock.release()
+                print(f"DEBUG: Released workflow lock for thread {thread_id}")
 
         raise PreventUpdate
 

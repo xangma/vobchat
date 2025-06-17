@@ -54,15 +54,66 @@ def register_sse_routes(server, compiled_workflow, base_workflow):
         """Initialize SSE connection"""
         client_id = str(uuid.uuid4())
         thread_id = request.args.get('thread_id', str(uuid.uuid4()))
+        workflow_input_param = request.args.get('workflow_input')
 
         print(f"DEBUG: SSE connection request - client_id: {client_id}, thread_id: {thread_id}")
+        print(f"DEBUG: SSE workflow_input_param: {workflow_input_param}")
+        print(f"DEBUG: SSE request.args: {dict(request.args)}")
         logger.info(f"SSE connection request - client_id: {client_id}, thread_id: {thread_id}")
 
         # Clear any existing clients for this thread first
         sse_manager.clear_thread_clients(thread_id)
-        
+
         # Add client to SSE manager
         sse_manager.add_client(client_id, thread_id)
+
+        # CRITICAL: If this is a new workflow (has workflow_input), start it automatically
+        if workflow_input_param:
+            try:
+                import json
+                workflow_input = json.loads(workflow_input_param)
+                print(f"DEBUG: Starting workflow automatically for new SSE connection with input: {workflow_input}")
+
+                # Start workflow in background thread
+                def start_workflow():
+                    try:
+                        from vobchat.workflow_sse_adapter import create_workflow_sse_adapter
+                        import asyncio
+
+                        workflow_adapter = create_workflow_sse_adapter(compiled_workflow, base_workflow)
+                        config = {
+                            "configurable": {
+                                "thread_id": thread_id,
+                                "checkpoint_ns": "",
+                                "checkpoint_id": None
+                            }
+                        }
+
+                        # Run workflow in new event loop
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+
+                        async def run_workflow():
+                            async for result in workflow_adapter.stream_workflow_execution(
+                                workflow_input,
+                                config,
+                                thread_id
+                            ):
+                                print(f"DEBUG: Auto-started workflow result: {result}")
+
+                        loop.run_until_complete(run_workflow())
+                        loop.close()
+
+                    except Exception as e:
+                        print(f"DEBUG: Error auto-starting workflow: {e}")
+
+                import threading
+                workflow_thread = threading.Thread(target=start_workflow, daemon=True)
+                workflow_thread.start()
+                print(f"DEBUG: Auto-started workflow thread for new connection")
+
+            except Exception as e:
+                print(f"DEBUG: Error parsing workflow_input parameter: {e}")
 
         print(f"DEBUG: SSE client added to manager, creating response stream")
         return create_sse_response(client_id)
@@ -115,27 +166,23 @@ def register_sse_routes(server, compiled_workflow, base_workflow):
                 }
             }
 
-            # Run the async workflow processing in the background
-            def process_workflow_sync():
-                try:
-                    async def async_process():
-                        result = await workflow_adapter.handle_user_input(
-                            thread_id=thread_id,
-                            input_data=input_data,
-                            config=config
-                        )
-                        logging.info(f"Workflow processing completed for thread {thread_id}: {result.get('status')}")
-                        return result
+            # Run the async workflow processing in a background thread with its own event loop
+            def process_workflow_in_thread():
+                async def async_process():
+                    result = await workflow_adapter.handle_user_input(
+                        thread_id=thread_id,
+                        input_data=input_data,
+                        config=config
+                    )
+                    logging.info(f"Workflow processing completed for thread {thread_id}: {result.get('status')}")
+                    return result
 
-                    # Use asyncio.run for cleaner event loop management
-                    asyncio.run(async_process())
-
-                except Exception as e:
-                    logging.error(f"Error in background workflow processing: {e}", exc_info=True)
+                # Create and run the event loop in this thread
+                asyncio.run(async_process())
 
             # Start background processing in a separate thread
             import threading
-            workflow_thread = threading.Thread(target=process_workflow_sync, daemon=True)
+            workflow_thread = threading.Thread(target=process_workflow_in_thread, daemon=True)
             workflow_thread.start()
 
             return {
@@ -180,31 +227,27 @@ def register_sse_routes(server, compiled_workflow, base_workflow):
                 }
             }
 
-            # Run the async workflow processing in the background
-            def process_workflow_sync():
-                try:
-                    async def async_process():
-                        # Stream workflow execution
-                        results = []
-                        async for result in workflow_adapter.stream_workflow_execution(
-                            workflow_input=workflow_input,
-                            config=config,
-                            thread_id=thread_id
-                        ):
-                            results.append(result)
+            # Run the async workflow processing in a background thread with its own event loop
+            def process_workflow_in_thread():
+                async def async_process():
+                    # Stream workflow execution
+                    results = []
+                    async for result in workflow_adapter.stream_workflow_execution(
+                        workflow_input=workflow_input,
+                        config=config,
+                        thread_id=thread_id
+                    ):
+                        results.append(result)
 
-                        logging.info(f"Workflow execution completed for thread {thread_id}, {len(results)} events")
-                        return results
+                    logging.info(f"Workflow execution completed for thread {thread_id}, {len(results)} events")
+                    return results
 
-                    # Use asyncio.run for cleaner event loop management
-                    asyncio.run(async_process())
-
-                except Exception as e:
-                    logging.error(f"Error in background workflow execution: {e}", exc_info=True)
+                # Create and run the event loop in this thread
+                asyncio.run(async_process())
 
             # Start background processing in a separate thread
             import threading
-            workflow_thread = threading.Thread(target=process_workflow_sync, daemon=True)
+            workflow_thread = threading.Thread(target=process_workflow_in_thread, daemon=True)
             workflow_thread.start()
 
             return {

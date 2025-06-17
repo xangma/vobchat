@@ -896,15 +896,29 @@ def register_clientside_callbacks(app: Dash):
     # SSE Initialization Callback
     app.clientside_callback(
         """
-        function(threadId) {
-            console.log("SSE Initialization callback triggered with thread ID:", threadId);
+        function(threadId, sseStatus) {
+            console.log("SSE Initialization callback triggered with thread ID:", threadId, "and status:", sseStatus);
             
+            // Priority 1: Handle explicit connect signals with workflow input
+            if (sseStatus && sseStatus.connect_sse && sseStatus.thread_id && sseStatus.workflow_input) {
+                console.log("SSE: Connecting with workflow input from status:", sseStatus.workflow_input);
+                if (window.workflowSSE) {
+                    window.workflowSSE.connect(sseStatus.thread_id, sseStatus.workflow_input);
+                    return {
+                        status: "connected_with_workflow",
+                        thread_id: sseStatus.thread_id,
+                        timestamp: Date.now()
+                    };
+                }
+            }
+            
+            // Priority 2: Handle thread ID changes (reconnections)
             if (!threadId) {
                 console.log("No thread ID available for SSE connection");
                 return window.dash_clientside.no_update;
             }
             
-            // Initialize SSE connection
+            // Initialize SSE connection (without workflow input for existing connections)
             if (window.workflowSSE && !window.workflowSSE.isConnected) {
                 console.log("Connecting to SSE for thread:", threadId);
                 window.workflowSSE.connect(threadId);
@@ -930,6 +944,7 @@ def register_clientside_callbacks(app: Dash):
         """,
         Output('sse-connection-status', 'data', allow_duplicate=True),
         Input('thread-id', 'data'),
+        Input('sse-connection-status', 'data'),
         prevent_initial_call=False
     )
     

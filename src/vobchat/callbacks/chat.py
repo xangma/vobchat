@@ -263,8 +263,9 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
             elif is_retrigger and initial_map_state.get('selected_polygons') and latest_state.next:
                 logger.info(f"Retrigger detected: Workflow is interrupted with next nodes: {latest_state.next}. Not syncing state to preserve interrupt.")
             elif is_retrigger and initial_map_state.get('unit_types'):
-                # CRITICAL FIX: Handle unit type changes during retrigger
-                logger.info("Retrigger detected: Unit type changes may need map polygon refresh.")
+                # CRITICAL: Handle unit type changes during retrigger - resume workflow for next place
+                logger.info("Retrigger detected: Unit type changes may need resuming workflow.")
+                workflow_input = None
 
 
             # --- Prepare inputs for the LangGraph workflow based on how this function was triggered ---
@@ -312,7 +313,13 @@ def register_chat_callbacks(app, compiled_workflow, background_callback_manager)
                     elif current_node == "resolve_place_and_unit":
                         target_node = "resolve_place_and_unit"
                         logger.info(f"Button click: Place/unit selection button, routing to resolve_place_and_unit")
-                        await compiled_workflow.aupdate_state(config=current_config, values={"selection_idx": current_selection_idx}, as_node=target_node)
+                        await compiled_workflow.aupdate_state(
+                            config=current_config,
+                            values={"selection_idx": current_selection_idx},
+                            as_node=target_node
+                        )
+                        # After a unit-type selection, re-trigger callback to resume next place
+                        app_state_async["retrigger_chat"] = True
                         workflow_input = None
                     elif current_node == "ask_followup_node":
                         target_node = "ask_followup_node"

@@ -86,11 +86,11 @@ def agent_node(state: lg_State):
                 # CRITICAL: Implement intent prioritization to handle ambiguous cases
                 # When multiple intents are detected, prioritize certain intents over others
                 all_intents = extracted_payload_obj.intents
-                
+
                 # Priority order: AddPlace > AddTheme > other intents > DescribeTheme > Chat
                 priority_order = [
                     AssistantIntent.ADD_PLACE,
-                    AssistantIntent.REMOVE_PLACE, 
+                    AssistantIntent.REMOVE_PLACE,
                     AssistantIntent.ADD_THEME,
                     AssistantIntent.REMOVE_THEME,
                     AssistantIntent.SHOW_STATE,
@@ -100,7 +100,7 @@ def agent_node(state: lg_State):
                     AssistantIntent.DESCRIBE_THEME,
                     AssistantIntent.CHAT
                 ]
-                
+
                 # Find the highest priority intent
                 chosen_intent_obj = None
                 for priority_intent in priority_order:
@@ -110,18 +110,18 @@ def agent_node(state: lg_State):
                             break
                     if chosen_intent_obj:
                         break
-                
+
                 # Fallback to first intent if no priority match (shouldn't happen)
                 if not chosen_intent_obj:
                     chosen_intent_obj = all_intents[0]
-                
+
                 # Separate the chosen intent from the rest
                 rest = [intent for intent in all_intents if intent != chosen_intent_obj]
-                
+
                 final_intent = chosen_intent_obj.intent
                 final_args = chosen_intent_obj.arguments
                 payload_to_route = chosen_intent_obj.model_dump()
-                
+
                 # Log the prioritization decision
                 if len(all_intents) > 1:
                     intent_names = [intent.intent.value for intent in all_intents]
@@ -252,7 +252,7 @@ def agent_node(state: lg_State):
         elif current_node == "resolve_place_and_unit" and selection_idx is not None:
             logging.info(f"agent_node: User made selection {selection_idx}, routing to resolve_place_and_unit")
             # Pass selection_idx to resolve_place_and_unit but don't clear it here as it's needed
-            return Command(goto="resolve_place_and_unit")
+            return Command(goto="resolve_place_and_unit", update=state)
 
         queue = state.get("intent_queue", [])
         if queue:
@@ -291,7 +291,7 @@ def agent_node(state: lg_State):
             if num_places > 0 and current_index < num_places:
                 logging.info(f"agent_node: Found {num_places - current_index} more places to process, routing to resolve_place_and_unit")
                 # Don't clear selection_idx here as resolve_place_and_unit may need it
-                return Command(goto="resolve_place_and_unit")
+                return Command(goto="resolve_place_and_unit", update=state)
             else:
                 logging.info("agent_node: No places to process. Ending turn.")
                 # CRITICAL: Clear selection_idx when no work to do to prevent stale values

@@ -47,6 +47,13 @@ def merge_dict(existing: Optional[dict], new: Optional[dict]) -> Optional[dict]:
     return existing
 
 
+def merge_bool(existing: Optional[bool], new: Optional[bool]) -> Optional[bool]:
+    """Helper function to merge booleans, preferring new value if provided."""
+    if new is not None:
+        return new
+    return existing
+
+
 class lg_State(TypedDict):
     # conversation
     messages: Annotated[List[AnyMessage], add_messages]
@@ -96,5 +103,8 @@ class lg_State(TypedDict):
     last_intent_payload: Annotated[Optional[dict], merge_dict]
     options: Annotated[Optional[List[dict]], merge_lists]
     message: Annotated[Optional[str], merge_string]
+    continue_to_next_place: Annotated[Optional[bool], merge_bool]
+    units_needing_map_selection: Annotated[Optional[List[int]], merge_lists]
+    map_update_request: Annotated[Optional[dict], merge_dict]
     _theme_hint_done: Optional[bool]
     _prompted_for_place: Optional[bool]

@@ -22,7 +22,7 @@ class WorkflowSSEClient {
         this.onDisconnected = null;
     }
 
-    connect(threadId) {
+    connect(threadId, workflowInput = null) {
         if (this.isConnected && this.threadId === threadId) {
             console.log('SSE: Already connected to thread', threadId);
             return;
@@ -31,9 +31,20 @@ class WorkflowSSEClient {
         this.disconnect(); // Close existing connection
 
         this.threadId = threadId;
-        console.log('SSE: Connecting to thread', threadId);
+        console.log('SSE: Connecting to thread', threadId, 'with workflow input:', workflowInput);
 
-        const url = `/api/sse/connect?thread_id=${encodeURIComponent(threadId)}`;
+        let url = `/api/sse/connect?thread_id=${encodeURIComponent(threadId)}`;
+        
+        // Add workflow input if provided
+        if (workflowInput) {
+            const encodedInput = encodeURIComponent(JSON.stringify(workflowInput));
+            url += `&workflow_input=${encodedInput}`;
+            console.log('SSE: Including workflow input in connection URL:', url);
+        } else {
+            console.log('SSE: No workflow input provided');
+        }
+        
+        console.log('SSE: Final connection URL:', url);
         this.eventSource = new EventSource(url);
 
         this.eventSource.onopen = (event) => {
@@ -162,6 +173,10 @@ class WorkflowSSEClient {
             if (Array.isArray(this.latestInterruptData.options)) {
                 payload.options = this.latestInterruptData.options;
             }
+            // Add current_place_index to track which place this selection belongs to
+            if (this.latestInterruptData.current_place_index !== undefined) {
+                payload.current_place_index = this.latestInterruptData.current_place_index;
+            }
         }
         return fetch('/api/workflow/input', {
             method: 'POST',
@@ -276,7 +291,7 @@ window.workflowSSE.onInterrupt = function(interruptData) {
         }
     }
 
-    if (interruptData.current_node === 'select_unit_on_map') {
+    if (interruptData.current_node === 'select_unit_on_map' || interruptData.current_node === 'request_map_selection') {
         // Map selection interrupt - update map state
         try {
             updateMapFromInterrupt(interruptData);
@@ -354,31 +369,60 @@ window.workflowSSE.onStateUpdate = function(stateData) {
     console.log('SSE: Processing state update', stateData);
 
     // CRITICAL: Check if this state update contradicts recent interrupt data
-    // If interrupt data indicates removal (empty arrays) but state update has data,
-    // prioritize the interrupt data as it represents the most recent workflow action
+    // However, in multi-place workflows, interrupts for later places may have empty units
+    // while state updates still contain units from earlier resolved places
     if (window.workflowSSE.latestInterruptData) {
         const interruptUnits = window.workflowSSE.latestInterruptData.selected_place_g_units || [];
         const stateUnits = stateData.selected_place_g_units || [];
+        const interruptNode = window.workflowSSE.latestInterruptData.current_node;
 
-        // If interrupt shows empty selection but state update has units, it's likely stale
-        if (interruptUnits.length === 0 && stateUnits.length > 0) {
-            console.log('SSE: Ignoring stale state update - interrupt shows removal but state has units');
-            console.log('SSE: Interrupt units:', interruptUnits, 'State units:', stateUnits);
-            return;
-        }
+        // Only ignore state updates if we're in a removal scenario (not multi-place unit selection)
+        // Multi-place workflows will have interrupts with empty units for new places, but state keeps all units
+        const isMultiPlaceUnitSelection = interruptNode === 'resolve_place_and_unit' && 
+                                         window.workflowSSE.latestInterruptData.options && 
+                                         window.workflowSSE.latestInterruptData.options.length > 0;
 
-        // If interrupt shows different units than state, prefer interrupt (more recent workflow action)
-        if (interruptUnits.length > 0 && stateUnits.length > 0 &&
-            JSON.stringify(interruptUnits.sort()) !== JSON.stringify(stateUnits.sort())) {
-            console.log('SSE: Ignoring conflicting state update - interrupt and state show different units');
+        if (isMultiPlaceUnitSelection) {
+            console.log('SSE: Multi-place unit selection detected - allowing state update to preserve previous selections');
             console.log('SSE: Interrupt units:', interruptUnits, 'State units:', stateUnits);
-            return;
+        } else {
+            // Apply the original logic only for non-multi-place scenarios
+            if (interruptUnits.length === 0 && stateUnits.length > 0) {
+                console.log('SSE: Ignoring stale state update - interrupt shows removal but state has units');
+                console.log('SSE: Interrupt units:', interruptUnits, 'State units:', stateUnits);
+                return;
+            }
+
+            // If interrupt shows different units than state, prefer interrupt (more recent workflow action)
+            if (interruptUnits.length > 0 && stateUnits.length > 0 &&
+                JSON.stringify(interruptUnits.sort()) !== JSON.stringify(stateUnits.sort())) {
+                console.log('SSE: Ignoring conflicting state update - interrupt and state show different units');
+                console.log('SSE: Interrupt units:', interruptUnits, 'State units:', stateUnits);
+                return;
+            }
         }
     }
 
     // Update relevant Dash components based on state changes
     if (stateData.selected_place_g_units !== undefined || stateData.selected_polygons !== undefined) {
-        updateMapState(stateData);
+        // CRITICAL: Add zoom flag for Portsmouth polygon selection
+        const mapUpdateData = {...stateData};
+        if (stateData.selected_place_g_units && stateData.selected_place_g_units.length > 0) {
+            mapUpdateData.zoom_to_selection = true;
+            console.log('SSE: Adding zoom_to_selection flag for polygon update');
+        }
+        updateMapState(mapUpdateData);
+    }
+
+    // CRITICAL FIX: Handle map update requests from workflow state
+    if (stateData.map_update_request && stateData.map_update_request.action === 'update_map_selection') {
+        console.log('SSE: Processing map update request from state:', stateData.map_update_request);
+        try {
+            updateMapFromInterrupt(stateData.map_update_request);
+            console.log('SSE: Map update from state completed successfully');
+        } catch (e) {
+            console.error('SSE: Error in updateMapFromInterrupt from state:', e);
+        }
     }
 
     if (stateData.show_visualization !== undefined) {
@@ -490,6 +534,67 @@ function updateMapFromInterrupt(interruptData) {
         if (typeof dash_clientside !== 'undefined' && dash_clientside.set_props) {
             dash_clientside.set_props('map-state', {data: newMapState});
             console.log('SSE: Updated map state from interrupt:', mapUpdates);
+
+                /*
+                 * In multi-place workflows the first place is often processed very
+                 * quickly – faster than the map infrastructure (leaflet instance
+                 * + polygon_management helpers) finishes initialising.  The
+                 * set_props call above therefore fires the zoom-to-selection flow
+                 * (Callback #8) while `window.polygon_management` or
+                 * `window.geojsonLayerReady` may still be undefined, causing
+                 * Callback #8 to bail out and clear the zoom flag.  As a result the
+                 * polygon is never fetched / highlighted and the user doesn’t see
+                 * the first place on the map.
+                 *
+                 * To make the workflow robust we add a lightweight safety-net:
+                 *   1.  After successfully writing to map-state we check whether
+                 *       the mapping helpers are ready **right now**.  If they are
+                 *       we proactively fetch/zoom the polygons immediately – the
+                 *       normal Callback #8 will still run but will detect the
+                 *       polygons are already present and no-op.
+                 *   2.  If the helpers are **not** ready we schedule a single
+                 *       retry after 500 ms.  This is long enough for the map to
+                 *       finish initialising on most machines but short enough that
+                 *       the user still perceives the highlight as instantaneous.
+                 */
+
+                const attemptImmediateHighlight = (attempt = 0) => {
+                    try {
+                        const mapElement = document.getElementById('leaflet-map');
+                        const map = mapElement?._leaflet_map;
+                        const pm = window.polygon_management;
+
+                        if (!map || !pm || !pm.fetchPolygonsByIds || !pm.zoomTo || !window.geojsonLayerReady) {
+                            // Map infrastructure not ready – retry once after a short delay
+                            if (attempt === 0) {
+                                setTimeout(() => attemptImmediateHighlight(1), 500);
+                            }
+                            return;
+                        }
+
+                        const idsToFetch = (newMapState.selected_polygons || []).map(String);
+                        if (idsToFetch.length === 0) return; // Nothing to do
+
+                        const unitTypes = newMapState.selected_polygons_unit_types || newMapState.unit_types || [];
+                        const unitType = unitTypes.length > 0 ? unitTypes[0] : null;
+                        if (!unitType) return;
+
+                        // Fetch polygons then zoom – mirror logic from Callback #8
+                        pm.fetchPolygonsByIds(map, newMapState, unitType, idsToFetch, null, idsToFetch)
+                            .then(() => {
+                                const layer = pm.findGeoJSONLayer(map);
+                                if (layer) {
+                                    pm.zoomTo(map, idsToFetch, layer);
+                                    pm.refreshLayerStyles(layer, idsToFetch);
+                                }
+                            })
+                            .catch(err => console.error('SSE: Fallback polygon fetch failed:', err));
+                    } catch (e) {
+                        console.error('SSE: Error in immediate highlight attempt:', e);
+                    }
+                };
+
+                attemptImmediateHighlight();
 
             // CRITICAL FIX: If unit types changed, coordinate with Callback #8 for proper polygon fetching
             if (unitTypesChanged) {
@@ -615,6 +720,12 @@ function updateMapState(stateData) {
             updates.unit_types = uniqueUnitTypes;
             console.log('SSE: Updating unit_types from state update to:', uniqueUnitTypes);
         }
+        
+        // CRITICAL: Add zoom flag if present in state data
+        if (stateData.zoom_to_selection !== undefined) {
+            updates.zoom_to_selection = stateData.zoom_to_selection;
+            console.log('SSE: Setting zoom_to_selection from state update:', stateData.zoom_to_selection);
+        }
 
         if (Object.keys(updates).length > 0) {
             const newMapState = {...currentMapState, ...updates};
@@ -644,9 +755,13 @@ function trySSEAutoConnect() {
         const sseConnectionStatus = document.querySelector('#sse-connection-status');
         if (sseConnectionStatus && sseConnectionStatus._dash_value && sseConnectionStatus._dash_value.data) {
             const status = sseConnectionStatus._dash_value.data;
+            console.log('SSE: Full status object received:', status);
             if (status.connect_sse && status.thread_id && !window.workflowSSE.isConnected) {
                 console.log('SSE: Connect signal received for thread:', status.thread_id);
-                window.workflowSSE.connect(status.thread_id);
+                // Pass workflow input if available
+                const workflowInput = status.workflow_input || null;
+                console.log('SSE: Extracted workflow input from status:', workflowInput);
+                window.workflowSSE.connect(status.thread_id, workflowInput);
                 return true;
             }
         }
