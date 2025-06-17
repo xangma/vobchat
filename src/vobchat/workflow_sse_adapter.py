@@ -64,7 +64,7 @@ class WorkflowSSEAdapter:
                 (isinstance(workflow_input, dict) and workflow_input.get('button_type')) or  # Button clicks
                 (isinstance(workflow_input, dict) and workflow_input.get('selection_idx') is not None)  # Selections
             )
-            
+
             # Use the existing compiled workflow instance
             workflow_instance = self.compiled_workflow
             print(f"DEBUG: Using existing compiled workflow instance")
@@ -266,14 +266,14 @@ class WorkflowSSEAdapter:
             if "Event loop is closed" in str(e):
                 error_time = time.time()
                 print(f"DEBUG: Event loop closed error at {error_time:.3f}")
-                
+
                 # This shouldn't happen with our simplified approach
                 # If it does, it indicates a deeper async context issue
                 print(f"DEBUG: Unexpected event loop closure during workflow execution")
                 logger.error(f"Event loop closed during workflow execution: {e}", exc_info=True)
-                
+
                 yield {
-                    "type": "error", 
+                    "type": "error",
                     "error": f"Workflow execution interrupted: {str(e)}"
                 }
                 return
@@ -314,7 +314,8 @@ class WorkflowSSEAdapter:
             "cubes",
             "selected_cubes",
             "show_visualization",
-            "map_update_request"  # CRITICAL: Include map update requests for frontend
+            "map_update_request",  # CRITICAL: Include map update requests for frontend
+            "units_needing_map_selection"
         ]
 
         return {
@@ -330,39 +331,39 @@ class WorkflowSSEAdapter:
         config: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Handle user input with fresh workflow instance to avoid Redis connection issues"""
-        
+
         # Use thread-level lock to prevent concurrent workflow executions
         workflow_lock = _get_workflow_lock(thread_id)
-        
+
         if not workflow_lock.acquire(blocking=False):
             print(f"DEBUG: Workflow already running for thread {thread_id}, rejecting duplicate request")
             return {"status": "busy", "message": "Workflow is already processing. Please wait."}
-        
+
         try:
             print(f"DEBUG: Creating isolated workflow instance for user input handling")
-            
+
             # Create a completely fresh workflow instance with its own Redis connection
             # This ensures no event loop conflicts with existing connections
             if not self.base_workflow:
                 return {"status": "error", "error": "Base workflow not available"}
-                
+
             from redis.asyncio import Redis
             from vobchat.utils.redis_checkpoint import AsyncRedisSaver
-            
+
             # Create fresh Redis connection for this specific operation
             # Don't decode responses - let AsyncRedisSaver handle the decoding internally
             fresh_redis = Redis(host="localhost", port=6379, db=0, decode_responses=False)
             fresh_checkpointer = AsyncRedisSaver(conn=fresh_redis)
-            
+
             # Compile fresh workflow with isolated checkpointer
             fresh_workflow = self.base_workflow.compile(checkpointer=fresh_checkpointer)
-            
+
             # Create temporary adapter with fresh workflow
             temp_adapter = WorkflowSSEAdapter(fresh_workflow)
             temp_adapter.set_base_workflow(self.base_workflow)
-            
+
             print(f"DEBUG: Starting isolated workflow execution for user input")
-            
+
             # Process the user input using the fresh workflow instance
             async for evt in temp_adapter.stream_workflow_execution(
                 workflow_input=input_data,
@@ -371,7 +372,7 @@ class WorkflowSSEAdapter:
             ):
                 print(f"DEBUG: User input event: {evt.get('type')}")
                 # Continue processing all events, including state updates
-            
+
             # Close the fresh Redis connection
             await fresh_redis.aclose()
             print(f"DEBUG: User input workflow completed successfully with isolated instance")
@@ -380,7 +381,7 @@ class WorkflowSSEAdapter:
         except Exception as e:
             logger.error(f"Error handling user input: {e}", exc_info=True)
             return {"status": "error", "error": str(e)}
-        
+
         finally:
             # Always release the workflow lock
             workflow_lock.release()

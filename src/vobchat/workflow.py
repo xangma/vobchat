@@ -485,13 +485,14 @@ def check_map_selection_needed_router(state: lg_State) -> str:
     print("=== WORKFLOW TRACE: check_map_selection_needed_router function called! ===")
 
     # Check if there are units that still need to be highlighted / confirmed
-    units_needing_selection = state.get("units_needing_map_selection", []) or []
+    units_needing_map_selection = state.get(
+        "units_needing_map_selection", []) or []
 
     current_place_index = state.get("current_place_index")
     extracted_place_names = state.get("extracted_place_names", [])
 
     print(
-        f"URGENT DEBUG: check_map_selection_needed_router - units_needing_selection={units_needing_selection}"
+        f"URGENT DEBUG: check_map_selection_needed_router - units_needing_map_selection={units_needing_map_selection}"
     )
     print(
         f"URGENT DEBUG: check_map_selection_needed_router - current_place_index={current_place_index}, extracted_places={extracted_place_names}"
@@ -502,7 +503,7 @@ def check_map_selection_needed_router(state: lg_State) -> str:
     #    dedicated interrupt node so the frontend can highlight / ask for
     #    confirmation before the workflow proceeds.
     # ------------------------------------------------------------------
-    if units_needing_selection:
+    if units_needing_map_selection:
         print("URGENT DEBUG: Map selection still required – routing to request_map_selection")
         return "request_map_selection"
 
@@ -537,11 +538,11 @@ def request_map_selection(state: lg_State) -> lg_State | Command:
     logger.info("Node: request_map_selection entered.")
 
     # Get the units that need selection
-    units_needing_selection = state.get("units_needing_map_selection", [])
+    units_needing_map_selection = state.get("units_needing_map_selection", [])
     current_place_index = state.get("current_place_index")
     extracted_place_names = state.get("extracted_place_names", [])
 
-    if not units_needing_selection:
+    if not units_needing_map_selection:
         print("URGENT DEBUG: No units need selection, returning state unchanged")
         return state
 
@@ -550,7 +551,7 @@ def request_map_selection(state: lg_State) -> lg_State | Command:
     continue_to_next_place = current_place_index is not None and current_place_index < len(extracted_place_names)
 
     # Get the first unit that needs selection (for single-unit selection)
-    target_unit = units_needing_selection[0]
+    target_unit = units_needing_map_selection[0]
     target_index = current_place_index - 1 if current_place_index is not None and current_place_index > 0 else 0
     place_name = extracted_place_names[target_index] if target_index < len(extracted_place_names) else "the area"
 
@@ -575,33 +576,52 @@ def request_map_selection(state: lg_State) -> lg_State | Command:
         state["messages"].append(AIMessage(content=message))
 
         print(f"URGENT DEBUG: Multi-place - continuing to resolve_place_and_unit via Command")
+        # Clear the processed unit from units_needing_map_selection
+        remaining_units = [
+            unit for unit in units_needing_map_selection if unit != target_unit]
+        print(f"URGENT DEBUG: Removing processed unit {target_unit}, remaining units: {remaining_units}")
+
         # Continue to next place processing via Command
         return Command(
             goto="resolve_place_and_unit",
             update={
                 "map_update_request": state["map_update_request"],
-                "messages": state["messages"]
+                "messages": state["messages"],
+                "units_needing_map_selection": remaining_units
             }
         )
     else:
         print(f"URGENT DEBUG: Single place or last place - creating standard map selection interrupt")
         # Create the interrupt for user map selection
-        interrupt(value={
-            "selected_place_g_places": state.get("selected_place_g_places", []),
-            "selected_place_g_units": state.get("selected_place_g_units", []),  # Send all units, not just current
-            "selected_place_g_unit_types": state.get("selected_place_g_unit_types", []),
-            "current_place_index": current_place_index,
-            "extracted_place_names": extracted_place_names,
-            "current_node": "request_map_selection",
-            "selection_idx": None,
-            "message": f"Please select {place_name} on the map to continue.",
-        })
+        # interrupt(value={
+        #     "selected_place_g_places": state.get("selected_place_g_places", []),
+        #     "selected_place_g_units": state.get("selected_place_g_units", []),  # Send all units, not just current
+        #     "selected_place_g_unit_types": state.get("selected_place_g_unit_types", []),
+        #     "current_place_index": current_place_index,
+        #     "extracted_place_names": extracted_place_names,
+        #     "current_node": "request_map_selection",
+        #     "selection_idx": None,
+        #     "units_needing_map_selection": [],
+        # })
+        return Command(
+            goto="resolve_theme",
+            update={
+                "selected_place_g_places": state.get("selected_place_g_places", []),
+                "selected_place_g_units": state.get("selected_place_g_units", []),  # Send all units, not just current
+                "selected_place_g_unit_types": state.get("selected_place_g_unit_types", []),
+                "current_place_index": current_place_index,
+                "extracted_place_names": extracted_place_names,
+                "current_node": "request_map_selection",
+                "selection_idx": None,
+                "units_needing_map_selection": [],
+            }
+        )
 
-    # Clear the units needing selection since they're now being processed
-    state.setdefault("units_needing_map_selection", [])
-    state["units_needing_map_selection"] = []
+    # # # Clear the units needing selection since they're now being processed
+    # state.setdefault("units_needing_map_selection", [])
+    # state["units_needing_map_selection"] = []
 
-    return state
+    # return state
 
 
 def select_unit_on_map(state: lg_State) -> lg_State | Command:

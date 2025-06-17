@@ -76,7 +76,7 @@ def _initial_state() -> Dict:
         "extracted_postcode": None,
 
         # multi-place machinery
-        "multi_place_search_df": None,
+        # "multi_place_search_df": None,
         "current_place_index": 0,
 
         # year filters
@@ -215,7 +215,7 @@ def AddPlace_node(state: lg_State):
     # CRITICAL: For map clicks with polygon_id, replace existing data instead of extending
     # This prevents stale unit types from accumulating
     is_map_click_replacement = "polygon_id" in args and len(names_to_add) == 1
-    
+
     if is_map_click_replacement:
         # Replace existing data for map click replacements
         names = []
@@ -253,7 +253,7 @@ def AddPlace_node(state: lg_State):
         "extracted_counties": counties,
         "extracted_unit_types": unit_types,
         "extracted_polygon_ids": polygon_ids,
-        "multi_place_search_df": None,
+        # "multi_place_search_df": None,
         "current_place_index": new_idx,
         "last_intent_payload": {},
     }
