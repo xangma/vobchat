@@ -1121,6 +1121,7 @@ def find_cubes_node(state: lg_State) -> lg_State | Command:
         value={
             "message": f"Here is the data for '{theme_label}' across the selected area(s):",
             "cubes": state["selected_cubes"],
+            "cube_data": state["selected_cubes"],
             "current_node": "find_cubes_node",
             "last_intent_payload": {},
             # CRITICAL: Clear selection_idx through interrupt to prevent stale values
@@ -1547,6 +1548,8 @@ def _theme_already_matches(current_theme_json: str, query: str) -> bool:
 
 
 def resolve_theme(state: lg_State) -> lg_State | Command:
+    print("=== URGENT DEBUG: resolve_theme FUNCTION ENTRY ===")
+    logger.info("=== RESOLVE_THEME FUNCTION ENTRY ===")
     logger.info(
         "VOBCHAT DEBUG: resolve_theme: selection_idx=%s current_node=%s options type=%s options len=%s keys=%s",
         state.get("selection_idx"),
@@ -1561,21 +1564,28 @@ def resolve_theme(state: lg_State) -> lg_State | Command:
     # Step 0 · CRITICAL: Ensure all places are processed before theme processing
     # ------------------------------------------------------------------
     logging.info("Node: resolve_theme entered.")
+    print(f"=== URGENT DEBUG: resolve_theme - about to check place processing ===")
 
     # Check if there are still places being processed
     current_place_index = state.get("current_place_index", 0) or 0
     extracted_place_names = state.get("extracted_place_names", [])
     num_places = len(extracted_place_names)
 
+    print(f"=== URGENT DEBUG: resolve_theme - current_place_index={current_place_index}, num_places={num_places} ===")
+
     if current_place_index < num_places:
+        print(f"=== URGENT DEBUG: resolve_theme - EARLY RETURN - places still processing ===")
         logging.info(f"resolve_theme: Places still being processed ({current_place_index} of {num_places}), returning state to use conditional routing")
         return state
 
+    print(f"=== URGENT DEBUG: resolve_theme - continuing past place check ===")
     logging.info(f"resolve_theme: Call details - selected_theme={bool(state.get('selected_theme'))}, extracted_theme='{state.get('extracted_theme')}', units={len(state.get('selected_place_g_units', []))}")
     # Don't set current_node here - only set it when we actually interrupt for theme selection
 
+    print(f"=== URGENT DEBUG: resolve_theme - about to check intent queue ===")
     # Check intent queue for AddTheme intents and process them
     intent_queue = state.get("intent_queue", [])
+    print(f"=== URGENT DEBUG: resolve_theme - intent_queue length: {len(intent_queue) if intent_queue else 'None'} ===")
     if intent_queue:
         theme_intents = [intent for intent in intent_queue if intent.get("intent") == "AddTheme"]
         if theme_intents:
@@ -1591,51 +1601,86 @@ def resolve_theme(state: lg_State) -> lg_State | Command:
                 state["intent_queue"] = remaining_queue
                 logging.info(f"resolve_theme: Removed AddTheme intent from queue, {len(remaining_queue)} intents remaining")
 
+    print(f"=== URGENT DEBUG: resolve_theme - about to check last_intent ===")
     last_intent = state.get("last_intent_payload")
     if last_intent:
         if last_intent.get("intent") == "AddPlace" or last_intent.get("intent") == "RemovePlace":
             # Hand control back to the normal router so e.g. AddPlace_node runs
+            print(f"=== URGENT DEBUG: resolve_theme - ROUTING TO AGENT_NODE due to {last_intent.get('intent')} ===")
             logging.info(f"resolve_theme: last_intent_payload set to {last_intent}, returning to agent_node.")
             return Command(goto="agent_node")
 
+    print(f"=== URGENT DEBUG: resolve_theme - about to get units ===")
+    selected_polygons = state.get("selected_polygons", []) or []
+    print(f"=== URGENT DEBUG: resolve_theme - selected_polygons: {selected_polygons} ===")
     units = state.get("selected_place_g_units", []) + [
-        int(p) for p in state.get("selected_polygons", []) if str(p).isdigit()
+        int(p) for p in selected_polygons if str(p).isdigit()
     ]
+    print(f"=== URGENT DEBUG: resolve_theme - units: {units} ===")
 
     # ------------------------------------------------------------------
     # Step 1 · Build the ‹available› theme list
     #          → if *no* units yet, fall back to the catalogue
     # ------------------------------------------------------------------
+    print(f"=== URGENT DEBUG: resolve_theme - about to build theme list for units: {units} ===")
     if units:
-        dfs = [
-            pd.read_json(io.StringIO(find_themes_for_unit(str(u))), orient="records")
-            for u in set(units)
-        ]
+        print(f"=== URGENT DEBUG: resolve_theme - calling find_themes_for_unit for {len(set(units))} unique units ===")
+        dfs = []
+        for u in set(units):
+            print(f"=== URGENT DEBUG: resolve_theme - querying themes for unit {u} ===")
+            try:
+                df = pd.read_json(io.StringIO(find_themes_for_unit(str(u))), orient="records")
+                dfs.append(df)
+                print(f"=== URGENT DEBUG: resolve_theme - got {len(df)} themes for unit {u} ===")
+            except Exception as e:
+                print(f"=== URGENT DEBUG: resolve_theme - ERROR querying unit {u}: {e} ===")
         available_df = pd.concat(dfs).drop_duplicates("ent_id") if dfs else pd.DataFrame()
+        print(f"=== URGENT DEBUG: resolve_theme - combined themes: {len(available_df)} ===")
     else:
+        print(f"=== URGENT DEBUG: resolve_theme - no units, getting all themes ===")
         available_df = pd.read_json(io.StringIO(get_all_themes("")), orient="records")
 
     if available_df.empty:
+        print(f"=== URGENT DEBUG: resolve_theme - NO THEMES FOUND - returning ===")
         state.setdefault("messages", []).append(
             AIMessage(content="I couldn't find any statistical themes.")
         )
         return state
 
     available = available_df[["ent_id", "labl"]].to_dict("records")
+    print(f"=== URGENT DEBUG: resolve_theme - available themes: {len(available)} ===")
 
     # ------------------------------------------------------------------
     # Step 2 · Has a theme been fixed already? (or is a new theme being requested?)
     # ------------------------------------------------------------------
+    print(f"=== URGENT DEBUG: resolve_theme - about to check theme processing ===")
+    logger.info(f"resolve_theme: selected_theme={state.get('selected_theme')}, extracted_theme={state.get('extracted_theme')}")
+
+    # ------------------------------------------------------------------
+    # Step 2 · Has a theme been fixed already? (or is a new theme being requested?)
+    # ------------------------------------------------------------------
+    print(f"=== URGENT DEBUG: resolve_theme - Step 2 started ===")
     logger.info(f"resolve_theme: selected_theme={state.get('selected_theme')}, extracted_theme={state.get('extracted_theme')}")
 
     # Check if we need to process a theme change
     current_theme = state.get("selected_theme")
     extracted_theme_query = state.get("extracted_theme")
+    print(f"=== URGENT DEBUG: resolve_theme - current_theme={bool(current_theme)}, extracted_theme_query={extracted_theme_query} ===")
 
     # Early return if theme is already resolved and no new theme query
-    if current_theme and not extracted_theme_query:
-        logging.info("resolve_theme: Theme already resolved, no new theme query. Returning early.")
+    # BUT: Don't early return if we have a button click to process
+    has_button_click = state.get("selection_idx") is not None and state.get("current_node") == "resolve_theme"
+    print(f"=== URGENT DEBUG: resolve_theme - has_button_click={has_button_click} (selection_idx={state.get('selection_idx')}, current_node={state.get('current_node')}) ===")
+
+    if current_theme and not extracted_theme_query and not has_button_click:
+        print(f"=== URGENT DEBUG: resolve_theme - EARLY RETURN - theme already resolved ===")
+        logging.info("resolve_theme: Theme already resolved, no new theme query, no button click. Returning early.")
         return state
+    elif has_button_click:
+        print(f"=== URGENT DEBUG: resolve_theme - NOT EARLY RETURN - processing button click ===")
+        logging.info(f"resolve_theme: NOT returning early - processing button click selection_idx={state.get('selection_idx')}")
+
+    print(f"=== URGENT DEBUG: resolve_theme - past early return check ===")
 
     # Only process theme change if:
     # 1. No theme is selected yet, OR
@@ -1644,6 +1689,8 @@ def resolve_theme(state: lg_State) -> lg_State | Command:
         not current_theme or
         (extracted_theme_query and not _theme_already_matches(current_theme, extracted_theme_query))
     )
+
+    print(f"=== URGENT DEBUG: resolve_theme - should_process_theme_change={should_process_theme_change} ===")
 
     logging.info(f"resolve_theme: should_process_theme_change={should_process_theme_change}, current_theme={bool(current_theme)}, extracted_theme_query='{extracted_theme_query}'")
     if current_theme and extracted_theme_query:
@@ -1655,11 +1702,16 @@ def resolve_theme(state: lg_State) -> lg_State | Command:
     current_node = state.get("current_node")
     has_theme_options = bool(state.get("options")) and current_node == "resolve_theme"
 
-    logger.info(f"resolve_theme: Checking for theme selection - selection_idx={selection_idx}, current_node={current_node}, has_theme_options={has_theme_options}")
+    print(f"=== URGENT DEBUG: resolve_theme - BUTTON CLICK CHECK - selection_idx={selection_idx}, has_theme_options={has_theme_options} ===")
+    logger.info(f"resolve_theme: DEBUGGING BUTTON CLICK - selection_idx={selection_idx}, current_node={current_node}, has_theme_options={has_theme_options}")
+    logger.info(f"resolve_theme: DEBUGGING BUTTON CLICK - options={state.get('options')}, available_themes_count={len(available)}")
+    logger.info(f"resolve_theme: DEBUGGING BUTTON CLICK - current_theme={bool(current_theme)}, extracted_theme_query={extracted_theme_query}")
 
     # 2 b · Button click (prioritize this over theme query)
     # CRITICAL: Only process selection_idx if we're actually in a theme selection context
+    print(f"=== URGENT DEBUG: resolve_theme - about to check button click condition ===")
     if selection_idx is not None and has_theme_options:
+        print(f"=== URGENT DEBUG: resolve_theme - PROCESSING BUTTON CLICK ===")
         # Validate that this is a numeric theme selection, not a unit type string
         try:
             theme_index = int(selection_idx)
@@ -1671,6 +1723,7 @@ def resolve_theme(state: lg_State) -> lg_State | Command:
                 state.pop("options", None)
                 state.pop("current_node", None)
                 state.pop("extracted_theme", None)  # Clear the extracted theme to prevent re-matching
+                print(f"=== URGENT DEBUG: resolve_theme - THEME SET, CLEARED OPTIONS, RETURNING STATE ===")
                 logger.info(f"resolve_theme: Button click processed, theme set to: {available[theme_index]['labl']}")
                 return state
             else:
@@ -1679,7 +1732,9 @@ def resolve_theme(state: lg_State) -> lg_State | Command:
         except (ValueError, TypeError):
             logger.info(f"resolve_theme: selection_idx '{selection_idx}' is not a valid theme index, clearing it")
             state["selection_idx"] = None  # Clear invalid selection
-    elif selection_idx is not None and not has_theme_options:
+    else:
+        print(f"=== URGENT DEBUG: resolve_theme - NOT PROCESSING BUTTON CLICK - selection_idx={selection_idx}, has_theme_options={has_theme_options} ===")
+    if selection_idx is not None and not has_theme_options:
         logger.info(f"resolve_theme: Ignoring stale selection_idx={selection_idx} - not in theme selection context (current_node={current_node}, has_options={bool(state.get('options'))})")
         # CRITICAL: Clear stale selection_idx to prevent it from interfering with future operations
         state["selection_idx"] = None
@@ -2000,8 +2055,36 @@ def create_workflow(lg_state: TypedDict):
 
     # --- Define Edges (Workflow Logic) ---
 
-    # START already goes straight to agent_node now
-    workflow.add_edge(START, "agent_node")
+    # START routing - check if we should resume from current_node or start fresh
+    def start_router(state: lg_State) -> str:
+        current_node = state.get("current_node")
+        selection_idx = state.get("selection_idx")
+
+        print(f"=== URGENT DEBUG: start_router CALLED - current_node={current_node}, selection_idx={selection_idx} ===")
+
+        # If we have a current_node and selection_idx (button click), resume from that node
+        if current_node and selection_idx is not None:
+            print(f"=== URGENT DEBUG: start_router RESUMING from {current_node} ===")
+            logging.info(f"start_router: Resuming from current_node={current_node} with selection_idx={selection_idx}")
+            return current_node
+
+        # Otherwise start fresh with agent_node
+        print("=== URGENT DEBUG: start_router STARTING FRESH with agent_node ===")
+        logging.info("start_router: Starting fresh with agent_node")
+        return "agent_node"
+
+    workflow.add_conditional_edges(
+        START,
+        start_router,
+        {
+            "agent_node": "agent_node",
+            "resolve_theme": "resolve_theme",
+            "resolve_place_and_unit": "resolve_place_and_unit",
+            "select_unit_on_map": "select_unit_on_map",
+            "request_map_selection": "request_map_selection",
+            "find_cubes_node": "find_cubes_node",
+        }
+    )
 
     workflow.add_edge("multi_place_tool_call", "resolve_place_and_unit")
 
@@ -2177,6 +2260,7 @@ def create_workflow(lg_state: TypedDict):
         extracted_place_names = state.get("extracted_place_names", [])
         num_places = len(extracted_place_names)
 
+        print(f"=== URGENT DEBUG: resolve_theme_router - has_theme={has_theme}, has_units={has_units}, has_options={has_options} ===")
         logging.info(f"resolve_theme_router: has_theme={has_theme}, has_units={has_units}, has_options={has_options}, current_node={current_node}, selection_idx={selection_idx}, extracted_theme={extracted_theme}")
         logging.info(f"resolve_theme_router: current_place_index={current_place_index}, num_places={num_places}")
 
@@ -2186,12 +2270,15 @@ def create_workflow(lg_state: TypedDict):
             return "resolve_place_and_unit"
 
         # CRITICAL: If a theme button was clicked but not processed yet, stay in resolve_theme to process it
+        # But if we already have a theme set, don't loop back - continue to cubes
         if selection_idx is not None and has_options and current_node == "resolve_theme" and not has_theme:
-            logging.info(f"resolve_theme_router: returning resolve_theme (theme button clicked but not processed yet, selection_idx={selection_idx})")
+            print(f"=== URGENT DEBUG: resolve_theme_router - ROUTING BACK TO RESOLVE_THEME - selection_idx={selection_idx}, has_options={has_options}, current_node={current_node} ===")
+            logging.info(f"resolve_theme_router: returning resolve_theme (theme button clicked, selection_idx={selection_idx}, has_theme={has_theme})")
             return "resolve_theme"
 
         # If we have both theme and units, go to cubes
         if has_theme and has_units:
+            print(f"=== URGENT DEBUG: resolve_theme_router - ROUTING TO CUBES ===")
             logging.info("resolve_theme_router: returning find_cubes_node (have theme and units)")
             return "find_cubes_node"
         # If we have a theme but no units, go to agent to handle next steps

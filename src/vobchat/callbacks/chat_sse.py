@@ -119,7 +119,7 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
             workflow_input = {"messages": [("user", user_input)]}
             logger.info(f"User text input: {user_input}")
 
-        # Handle dynamic-button (unit/place/theme) clicks 
+        # Handle dynamic-button (unit/place/theme) clicks
         # NOTE: The actual workflow resumption is handled by JavaScript via /api/workflow/input
         # This callback just needs to acknowledge the button click without triggering duplicate workflow
         elif "dynamic-button-user-choice" in ctx_trigger:
@@ -129,7 +129,7 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
                 btn_type = selection_data.get("option_type")
 
                 logger.info(f"Button selection: {selection_idx} (type={btn_type}) - will be handled by JavaScript/API")
-                
+
                 # Just return current state - JavaScript will handle the workflow input via API
                 return (
                     chat_history,
@@ -220,11 +220,11 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
 
         status = sse_status.get("status")
 
-        if status == "button_acknowledged":
-            # Button was acknowledged - no workflow execution needed
-            print(f"DEBUG: Button click acknowledged for thread {thread_id}, no workflow execution needed")
-            raise PreventUpdate
-        elif status == "connect_and_start_workflow":
+        # if status == "button_acknowledged":
+        #     # Button was acknowledged - no workflow execution needed
+        #     print(f"DEBUG: Button click acknowledged for thread {thread_id}, no workflow execution needed")
+        #     raise PreventUpdate
+        if status == "connect_and_start_workflow":
             workflow_input = sse_status.get("workflow_input", {})
 
             # CRITICAL FIX: Use thread-level lock to prevent concurrent workflow executions

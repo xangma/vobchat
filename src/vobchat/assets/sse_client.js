@@ -666,7 +666,7 @@ function updateVisualizationFromInterrupt(interruptData) {
                 console.log('SSE: Updating visualization data (partial removal or addition)');
                 newPlaceState = {
                     cubes: interruptData.cubes || currentPlaceState.cubes,
-                    cube_data: interruptData.cubes || currentPlaceState.cube_data,
+                    cube_data: interruptData.cube_data || currentPlaceState.cube_data,
                     selected_place_g_units: selectedUnits
                 };
             }
