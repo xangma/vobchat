@@ -394,11 +394,20 @@ def RemoveTheme_node(state: lg_State):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def RemovePlace_node(state: lg_State):
+    print("=== URGENT DEBUG: RemovePlace_node ENTRY ===")
     logger.info("RemovePlace_node: removing a place from the selection")
     payload = state.get("last_intent_payload", {})
     args = payload.get("arguments", {}) if payload else {}
     place: Optional[str] = args.get("place")
+    print(f"=== URGENT DEBUG: RemovePlace_node - place={place}, payload={payload} ===")
     places = state.get("places")
+
+    # EXTRA DEBUG: Log detailed state at entry
+    logger.info(f"DEBUG RemovePlace_node: Entry - payload: {payload}")
+    logger.info(f"DEBUG RemovePlace_node: Entry - place to remove: {place}")
+    logger.info(f"DEBUG RemovePlace_node: Entry - current selected_place_g_units: {state.get('selected_place_g_units', [])}")
+    logger.info(f"DEBUG RemovePlace_node: Entry - current selected_polygons: {state.get('selected_polygons', [])}")
+    logger.info(f"DEBUG RemovePlace_node: Entry - current places array: {places}")
 
     # CRITICAL: Clear selection_idx when removing places to prevent stale values
     state["selection_idx"] = None
@@ -444,6 +453,7 @@ def RemovePlace_node(state: lg_State):
                 place_index = selected_units.index(place_as_id)
                 # Update the place variable to use a more descriptive name
                 place = f"Polygon {place_as_id}"
+                logger.info(f"DEBUG RemovePlace_node: Found place by polygon ID {place_as_id} at index {place_index}")
             elif place_as_id in selected_polygons:
                 # Also check selected_polygons
                 polygon_index = selected_polygons.index(place_as_id)
@@ -451,9 +461,10 @@ def RemovePlace_node(state: lg_State):
                 if polygon_index < len(selected_units):
                     place_index = polygon_index
                     place = f"Polygon {place_as_id}"
+                    logger.info(f"DEBUG RemovePlace_node: Found place by polygon in selected_polygons at index {place_index}")
         except (ValueError, TypeError):
             # place is not a numeric ID
-            pass
+            logger.info(f"DEBUG RemovePlace_node: Place '{place}' is not a numeric ID")
 
     if place_index == -1:
         _append_ai(state, f"{place} isn't in your selection.")
@@ -473,17 +484,31 @@ def RemovePlace_node(state: lg_State):
         extracted_polygon_ids.pop(place_index)
         state["extracted_polygon_ids"] = extracted_polygon_ids
 
-    for key in ("selected_place_g_places", "selected_place_g_units", "selected_place_g_unit_types", "selected_polygons", "selected_polygons_unit_types"):
+    # CRITICAL: Properly remove from state arrays using the correct approach
+    # Use the place_index to remove from arrays that are indexed by place position
+    for key in ("selected_place_g_places", "selected_place_g_units", "selected_place_g_unit_types"):
         lst = state.get(key, [])
-        # Take a good look, this is the worst code I've ever written and possible will ever write.
-        idx = lst.index(g_unit) if g_unit in lst else -1
-        if idx == -1:
-            idx = lst.index(g_unit_type) if g_unit_type in lst else -1
-        if idx == -1:
-            idx = lst.index(g_place) if g_place in lst else -1
-        if idx < len(lst) and idx != -1:
-            lst.pop(idx)
-        state[key] = lst
+        if lst and place_index >= 0 and place_index < len(lst):
+            lst.pop(place_index)
+            state[key] = lst
+            logger.info(f"DEBUG RemovePlace_node: Removed index {place_index} from {key}: {lst}")
+
+    # For polygon arrays, remove by value (not index) since they store actual polygon IDs
+    if g_unit is not None:
+        selected_polygons = state.get("selected_polygons", []) or []
+        selected_polygons_unit_types = state.get("selected_polygons_unit_types", []) or []
+
+        # Remove polygon ID from selected_polygons
+        polygon_str = str(g_unit)
+        if selected_polygons and polygon_str in selected_polygons:
+            polygon_idx = selected_polygons.index(polygon_str)
+            selected_polygons.pop(polygon_idx)
+            # Also remove corresponding unit type
+            if selected_polygons_unit_types and polygon_idx < len(selected_polygons_unit_types):
+                selected_polygons_unit_types.pop(polygon_idx)
+            state["selected_polygons"] = selected_polygons
+            state["selected_polygons_unit_types"] = selected_polygons_unit_types
+            logger.info(f"DEBUG RemovePlace_node: Removed polygon {polygon_str} from polygon arrays")
 
     # CRITICAL: Also remove the place from the places array to clear resolved state
     if places:
@@ -498,6 +523,7 @@ def RemovePlace_node(state: lg_State):
 
     remaining_units = state.get("selected_place_g_units", [])
     cubes_filtered = pd.DataFrame(columns=["g_unit"])
+    logger.info(f"DEBUG RemovePlace_node: After removal - remaining_units: {remaining_units}")
     if state.get("selected_cubes"):
         try:
             df = pd.read_json(state["selected_cubes"], orient="records")

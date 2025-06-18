@@ -5,6 +5,7 @@ import logging
 import threading
 from typing import Dict, Any, Optional
 from uuid import uuid4
+import threading
 
 import dash
 from dash import html, Input, Output, State, ALL, ctx
@@ -162,6 +163,7 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
             print(f"DEBUG: Created intent payload: {intent_payload}")
 
         elif ctx_trigger == 'map-click-remove-trigger.data' and map_remove_payload:
+            print(f"DEBUG: Processing map click REMOVE with payload: {map_remove_payload}")
             logger.info(f"Map click (Remove): {map_remove_payload}")
 
             # Build RemovePlace intent
@@ -171,9 +173,10 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
                 "intent": AssistantIntent.REMOVE_PLACE.value,
                 "arguments": {
                     "place": place_name,
-                    "unit_type": map_remove_payload.get("unit_type")
+                    "unit_type": map_remove_payload.get("type")  # Use 'type' instead of 'unit_type'
                 }
             }
+            print(f"DEBUG: Created REMOVE intent payload: {intent_payload}")
 
         # If we have workflow input, trigger SSE connection first, then workflow
         print(f"DEBUG: Checking workflow execution - workflow_input: {bool(workflow_input)}, intent_payload: {bool(intent_payload)}")
@@ -183,7 +186,43 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
                 workflow_input = {"last_intent_payload": intent_payload}
 
             print(f"DEBUG: Starting SSE workflow execution")
+            print(f"DEBUG: Workflow input being sent: {workflow_input}")
             logger.info(f"Starting SSE workflow for thread {thread_id} with input: {list(workflow_input.keys()) if workflow_input else 'None'}")
+            logger.info(f"Workflow input details: {workflow_input}")
+
+            # For intent payloads (like RemovePlace), send directly to existing workflow via API
+            if intent_payload and thread_id:
+                try:
+                    import requests
+                    import json
+                    
+                    print(f"DEBUG: Sending workflow input to existing connection via API")
+                    response = requests.post(
+                        'http://localhost:8050/api/workflow/input',
+                        json={
+                            'thread_id': thread_id,
+                            'input_data': workflow_input
+                        },
+                        timeout=10
+                    )
+                    print(f"DEBUG: API response status: {response.status_code}")
+                    if response.status_code == 200:
+                        print(f"DEBUG: Successfully sent workflow input to existing connection")
+                        callback_end_time = time.time()
+                        print(f"DEBUG: Callback completed at {callback_end_time:.3f} (took {callback_end_time - callback_start_time:.3f}s)")
+                        
+                        return (
+                            chat_history,
+                            "",  # Clear input
+                            app_state,
+                            thread_id,
+                            {"status": "workflow_input_sent", "thread_id": thread_id}
+                        )
+                    else:
+                        print(f"DEBUG: API call failed with status {response.status_code}: {response.text}")
+                except Exception as e:
+                    print(f"DEBUG: Error sending workflow input via API: {e}")
+                    logger.error(f"Failed to send workflow input via API: {e}")
 
             callback_end_time = time.time()
             print(f"DEBUG: Callback completed at {callback_end_time:.3f} (took {callback_end_time - callback_start_time:.3f}s)")
@@ -286,25 +325,13 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
                 print(f"DEBUG: Config creation took {config_end - config_start:.3f}s")
 
                 # Start workflow in background thread with separate event loop
-                thread_setup_start = time.time()
-
-                # SIMPLEST: Just trigger the workflow via a separate thread without async complications
-                import threading
-
-                def simple_workflow_trigger():
-                    """Simple function to trigger workflow execution"""
-                    try:
-                        print(f"DEBUG: Triggering workflow execution for {thread_id}")
-                        # Just trigger the workflow - let the SSE adapter handle the async parts
-                        # This should work since we're not doing any async operations here
-                        print(f"DEBUG: Workflow triggered successfully")
-                    except Exception as e:
-                        print(f"DEBUG: Error triggering workflow: {e}")
-
-                # Start immediately - no async needed
-                simple_workflow_trigger()
-                thread_start_end = time.time()
-                print(f"DEBUG: Direct execution setup took {thread_start_end - thread_setup_start:.3f}s")
+                try:
+                    print(f"DEBUG: Triggering workflow execution for {thread_id}")
+                    # Just trigger the workflow - let the SSE adapter handle the async parts
+                    # This should work since we're not doing any async operations here
+                    print(f"DEBUG: Workflow triggered successfully")
+                except Exception as e:
+                    print(f"DEBUG: Error triggering workflow: {e}")
 
                 trigger_end_time = time.time()
                 print(f"DEBUG: Trigger callback completed at {trigger_end_time:.3f} (total trigger time: {trigger_end_time - trigger_start_time:.3f}s)")

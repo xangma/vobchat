@@ -2059,8 +2059,9 @@ def create_workflow(lg_state: TypedDict):
     def start_router(state: lg_State) -> str:
         current_node = state.get("current_node")
         selection_idx = state.get("selection_idx")
+        last_intent_payload = state.get("last_intent_payload", {})
 
-        print(f"=== URGENT DEBUG: start_router CALLED - current_node={current_node}, selection_idx={selection_idx} ===")
+        print(f"=== URGENT DEBUG: start_router CALLED - current_node={current_node}, selection_idx={selection_idx}, intent={last_intent_payload.get('intent')} ===")
 
         # If we have a current_node and selection_idx (button click), resume from that node
         if current_node and selection_idx is not None:
