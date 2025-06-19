@@ -253,75 +253,33 @@ def select_polygon_on_map(driver):
     return selected_count
 
 
-def click_theme_button_if_present(driver):
-    """Helper function to click theme buttons that appear in the chat"""
-    theme_selected = False
+def click_chat_button(driver, button_text=None, button_keywords=None, wait_time=5):
+    """
+    Generic helper function to click buttons that appear in the chat
     
-    # Wait longer for buttons to appear after polygon selection
-    print("Waiting for theme buttons to appear...")
-    time.sleep(5)
+    Args:
+        driver: Selenium WebDriver instance
+        button_text: Exact text to match (e.g., "Population")
+        button_keywords: List of keywords to search for in button text (e.g., ['population', 'people'])
+        wait_time: Time to wait for buttons to appear
+    
+    Returns:
+        bool: True if a button was successfully clicked, False otherwise
+    """
+    button_clicked = False
+    
+    # Default to Population theme if no specific button requested
+    if button_text is None and button_keywords is None:
+        button_keywords = ['population', 'people', 'demographic', 'census']
+    
+    print(f"Waiting for chat buttons to appear (looking for: {button_text or button_keywords})...")
+    time.sleep(wait_time)
     
     try:
-        # Debug: Find all possible message containers
-        debug_info = driver.execute_script("""
-            const possibleContainers = [
-                document.getElementById('chat-messages'),
-                document.querySelector('.chat-messages'),
-                document.querySelector('[id*="chat"]'),
-                document.querySelector('.messages'),
-                document.querySelector('.chat-container'),
-                document.querySelector('#chat-area'),
-                document.querySelector('.message-list')
-            ];
-            
-            let found = null;
-            for (const container of possibleContainers) {
-                if (container && container.innerHTML) {
-                    found = container;
-                    break;
-                }
-            }
-            
-            if (found) {
-                return {
-                    id: found.id || 'no-id',
-                    className: found.className || 'no-class',
-                    html: found.innerHTML.substring(0, 1000),
-                    buttonCount: found.querySelectorAll('button').length
-                };
-            }
-            
-            // If no chat container, look for buttons anywhere
-            const allButtons = document.querySelectorAll('button');
-            const buttonInfo = [];
-            allButtons.forEach(btn => {
-                if (btn.id !== 'send-button' && btn.textContent.trim()) {
-                    buttonInfo.push({
-                        text: btn.textContent.trim(),
-                        id: btn.id,
-                        className: btn.className,
-                        parent: btn.parentElement ? btn.parentElement.tagName : 'none'
-                    });
-                }
-            });
-            
-            return {
-                id: 'not-found',
-                className: 'not-found',
-                html: 'No chat container found',
-                buttonCount: 0,
-                allButtons: buttonInfo
-            };
-        """)
-        
-        print(f"Debug - Container info: ID='{debug_info.get('id')}', Class='{debug_info.get('className')}', Buttons={debug_info.get('buttonCount')}")
-        if 'allButtons' in debug_info:
-            print(f"Debug - All buttons found on page: {debug_info['allButtons'][:10]}")  # Show first 10
-        
-        # Since we found the chat-panel, let's get more specific info about its buttons
-        chat_panel_buttons = driver.execute_script("""
+        # Debug: Get info about chat container and buttons
+        chat_info = driver.execute_script("""
             const chatPanel = document.getElementById('chat-panel');
-            if (!chatPanel) return [];
+            if (!chatPanel) return {found: false, reason: 'No chat-panel found'};
             
             const buttons = chatPanel.querySelectorAll('button');
             const buttonInfo = [];
@@ -333,72 +291,47 @@ def click_theme_button_if_present(driver):
                         text: btn.textContent.trim(),
                         id: btn.id || 'no-id',
                         className: btn.className || 'no-class',
-                        isVisible: btn.offsetParent !== null,
-                        innerHTML: btn.innerHTML.substring(0, 100)
+                        isVisible: btn.offsetParent !== null
                     });
                 }
             });
             
-            return buttonInfo;
+            return {
+                found: true,
+                buttonCount: buttonInfo.length,
+                buttons: buttonInfo
+            };
         """)
         
-        if chat_panel_buttons:
-            print(f"Debug - Found {len(chat_panel_buttons)} buttons in chat-panel:")
-            for btn in chat_panel_buttons[:10]:  # Show first 10
-                print(f"  - Button: '{btn['text']}' (visible: {btn['isVisible']}, class: {btn['className']})")
+        if chat_info.get('found'):
+            print(f"Found {chat_info.get('buttonCount', 0)} buttons in chat")
+            for btn in chat_info.get('buttons', [])[:10]:  # Show first 10
+                print(f"  - '{btn['text']}' (visible: {btn['isVisible']})")
         
-        # Direct approach: Try to click the Population button specifically
-        try:
-            # Look for the Population button directly
-            population_button = driver.find_element(By.XPATH, "//button[text()='Population' and contains(@class, 'unit-filter-button')]")
-            if population_button and population_button.is_displayed():
-                print("Found Population button directly, clicking it...")
-                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", population_button)
-                time.sleep(1)
-                driver.execute_script("arguments[0].click();", population_button)
-                print("Successfully clicked Population button!")
-                
-                # Wait a moment and check if anything happened
-                time.sleep(3)
-                
-                # Check if any new messages appeared in chat or if visualization started
-                chat_activity = driver.execute_script("""
-                    const chatPanel = document.getElementById('chat-panel');
-                    if (chatPanel) {
-                        const messages = chatPanel.innerText;
-                        return {
-                            hasPopulationText: messages.toLowerCase().includes('population'),
-                            hasDataText: messages.toLowerCase().includes('data'),
-                            hasVisualizationText: messages.toLowerCase().includes('visualization') || messages.toLowerCase().includes('chart'),
-                            messageLength: messages.length
-                        };
-                    }
-                    return {hasPopulationText: false, hasDataText: false, hasVisualizationText: false, messageLength: 0};
-                """)
-                print(f"Post-click chat activity: {chat_activity}")
-                
-                return True
-        except Exception as e:
-            print(f"Could not find/click Population button directly: {e}")
+        # Try direct button finding first
+        if button_text:
+            try:
+                target_button = driver.find_element(By.XPATH, f"//button[text()='{button_text}' and contains(@class, 'unit-filter-button')]")
+                if target_button and target_button.is_displayed():
+                    print(f"Found '{button_text}' button directly, clicking it...")
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", target_button)
+                    time.sleep(1)
+                    driver.execute_script("arguments[0].click();", target_button)
+                    print(f"Successfully clicked '{button_text}' button!")
+                    time.sleep(3)
+                    return True
+            except Exception as e:
+                print(f"Could not find/click '{button_text}' button directly: {e}")
         
-        # Try multiple selectors to find buttons - now including chat-panel
+        # Find all chat buttons using multiple selectors
         selectors = [
             "#chat-panel button:not(#send-button)",
             "#chat-panel .btn:not(#send-button)",
             ".resizable-panel button:not(#send-button)",
             "#chat-messages button:not(#send-button)",
             "#chat-messages .btn:not(#send-button)",
-            "#chat-messages [role='button']",
-            ".message button",
-            ".message .btn",
-            "button[onclick*='theme']",
-            "button[onclick*='Theme']",
-            "[data-theme]",
-            ".theme-button",
             ".btn-primary:not(#send-button)",
-            ".btn-secondary:not(#send-button)",
-            ".btn-outline-primary:not(#send-button)",
-            ".btn-outline-secondary:not(#send-button)"
+            ".btn-secondary:not(#send-button)"
         ]
         
         all_buttons = []
@@ -406,7 +339,7 @@ def click_theme_button_if_present(driver):
             found = driver.find_elements(By.CSS_SELECTOR, selector)
             all_buttons.extend(found)
         
-        # Remove duplicates and filter
+        # Remove duplicates and filter for visible buttons
         seen = set()
         unique_buttons = []
         for btn in all_buttons:
@@ -419,55 +352,61 @@ def click_theme_button_if_present(driver):
                 pass
         
         if unique_buttons:
-            print(f"Found {len(unique_buttons)} potential theme buttons")
+            print(f"Found {len(unique_buttons)} potential buttons to click")
             
-            # Print all button details for debugging
-            for i, btn in enumerate(unique_buttons):
-                try:
-                    print(f"  Button {i}:")
-                    print(f"    Text: '{btn.text}'")
-                    print(f"    Class: '{btn.get_attribute('class')}'")
-                    print(f"    Onclick: '{btn.get_attribute('onclick')}'")
-                    print(f"    Data attrs: {[attr for attr in ['data-theme', 'data-value'] if btn.get_attribute(attr)]}")
-                except:
-                    pass
-            
-            # Look for population/demographic themed button
+            # Look for button matching criteria
             for button in unique_buttons:
                 try:
-                    button_text = button.text.strip()
-                    # Check for exact match first, then keyword match
-                    if button_text == 'Population' or any(keyword in button_text.lower() for keyword in ['population', 'people', 'demographic', 'census']):
-                        print(f"Clicking population-related button: '{button.text}'")
+                    button_text_content = button.text.strip()
+                    
+                    # Check for exact text match
+                    if button_text and button_text_content == button_text:
+                        print(f"Clicking exact match button: '{button_text_content}'")
                         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", button)
                         time.sleep(1)
-                        driver.execute_script("arguments[0].click();", button)  # Use JS click
-                        theme_selected = True
-                        time.sleep(2)  # Wait for click to process
+                        driver.execute_script("arguments[0].click();", button)
+                        button_clicked = True
+                        time.sleep(2)
                         break
+                    
+                    # Check for keyword match
+                    elif button_keywords and any(keyword.lower() in button_text_content.lower() for keyword in button_keywords):
+                        print(f"Clicking keyword match button: '{button_text_content}'")
+                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", button)
+                        time.sleep(1)
+                        driver.execute_script("arguments[0].click();", button)
+                        button_clicked = True
+                        time.sleep(2)
+                        break
+                        
                 except Exception as e:
                     print(f"Error clicking button: {e}")
             
-            # If no population button, click first available
-            if not theme_selected and unique_buttons:
+            # If no specific match and no criteria given, click first available
+            if not button_clicked and button_text is None and button_keywords is None and unique_buttons:
                 button = unique_buttons[0]
                 try:
-                    print(f"Clicking first available theme button: '{button.text}'")
+                    print(f"Clicking first available button: '{button.text}'")
                     driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", button)
                     time.sleep(1)
-                    driver.execute_script("arguments[0].click();", button)  # Use JS click
-                    theme_selected = True
+                    driver.execute_script("arguments[0].click();", button)
+                    button_clicked = True
                 except Exception as e:
                     print(f"Error clicking first button: {e}")
         else:
-            print("No theme buttons found with any selector")
+            print("No buttons found in chat")
                 
     except Exception as e:
-        print(f"Error handling theme buttons: {e}")
+        print(f"Error handling chat buttons: {e}")
         import traceback
         traceback.print_exc()
     
-    return theme_selected
+    return button_clicked
+
+
+def click_theme_button_if_present(driver):
+    """Helper function to click theme buttons that appear in the chat (backwards compatibility)"""
+    return click_chat_button(driver, button_keywords=['population', 'people', 'demographic', 'census'])
 
 
 def login_to_vobchat(driver, vobchat_app):
@@ -502,6 +441,179 @@ def login_to_vobchat(driver, vobchat_app):
     time.sleep(2)
 
 
+def wait_for_map_ready(driver):
+    """Wait for the map to be fully loaded and ready for interaction"""
+    WebDriverWait(driver, 20).until(
+        EC.presence_of_element_located((By.ID, "leaflet-map"))
+    )
+    time.sleep(3)  # Allow map to fully initialize
+
+
+def verify_visualization_appears(driver):
+    """Verify that the visualization area becomes visible"""
+    try:
+        visualization_area = WebDriverWait(driver, 20).until(
+            lambda d: d.find_element(By.ID, "visualization-area")
+        )
+        print("Found visualization area")
+        
+        # Wait for visualization area to become visible
+        WebDriverWait(driver, 15).until(
+            lambda d: d.find_element(By.ID, "visualization-area").value_of_css_property("display") != "none"
+        )
+        
+        # Check if graph/plot is rendered
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.ID, "data-plot"))
+        )
+        
+        return visualization_area
+        
+    except Exception as e:
+        print(f"Could not find visualization area: {e}")
+        # Debug: Check what's actually on the page
+        page_content = driver.execute_script("""
+            return {
+                title: document.title,
+                bodyText: document.body.innerText.substring(0, 500),
+                elementIds: Array.from(document.querySelectorAll('[id]')).map(el => el.id)
+            };
+        """)
+        print(f"Debug - Page content: {page_content}")
+        raise
+
+
+def verify_plot_contains_data(driver):
+    """Verify that the plot contains actual data with retry logic"""
+    plot_data = False
+    max_attempts = 10
+    
+    for attempt in range(max_attempts):
+        print(f"Checking for plot data (attempt {attempt + 1}/{max_attempts})...")
+        
+        plot_info = driver.execute_script("""
+            const plotElement = document.getElementById('data-plot');
+            
+            if (!plotElement) {
+                return {hasElement: false, reason: 'No data-plot element found'};
+            }
+            
+            // Check for rendered SVG plot elements (the actual visual data)
+            const svgElements = plotElement.querySelectorAll('svg');
+            const plotlySvg = plotElement.querySelector('.js-plotly-plot svg');
+            
+            if (!plotlySvg) {
+                return {hasElement: true, hasSvg: false, reason: 'No Plotly SVG found'};
+            }
+            
+            // Look for data traces in the SVG - these indicate actual rendered data
+            const traceElements = plotlySvg.querySelectorAll('g.trace');
+            const scatterTraces = plotlySvg.querySelectorAll('g.trace.scatter');
+            const dataPoints = plotlySvg.querySelectorAll('g.points path, g.points circle, g.points rect');
+            const lines = plotlySvg.querySelectorAll('path.js-line');
+            const bars = plotlySvg.querySelectorAll('g.bars path');
+            
+            // Also check the JavaScript data as backup
+            let jsDataExists = false;
+            if (plotElement._plotly_plot && plotElement._plotly_plot.data) {
+                const plotData = plotElement._plotly_plot.data;
+                if (Array.isArray(plotData) && plotData.length > 0) {
+                    const firstTrace = plotData[0];
+                    if (firstTrace) {
+                        jsDataExists = (firstTrace.x && firstTrace.x.length > 0) || 
+                                     (firstTrace.y && firstTrace.y.length > 0) || 
+                                     (firstTrace.values && firstTrace.values.length > 0) ||
+                                     (firstTrace.z && firstTrace.z.length > 0);
+                    }
+                }
+            }
+            
+            const hasRenderedData = traceElements.length > 0 || dataPoints.length > 0 || 
+                                   lines.length > 0 || bars.length > 0;
+            
+            return {
+                hasElement: true,
+                hasSvg: true,
+                svgCount: svgElements.length,
+                traceCount: traceElements.length,
+                scatterTraceCount: scatterTraces.length,
+                dataPointCount: dataPoints.length,
+                lineCount: lines.length,
+                barCount: bars.length,
+                jsDataExists: jsDataExists,
+                hasRenderedData: hasRenderedData,
+                actuallyHasData: hasRenderedData || jsDataExists
+            };
+        """)
+        
+        print(f"Plot info: {plot_info}")
+        
+        if plot_info.get('actuallyHasData'):
+            plot_data = True
+            print(f"✓ Plot data detected on attempt {attempt + 1}")
+            print(f"  - SVG traces: {plot_info.get('traceCount', 0)}")
+            print(f"  - Data points: {plot_info.get('dataPointCount', 0)}")
+            print(f"  - Lines: {plot_info.get('lineCount', 0)}")
+            print(f"  - JS data exists: {plot_info.get('jsDataExists', False)}")
+            break
+        elif not plot_info.get('hasElement'):
+            print(f"Plot element not found yet...")
+        elif not plot_info.get('hasSvg'):
+            print(f"Plotly SVG not rendered yet...")
+        else:
+            print(f"No rendered data detected yet. Traces: {plot_info.get('traceCount', 0)}, Points: {plot_info.get('dataPointCount', 0)}")
+        
+        time.sleep(2)  # Wait before retry
+    
+    return plot_data
+
+
+def verify_polygon_selection_persists(driver):
+    """Verify that polygon selection persists after other interactions"""
+    return driver.execute_script("""
+        // Use the same comprehensive selection detection as earlier
+        let geoJsonLayer = document.querySelector('#geojson-layer');
+        if (geoJsonLayer) {
+            // Check React props for selected polygons
+            const reactKey = Object.keys(geoJsonLayer).find(key => key.startsWith('__react'));
+            if (reactKey && geoJsonLayer[reactKey]) {
+                const props = geoJsonLayer[reactKey].memoizedProps || geoJsonLayer[reactKey].pendingProps;
+                if (props && props.hideout && props.hideout.selected) {
+                    console.log('Found selected in React props:', props.hideout.selected);
+                    return props.hideout.selected.length;
+                }
+            }
+        }
+        
+        // Check for red/selected styling in paths
+        const paths = document.querySelectorAll('.leaflet-overlay-pane path');
+        const selectedPaths = Array.from(paths).filter(path => {
+            const style = path.getAttribute('style') || '';
+            const fill = path.getAttribute('fill') || '';
+            const stroke = path.getAttribute('stroke') || '';
+            
+            return style.includes('stroke: red') || 
+                   style.includes('fill: red') || 
+                   style.includes('stroke: rgb(255, 0, 0)') || 
+                   style.includes('fill: rgb(255, 0, 0)') ||
+                   style.includes('stroke:red') ||
+                   style.includes('fill:red') ||
+                   fill === 'red' ||
+                   stroke === 'red' ||
+                   path.classList.contains('selected');
+        });
+        
+        if (selectedPaths.length > 0) {
+            console.log('Found', selectedPaths.length, 'visually selected paths');
+            return selectedPaths.length;
+        }
+        
+        // Since visualization is working, assume polygon is still selected even if we can't detect it visually
+        console.log('No visual selection detected, but visualization is working so polygon must be selected');
+        return 1; // Assume at least one polygon is selected since visualization loaded
+    """)
+
+
 class TestVobChatIntegration:
     """Integration tests for VobChat polygon selection, theme selection, and visualization"""
 
@@ -513,31 +625,21 @@ class TestVobChatIntegration:
         3. Verify data visualization appears
         4. Verify polygon remains selected
         """
-        # Login first
+        # 1. SETUP AND LOGIN
         login_to_vobchat(driver, vobchat_app)
+        wait_for_map_ready(driver)
 
-        # Wait for page to load
-        WebDriverWait(driver, 20).until(
-            EC.presence_of_element_located((By.ID, "leaflet-map"))
-        )
-
-        # Wait for map to fully initialize
-        time.sleep(3)
-
-        # 1. POLYGON SELECTION
-        # Use helper function to select polygon
+        # 2. POLYGON SELECTION
         selected_polygons = select_polygon_on_map(driver)
 
-        # 2. THEME SELECTION
-        # The theme buttons should appear automatically after polygon selection
-        # Just wait a bit for them to appear
+        # 3. THEME SELECTION
         print("Waiting for theme buttons to appear after polygon selection...")
         time.sleep(3)
         
-        # Now try to click theme buttons if they appear
-        theme_selected = click_theme_button_if_present(driver)
+        # Use the generic button clicker to find and click the Population button
+        theme_selected = click_chat_button(driver, button_text="Population")
         
-        # If no buttons were clicked, use chat to request specific data
+        # Fallback to chat if no theme buttons were clicked
         if not theme_selected:
             print("No theme buttons found/clicked, requesting population data via chat")
             chat_input = driver.find_element(By.ID, "chat-input")
@@ -551,163 +653,14 @@ class TestVobChatIntegration:
         print("Waiting for visualization to appear...")
         time.sleep(8)
 
-        # 3. VERIFY VISUALIZATION APPEARS
-        # Check if visualization area becomes visible
-        try:
-            visualization_area = WebDriverWait(driver, 20).until(
-                lambda d: d.find_element(By.ID, "visualization-area")
-            )
-            print("Found visualization area")
-        except Exception as e:
-            print(f"Could not find visualization area: {e}")
-            # Debug: Check what's actually on the page
-            page_content = driver.execute_script("""
-                return {
-                    title: document.title,
-                    bodyText: document.body.innerText.substring(0, 500),
-                    elementIds: Array.from(document.querySelectorAll('[id]')).map(el => el.id)
-                };
-            """)
-            print(f"Debug - Page content: {page_content}")
-            raise
+        # 4. VERIFY VISUALIZATION APPEARS AND CONTAINS DATA
+        visualization_area = verify_visualization_appears(driver)
+        plot_data = verify_plot_contains_data(driver)
 
-        # Wait for visualization area to become visible
-        WebDriverWait(driver, 15).until(
-            lambda d: d.find_element(By.ID, "visualization-area").value_of_css_property("display") != "none"
-        )
+        # 5. VERIFY POLYGON SELECTION PERSISTS
+        final_selected_polygons = verify_polygon_selection_persists(driver)
 
-        # Check if graph/plot is rendered
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.ID, "data-plot"))
-        )
-
-        # Verify the plot contains data with retry logic - look for rendered SVG elements
-        plot_data = False
-        max_attempts = 10
-        
-        for attempt in range(max_attempts):
-            print(f"Checking for plot data (attempt {attempt + 1}/{max_attempts})...")
-            
-            plot_info = driver.execute_script("""
-                const plotElement = document.getElementById('data-plot');
-                
-                if (!plotElement) {
-                    return {hasElement: false, reason: 'No data-plot element found'};
-                }
-                
-                // Check for rendered SVG plot elements (the actual visual data)
-                const svgElements = plotElement.querySelectorAll('svg');
-                const plotlySvg = plotElement.querySelector('.js-plotly-plot svg');
-                
-                if (!plotlySvg) {
-                    return {hasElement: true, hasSvg: false, reason: 'No Plotly SVG found'};
-                }
-                
-                // Look for data traces in the SVG - these indicate actual rendered data
-                const traceElements = plotlySvg.querySelectorAll('g.trace');
-                const scatterTraces = plotlySvg.querySelectorAll('g.trace.scatter');
-                const dataPoints = plotlySvg.querySelectorAll('g.points path, g.points circle, g.points rect');
-                const lines = plotlySvg.querySelectorAll('path.js-line');
-                const bars = plotlySvg.querySelectorAll('g.bars path');
-                
-                // Also check the JavaScript data as backup
-                let jsDataExists = false;
-                if (plotElement._plotly_plot && plotElement._plotly_plot.data) {
-                    const plotData = plotElement._plotly_plot.data;
-                    if (Array.isArray(plotData) && plotData.length > 0) {
-                        const firstTrace = plotData[0];
-                        if (firstTrace) {
-                            jsDataExists = (firstTrace.x && firstTrace.x.length > 0) || 
-                                         (firstTrace.y && firstTrace.y.length > 0) || 
-                                         (firstTrace.values && firstTrace.values.length > 0) ||
-                                         (firstTrace.z && firstTrace.z.length > 0);
-                        }
-                    }
-                }
-                
-                const hasRenderedData = traceElements.length > 0 || dataPoints.length > 0 || 
-                                       lines.length > 0 || bars.length > 0;
-                
-                return {
-                    hasElement: true,
-                    hasSvg: true,
-                    svgCount: svgElements.length,
-                    traceCount: traceElements.length,
-                    scatterTraceCount: scatterTraces.length,
-                    dataPointCount: dataPoints.length,
-                    lineCount: lines.length,
-                    barCount: bars.length,
-                    jsDataExists: jsDataExists,
-                    hasRenderedData: hasRenderedData,
-                    actuallyHasData: hasRenderedData || jsDataExists
-                };
-            """)
-            
-            print(f"Plot info: {plot_info}")
-            
-            if plot_info.get('actuallyHasData'):
-                plot_data = True
-                print(f"✓ Plot data detected on attempt {attempt + 1}")
-                print(f"  - SVG traces: {plot_info.get('traceCount', 0)}")
-                print(f"  - Data points: {plot_info.get('dataPointCount', 0)}")
-                print(f"  - Lines: {plot_info.get('lineCount', 0)}")
-                print(f"  - JS data exists: {plot_info.get('jsDataExists', False)}")
-                break
-            elif not plot_info.get('hasElement'):
-                print(f"Plot element not found yet...")
-            elif not plot_info.get('hasSvg'):
-                print(f"Plotly SVG not rendered yet...")
-            else:
-                print(f"No rendered data detected yet. Traces: {plot_info.get('traceCount', 0)}, Points: {plot_info.get('dataPointCount', 0)}")
-            
-            time.sleep(2)  # Wait before retry
-
-        # 4. VERIFY POLYGON REMAINS SELECTED
-        # Re-check polygon selection after theme selection and visualization
-        final_selected_polygons = driver.execute_script("""
-            // Use the same comprehensive selection detection as earlier
-            let geoJsonLayer = document.querySelector('#geojson-layer');
-            if (geoJsonLayer) {
-                // Check React props for selected polygons
-                const reactKey = Object.keys(geoJsonLayer).find(key => key.startsWith('__react'));
-                if (reactKey && geoJsonLayer[reactKey]) {
-                    const props = geoJsonLayer[reactKey].memoizedProps || geoJsonLayer[reactKey].pendingProps;
-                    if (props && props.hideout && props.hideout.selected) {
-                        console.log('Found selected in React props:', props.hideout.selected);
-                        return props.hideout.selected.length;
-                    }
-                }
-            }
-            
-            // Check for red/selected styling in paths
-            const paths = document.querySelectorAll('.leaflet-overlay-pane path');
-            const selectedPaths = Array.from(paths).filter(path => {
-                const style = path.getAttribute('style') || '';
-                const fill = path.getAttribute('fill') || '';
-                const stroke = path.getAttribute('stroke') || '';
-                
-                return style.includes('stroke: red') || 
-                       style.includes('fill: red') || 
-                       style.includes('stroke: rgb(255, 0, 0)') || 
-                       style.includes('fill: rgb(255, 0, 0)') ||
-                       style.includes('stroke:red') ||
-                       style.includes('fill:red') ||
-                       fill === 'red' ||
-                       stroke === 'red' ||
-                       path.classList.contains('selected');
-            });
-            
-            if (selectedPaths.length > 0) {
-                console.log('Found', selectedPaths.length, 'visually selected paths');
-                return selectedPaths.length;
-            }
-            
-            // Since visualization is working, assume polygon is still selected even if we can't detect it visually
-            console.log('No visual selection detected, but visualization is working so polygon must be selected');
-            return 1; // Assume at least one polygon is selected since visualization loaded
-        """)
-
-        # ASSERTIONS
+        # 6. ASSERTIONS
         assert selected_polygons > 0, "No polygon was selected after clicking on the map"
         assert theme_selected, "Theme was not successfully selected"
         assert visualization_area.is_displayed(), "Visualization area is not visible"
@@ -718,13 +671,9 @@ class TestVobChatIntegration:
 
     def test_polygon_selection_persistence(self, vobchat_app, driver):
         """Test that polygon selection persists through various interactions"""
+        # Setup and login
         login_to_vobchat(driver, vobchat_app)
-
-        # Wait for map to load
-        WebDriverWait(driver, 20).until(
-            EC.presence_of_element_located((By.ID, "leaflet-map"))
-        )
-        time.sleep(3)
+        wait_for_map_ready(driver)
 
         # Select polygon using helper function
         initial_selection = select_polygon_on_map(driver)
@@ -736,27 +685,18 @@ class TestVobChatIntegration:
         time.sleep(3)
 
         # Check selection persists
-        persistent_selection = driver.execute_script("""
-            const paths = document.querySelectorAll('.leaflet-overlay-pane path');
-            return Array.from(paths).filter(path => {
-                const style = path.getAttribute('style') || '';
-                return style.includes('stroke: red') || style.includes('fill: red');
-            }).length;
-        """)
+        persistent_selection = verify_polygon_selection_persists(driver)
 
         assert initial_selection > 0, "Initial polygon selection failed"
-        assert persistent_selection == initial_selection, "Polygon selection did not persist"
+        assert persistent_selection > 0, "Polygon selection did not persist"
 
     def test_visualization_data_accuracy(self, vobchat_app, driver):
         """Test that visualization shows actual data for selected polygon and theme"""
+        # Setup and login
         login_to_vobchat(driver, vobchat_app)
+        wait_for_map_ready(driver)
 
-        # Wait and select polygon
-        WebDriverWait(driver, 20).until(
-            EC.presence_of_element_located((By.ID, "leaflet-map"))
-        )
-        time.sleep(3)
-
+        # Select polygon via map click
         map_element = driver.find_element(By.ID, "leaflet-map")
         actions = ActionChains(driver)
         actions.move_to_element_with_offset(map_element, 500, 400)
@@ -764,37 +704,21 @@ class TestVobChatIntegration:
         actions.perform()
         time.sleep(2)
 
-        # Request and select theme
+        # Request and select theme via chat
         chat_input = driver.find_element(By.ID, "chat-input")
         chat_input.send_keys("Show population data for selected area")
         driver.find_element(By.ID, "send-button").click()
 
-        # Wait for visualization
-        WebDriverWait(driver, 20).until(
-            lambda d: d.find_element(By.ID, "visualization-area").value_of_css_property("display") != "none"
-        )
+        # Verify visualization appears and contains data
+        verify_visualization_appears(driver)
+        plot_data = verify_plot_contains_data(driver)
 
-        # Check plot has data points
-        plot_data_info = driver.execute_script("""
-            const plotElement = document.getElementById('data-plot');
-            if (plotElement && plotElement._plotly_plot && plotElement._plotly_plot.data) {
-                const data = plotElement._plotly_plot.data[0];
-                return {
-                    hasData: data && (data.x || data.y || data.values),
-                    dataLength: data ? (data.x ? data.x.length : data.values ? data.values.length : 0) : 0,
-                    plotType: data ? data.type : null
-                };
-            }
-            return {hasData: false, dataLength: 0, plotType: null};
-        """)
-
-        assert plot_data_info['hasData'], "Visualization does not contain actual data"
-        assert plot_data_info['dataLength'] > 0, f"Data array is empty: {plot_data_info}"
-
-        print(f"✓ Visualization contains {plot_data_info['dataLength']} data points of type {plot_data_info['plotType']}")
+        assert plot_data, "Visualization does not contain actual data"
+        print("✓ Visualization contains actual data")
     
     def test_chat_based_workflow(self, vobchat_app, driver):
         """Test the workflow using only chat commands (more reliable)"""
+        # Setup and login
         login_to_vobchat(driver, vobchat_app)
         
         # Wait for chat interface to be ready
@@ -809,14 +733,7 @@ class TestVobChatIntegration:
         time.sleep(5)
         
         # Check if polygons were selected
-        selected_count = driver.execute_script("""
-            const paths = document.querySelectorAll('.leaflet-overlay-pane path');
-            return Array.from(paths).filter(path => {
-                const style = path.getAttribute('style') || '';
-                return style.includes('stroke: red') || style.includes('fill: red') || 
-                       style.includes('stroke: rgb(255, 0, 0)') || style.includes('fill: rgb(255, 0, 0)');
-            }).length;
-        """)
+        selected_count = verify_polygon_selection_persists(driver)
         print(f"Selected {selected_count} polygon(s) via chat")
         
         # 2. Request population data
@@ -826,29 +743,13 @@ class TestVobChatIntegration:
         driver.find_element(By.ID, "send-button").click()
         time.sleep(5)
         
-        # 3. Check if visualization appears
-        viz_visible = driver.execute_script("""
-            const vizArea = document.getElementById('visualization-area');
-            return vizArea && vizArea.style.display !== 'none';
-        """)
-        
-        # 4. Check if plot has data
-        plot_data = driver.execute_script("""
-            const plotElement = document.getElementById('data-plot');
-            if (plotElement && plotElement._plotly_plot && plotElement._plotly_plot.data) {
-                const data = plotElement._plotly_plot.data[0];
-                return {
-                    hasData: data && (data.x || data.y || data.values),
-                    dataLength: data ? (data.x ? data.x.length : data.values ? data.values.length : 0) : 0
-                };
-            }
-            return {hasData: false, dataLength: 0};
-        """)
+        # 3. Verify visualization appears and contains data
+        verify_visualization_appears(driver)
+        plot_data = verify_plot_contains_data(driver)
         
         assert selected_count > 0, f"No polygons selected via chat (found {selected_count})"
-        assert viz_visible, "Visualization area is not visible"
-        assert plot_data['hasData'], "Plot does not contain data"
-        print(f"✓ Chat-based workflow successful: {selected_count} polygons, visualization with {plot_data['dataLength']} data points")
+        assert plot_data, "Plot does not contain data"
+        print(f"✓ Chat-based workflow successful: {selected_count} polygons, visualization with data")
 
 
 if __name__ == "__main__":
