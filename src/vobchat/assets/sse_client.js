@@ -18,8 +18,78 @@ class WorkflowSSEClient {
         this.onInterrupt = null;
         this.onStateUpdate = null;
         this.onError = null;
+        
+        // Frontend logging
+        this.logBuffer = [];
+        this.setupFrontendLogging();
         this.onConnected = null;
         this.onDisconnected = null;
+        
+        // Set up periodic log saving (every 5 seconds)
+        this.logSaveInterval = setInterval(() => {
+            this.saveLogsToFile();
+        }, 5000);
+    }
+
+    setupFrontendLogging() {
+        // Override console methods to capture logs
+        const originalLog = console.log;
+        const originalDebug = console.debug;
+        const originalError = console.error;
+        
+        console.log = (...args) => {
+            this.logToFile('LOG', ...args);
+            originalLog.apply(console, args);
+        };
+        
+        console.debug = (...args) => {
+            this.logToFile('DEBUG', ...args);
+            originalDebug.apply(console, args);
+        };
+        
+        console.error = (...args) => {
+            this.logToFile('ERROR', ...args);
+            originalError.apply(console, args);
+        };
+    }
+
+    logToFile(level, ...args) {
+        const timestamp = new Date().toISOString();
+        const message = args.map(arg => 
+            typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
+        ).join(' ');
+        
+        const logEntry = `${timestamp} [${level}] ${message}\n`;
+        this.logBuffer.push(logEntry);
+        
+        // Keep only last 1000 entries to prevent memory issues
+        if (this.logBuffer.length > 1000) {
+            this.logBuffer = this.logBuffer.slice(-1000);
+        }
+    }
+
+    saveLogsToFile() {
+        if (this.logBuffer.length === 0) return;
+        
+        // Send logs to backend to save to file
+        try {
+            const logContent = this.logBuffer.join('');
+            fetch('/api/save-frontend-logs', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ logs: logContent })
+            }).catch(err => {
+                // Silently fail - don't use console.error to avoid recursion
+                // Backend will handle logging errors
+            });
+            
+            // Clear buffer after sending
+            this.logBuffer = [];
+        } catch (error) {
+            // Silently fail to avoid recursion
+        }
     }
 
     connect(threadId, workflowInput = null) {

@@ -212,23 +212,32 @@ def AddPlace_node(state: lg_State):
         return state
 
     # ── extend the existing queues ─────────────────────────────────
-    # CRITICAL: For map clicks with polygon_id, replace existing data instead of extending
-    # This prevents stale unit types from accumulating
-    is_map_click_replacement = "polygon_id" in args and len(names_to_add) == 1
+    # CRITICAL: Only replace existing data for the FIRST map click in a new session
+    # For additional map clicks, extend the existing selection
+    existing_places = state.get("extracted_place_names", [])
+    existing_units = state.get("selected_place_g_units", [])
+    is_map_click_replacement = (
+        "polygon_id" in args and 
+        len(names_to_add) == 1 and 
+        len(existing_places) == 0 and 
+        len(existing_units) == 0
+    )
 
     if is_map_click_replacement:
-        # Replace existing data for map click replacements
+        # Replace existing data for the first map click in a new session
         names = []
         counties = []
         unit_types = []
         polygon_ids = []
-        logger.info("AddPlace_node: Map click replacement detected - clearing existing extracted data")
+        logger.info("AddPlace_node: First map click detected - starting new selection")
     else:
-        # Extend existing data for text-based additions
+        # Extend existing data for text-based additions or additional map clicks
         names    = state.get("extracted_place_names", [])
         counties = state.get("extracted_counties", [])
         unit_types = state.get("extracted_unit_types", [])
         polygon_ids = state.get("extracted_polygon_ids", [])
+        if "polygon_id" in args:
+            logger.info("AddPlace_node: Additional map click detected - extending existing selection")
 
     for idx, p in enumerate(names_to_add):
         names.append(p)
@@ -256,6 +265,8 @@ def AddPlace_node(state: lg_State):
         # "multi_place_search_df": None,
         "current_place_index": new_idx,
         "last_intent_payload": {},
+        # CRITICAL: Clear any stale extracted_theme to prevent theme reprocessing when adding places
+        "extracted_theme": None,
     }
 
     return Command(goto="multi_place_tool_call", update=update)

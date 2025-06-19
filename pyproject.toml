@@ -1,3 +1,10 @@
 [build-system]
 requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "vobchat"
+version = "0.1.0"
+description = "VobChat is a conversational AI dashboard for exploring historical and statistical data through natural language interaction. It combines a chat interface with interactive maps and visualizations, allowing users to query geographic and statistical data from the Vision of Britain database using natural language."
+readme = "README.md"
+requires-python = ">=3.8"

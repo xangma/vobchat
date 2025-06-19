@@ -47,6 +47,15 @@ def agent_node(state: lg_State):
                 # CRITICAL: Clear selection_idx when routing to prevent stale values
                 "selection_idx": None,
             }
+            
+            # CRITICAL: For AddPlace/RemovePlace intents, clear any pending theme state to prevent interference
+            if final_intent in [AssistantIntent.ADD_PLACE, AssistantIntent.REMOVE_PLACE]:
+                update_for_command.update({
+                    "extracted_theme": None,  # Clear any pending theme queries
+                    "current_node": None,     # Clear any pending node state
+                    "options": [],            # Clear any pending options
+                })
+                logging.info(f"agent_node: Cleared theme state for {final_intent.value} intent to prevent interference")
             return Command(goto=target_node, update=update_for_command)
             # Clear the payload from the main state *after* using it for routing
             # to prevent accidental re-processing if the graph loops back here unexpectedly.
@@ -326,6 +335,16 @@ def agent_node(state: lg_State):
             # CRITICAL: Clear selection_idx when routing to prevent stale values
             "selection_idx": None,
         }
+        
+        # CRITICAL: For AddPlace/RemovePlace intents, clear any pending theme state to prevent interference
+        if final_intent in [AssistantIntent.ADD_PLACE, AssistantIntent.REMOVE_PLACE]:
+            update_for_command.update({
+                "extracted_theme": None,  # Clear any pending theme queries
+                "current_node": None,     # Clear any pending node state
+                "options": [],            # Clear any pending options
+            })
+            logging.info(f"agent_node: Cleared theme state for {final_intent.value} intent to prevent interference")
+        
         return Command(goto=target_node, update=update_for_command)
 
     else:

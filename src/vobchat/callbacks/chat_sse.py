@@ -1,11 +1,12 @@
 # src/vobchat/callbacks/chat_sse.py
 
-import json
 import logging
 import threading
 from typing import Dict, Any, Optional
 from uuid import uuid4
-import threading
+import time
+import json
+import requests
 
 import dash
 from dash import html, Input, Output, State, ALL, ctx
@@ -76,7 +77,6 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
         logger.info(f"SSE Chat callback inputs: n_clicks={n_clicks}, user_input='{user_input}', thread_id={thread_id}")
 
         # Debug: Check if this is actually being called
-        import time
         callback_start_time = time.time()
         print(f"DEBUG: SSE chat callback called with trigger: {ctx_trigger}")
         print(f"DEBUG: User input: '{user_input}'")
@@ -193,9 +193,6 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
             # For intent payloads (like RemovePlace), send directly to existing workflow via API
             if intent_payload and thread_id:
                 try:
-                    import requests
-                    import json
-                    
                     print(f"DEBUG: Sending workflow input to existing connection via API")
                     response = requests.post(
                         'http://localhost:8050/api/workflow/input',
@@ -210,7 +207,7 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
                         print(f"DEBUG: Successfully sent workflow input to existing connection")
                         callback_end_time = time.time()
                         print(f"DEBUG: Callback completed at {callback_end_time:.3f} (took {callback_end_time - callback_start_time:.3f}s)")
-                        
+
                         return (
                             chat_history,
                             "",  # Clear input

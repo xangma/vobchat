@@ -109,6 +109,7 @@ def configure_enhanced_logging():
     """Configure the enhanced logging system"""
     import warnings
     import asyncio
+    import os
     
     # Create and configure the root logger
     logger = logging.getLogger()
@@ -126,6 +127,19 @@ def configure_enhanced_logging():
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(PrettyFormatter())
     logger.addHandler(console_handler)
+    
+    # Add file handler for backend logs (overwrite mode)
+    backend_log_path = "/Users/xangma/Library/CloudStorage/OneDrive-Personal/repos/vobchat/backend.log"
+    try:
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(backend_log_path), exist_ok=True)
+        # Create file handler with overwrite mode
+        file_handler = logging.FileHandler(backend_log_path, mode='w')
+        file_handler.setFormatter(PrettyFormatter())
+        logger.addHandler(file_handler)
+        print(f"Backend logging configured to: {backend_log_path}")
+    except Exception as e:
+        print(f"Failed to setup backend log file: {e}")
     
     # Suppress asyncio event loop cleanup warnings
     # These are harmless cleanup warnings that occur during garbage collection

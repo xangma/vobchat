@@ -260,8 +260,32 @@ def register_sse_routes(server, compiled_workflow, base_workflow):
             logging.error(f"Error starting workflow execution: {e}", exc_info=True)
             return {'error': str(e)}, 500
 
+    @server.route('/api/save-frontend-logs', methods=['POST'])
+    def save_frontend_logs():
+        """Save frontend logs to file"""
+        try:
+            data = request.get_json()
+            if not data or 'logs' not in data:
+                return {'error': 'No logs provided'}, 400
+            
+            frontend_log_path = "/Users/xangma/Library/CloudStorage/OneDrive-Personal/repos/vobchat/frontend.log"
+            
+            # Write logs to file (overwrite mode)
+            with open(frontend_log_path, 'w') as f:
+                f.write(data['logs'])
+            
+            return {'status': 'success', 'message': 'Frontend logs saved'}
+            
+        except Exception as e:
+            logging.error(f"Error saving frontend logs: {e}", exc_info=True)
+            return {'error': str(e)}, 500
+
 def create_app():
     """Initialize and configure the Dash app."""
+    
+    # Configure enhanced logging first
+    from vobchat.configure_logging import configure_enhanced_logging
+    configure_enhanced_logging()
 
     assets_folder = os.path.join(os.path.dirname(__file__), 'assets')
 
