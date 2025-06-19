@@ -27,3 +27,4 @@ flask_sqlalchemy
 flask_login
 passlib
 authlib
+geoalchemy2

@@ -7,4 +7,35 @@ name = "vobchat"
 version = "0.1.0"
 description = "VobChat is a conversational AI dashboard for exploring historical and statistical data through natural language interaction. It combines a chat interface with interactive maps and visualizations, allowing users to query geographic and statistical data from the Vision of Britain database using natural language."
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
+dependencies = [
+    "celery>=5.5.3",
+    "configparser>=7.2.0",
+    "dash[celery,diskcache]>=3.0.4",
+    "dash-bootstrap-components>=2.0.3",
+    "dash-extensions>=1.0.15",
+    "dash-leaflet>=1.0.15",
+    "diskcache>=5.6.3",
+    "geopandas>=1.0.1",
+    "grandalf>=0.8",
+    "gunicorn>=23.0.0",
+    "langchain>=0.3.25",
+    "langchain-community>=0.3.25",
+    "langchain-ollama>=0.3.3",
+    "langchain-openai>=0.3.24",
+    "langgraph>=0.4.8",
+    "pandas>=2.3.0",
+    "plotly>=6.1.2",
+    "psycopg2-binary>=2.9.10",
+    "pyproj>=3.6.1",
+    "redis>=5.2.1",
+    "shapely>=2.0.7",
+    "sqlalchemy>=2.0.41",
+    "flask>=3.0.3",
+    "flask-sqlalchemy>=3.1.1",
+    "flask-login>=0.6.3",
+    "passlib>=1.7.4",
+    "authlib>=1.6.0",
+    "geoalchemy2>=0.17.1",
+    "argon2-cffi>=25.1.0",
+]

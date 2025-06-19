@@ -426,4 +426,4 @@ with server.app_context():
 # Celery tasks are now registered inside create_app()
 
 if __name__ == "__main__":
-    app.run_server(debug=True)
+    app.run(debug=True)

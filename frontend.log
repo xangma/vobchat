@@ -1,0 +1,73 @@
+2025-06-19T07:27:44.223Z [LOG] JS: Map is ready (whenReady event), initializing polygon management.
+2025-06-19T07:27:44.223Z [LOG] JS: GeoJSON layer not found during init, will retry...
+2025-06-19T07:27:44.227Z [LOG] Visualization area detected in DOM changes
+2025-06-19T07:27:44.232Z [LOG] SSE Initialization callback triggered with thread ID: undefined and status: undefined
+2025-06-19T07:27:44.232Z [LOG] No thread ID available for SSE connection
+2025-06-19T07:27:44.232Z [LOG] Client (Cb9 - Refresh) invoked. Context triggers: [
+  {
+    "prop_id": "map-moveend-trigger.data",
+    "value": null
+  }
+]
+2025-06-19T07:27:44.232Z [LOG] Client (Cb9 - Refresh) debug: triggeredProps= [
+  "map-moveend-trigger.data"
+] , isSelection= false , isUnitFilterChange= false , zoom_to_selection= false , programmaticZoomAnimating= true , programmaticZoomInProgress= false
+2025-06-19T07:27:44.232Z [LOG] Client (Cb9 - Refresh): Skipping update (JS zoom flags still active - animating: true, inProgress: false).
+2025-06-19T07:27:44.232Z [LOG] Client (Cb9 - Refresh): Conditions met. Calling updateMapWithBounds.
+2025-06-19T07:27:44.324Z [LOG] JS: refreshLayerStyles: Processing 11 layers with selection: [] Called from: at http://127.0.0.1:8050/app/assets/polygon_management.js?m=1749677177.426982:803:26
+2025-06-19T07:27:44.324Z [LOG] JS: refreshLayerStyles: Applied styles to 11 layers, 0 were selected.
+2025-06-19T07:27:44.324Z [LOG] Client (Cb9 - Refresh): updateMapWithBounds completed.
+2025-06-19T07:27:44.328Z [LOG] Creating visualization control panel
+2025-06-19T07:27:44.328Z [LOG] Creating visualization resize handles
+2025-06-19T07:27:44.328Z [LOG] Updating visualization controls: false
+2025-06-19T07:27:44.328Z [LOG] Control panel exists: true
+2025-06-19T07:27:44.328Z [LOG] Resize handles exist: true
+2025-06-19T07:27:44.373Z [LOG] JS: GeoJSON layer found and ready.
+2025-06-19T07:27:44.373Z [LOG] JS (setupMapEventListeners): Attaching listeners...
+2025-06-19T07:27:44.373Z [LOG] JS (setupMapEventListeners): Detached any previous listeners.
+2025-06-19T07:27:44.373Z [LOG] JS (setupMapEventListeners): SIMPLIFIED zoomend listener attached.
+2025-06-19T07:27:44.373Z [LOG] JS (setupMapEventListeners): REVISED moveend listener attached.
+2025-06-19T07:27:44.373Z [LOG] JS (setupMapEventListeners): All listeners attached successfully.
+2025-06-19T07:27:44.373Z [LOG] JS: Performing initial data load with state: {
+  "unit_types": [
+    "MOD_REG"
+  ],
+  "year_range": [
+    2025,
+    2025
+  ],
+  "selected_polygons": [],
+  "show_unselected": true
+}
+2025-06-19T07:27:44.438Z [LOG] JS: refreshLayerStyles: Processing 11 layers with selection: [] Called from: at http://127.0.0.1:8050/app/assets/polygon_management.js?m=1749677177.426982:803:26
+2025-06-19T07:27:44.439Z [LOG] JS: refreshLayerStyles: Applied styles to 11 layers, 0 were selected.
+2025-06-19T07:27:44.439Z [LOG] JS: Initial polygon load complete.
+2025-06-19T07:27:44.439Z [LOG] JS: Zooming to initial features after load.
+2025-06-19T07:27:44.439Z [LOG] JS: zoomTo: DEBUG - Selected IDs for zoom: [ALL]
+2025-06-19T07:27:44.439Z [LOG] JS: zoomTo: DEBUG - Layer has 11 total features
+2025-06-19T07:27:44.439Z [LOG] JS: zoomTo: DEBUG - Feature 10205724 (unnamed): included = true
+2025-06-19T07:27:44.439Z [LOG] JS: zoomTo: DEBUG - Added feature 10205724 to bounds (total: 1)
+2025-06-19T07:27:44.439Z [LOG] JS: zoomTo: DEBUG - Feature 10204630 (unnamed): included = true
+2025-06-19T07:27:44.439Z [LOG] JS: zoomTo: DEBUG - Added feature 10204630 to bounds (total: 2)
+2025-06-19T07:27:44.439Z [LOG] JS: zoomTo: DEBUG - Feature 10102741 (unnamed): included = true
+2025-06-19T07:27:44.439Z [LOG] JS: zoomTo: DEBUG - Added feature 10102741 to bounds (total: 3)
+2025-06-19T07:27:44.439Z [LOG] JS: zoomTo: DEBUG - Feature 10216151 (unnamed): included = true
+2025-06-19T07:27:44.439Z [LOG] JS: zoomTo: DEBUG - Added feature 10216151 to bounds (total: 4)
+2025-06-19T07:27:44.439Z [LOG] JS: zoomTo: DEBUG - Feature 10032910 (unnamed): included = true
+2025-06-19T07:27:44.439Z [LOG] JS: zoomTo: DEBUG - Added feature 10032910 to bounds (total: 5)
+2025-06-19T07:27:44.439Z [LOG] JS: zoomTo: DEBUG - Feature 10097836 (unnamed): included = true
+2025-06-19T07:27:44.439Z [LOG] JS: zoomTo: DEBUG - Added feature 10097836 to bounds (total: 6)
+2025-06-19T07:27:44.439Z [LOG] JS: zoomTo: DEBUG - Feature 10099249 (unnamed): included = true
+2025-06-19T07:27:44.439Z [LOG] JS: zoomTo: DEBUG - Added feature 10099249 to bounds (total: 7)
+2025-06-19T07:27:44.439Z [LOG] JS: zoomTo: DEBUG - Feature 10089803 (unnamed): included = true
+2025-06-19T07:27:44.439Z [LOG] JS: zoomTo: DEBUG - Added feature 10089803 to bounds (total: 8)
+2025-06-19T07:27:44.439Z [LOG] JS: zoomTo: DEBUG - Feature 10056895 (unnamed): included = true
+2025-06-19T07:27:44.439Z [LOG] JS: zoomTo: DEBUG - Added feature 10056895 to bounds (total: 9)
+2025-06-19T07:27:44.439Z [LOG] JS: zoomTo: DEBUG - Feature 13146111 (unnamed): included = true
+2025-06-19T07:27:44.439Z [LOG] JS: zoomTo: DEBUG - Added feature 13146111 to bounds (total: 10)
+2025-06-19T07:27:44.439Z [LOG] JS: zoomTo: DEBUG - Feature 13146123 (unnamed): included = true
+2025-06-19T07:27:44.439Z [LOG] JS: zoomTo: DEBUG - Added feature 13146123 to bounds (total: 11)
+2025-06-19T07:27:44.439Z [LOG] JS: zoomTo: Zooming to bounds of 11 features.
+2025-06-19T07:27:44.439Z [LOG] JS: zoomTo: SET programmaticZoomAnimating = true
+2025-06-19T07:27:44.939Z [LOG] JS: map.on('moveend') event FIRED!
+2025-06-19T07:27:44.939Z [LOG] JS: map.on('moveend') event IGNORED (programmatic zoom flags are true).
