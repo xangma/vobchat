@@ -568,6 +568,106 @@ def verify_plot_contains_data(driver):
     return plot_data
 
 
+def deselect_polygon_on_map(driver, method="click"):
+    """
+    Helper function to deselect polygons on the map
+    
+    Args:
+        driver: Selenium WebDriver instance
+        method: Method to use for deselection - "click", "chat", or "reset"
+                - "click": Click on a selected polygon to deselect it
+                - "chat": Use chat command to remove polygon
+                - "reset": Use reset button to clear all selections
+    
+    Returns:
+        bool: True if deselection was successful, False otherwise
+    """
+    print(f"Attempting to deselect polygon using method: {method}")
+    
+    if method == "reset":
+        # Use the reset button to clear all selections
+        try:
+            reset_button = driver.find_element(By.ID, "reset-selections")
+            if reset_button and reset_button.is_displayed():
+                print("Found reset button, clicking to clear selections...")
+                driver.execute_script("arguments[0].click();", reset_button)
+                time.sleep(2)
+                return True
+            else:
+                print("Reset button not found or not visible")
+                return False
+        except Exception as e:
+            print(f"Error clicking reset button: {e}")
+            return False
+    
+    elif method == "chat":
+        # Use chat command to remove a polygon
+        try:
+            chat_input = driver.find_element(By.ID, "chat-input")
+            chat_input.clear()
+            chat_input.send_keys("Remove the selected polygon from the map")
+            send_button = driver.find_element(By.ID, "send-button")
+            send_button.click()
+            print("Sent chat command to remove polygon")
+            time.sleep(3)
+            return True
+        except Exception as e:
+            print(f"Error sending chat command to deselect: {e}")
+            return False
+    
+    elif method == "click":
+        # Click on a selected polygon to deselect it
+        try:
+            # First, find a selected polygon
+            selected_polygon = driver.execute_script("""
+                const paths = document.querySelectorAll('.leaflet-overlay-pane path');
+                const selectedPaths = Array.from(paths).filter(path => {
+                    const style = path.getAttribute('style') || '';
+                    const fill = path.getAttribute('fill') || '';
+                    const stroke = path.getAttribute('stroke') || '';
+                    
+                    return style.includes('stroke: red') || 
+                           style.includes('fill: red') || 
+                           style.includes('stroke: rgb(255, 0, 0)') || 
+                           style.includes('fill: rgb(255, 0, 0)') ||
+                           fill === 'red' ||
+                           stroke === 'red';
+                });
+                
+                if (selectedPaths.length > 0) {
+                    return selectedPaths[0]; // Return the first selected polygon
+                }
+                return null;
+            """)
+            
+            if selected_polygon:
+                print("Found selected polygon, clicking to deselect...")
+                # Click on the selected polygon to deselect it
+                driver.execute_script("""
+                    var evt = new MouseEvent('click', {
+                        view: window,
+                        bubbles: true,
+                        cancelable: true,
+                        clientX: arguments[0].getBBox().x + arguments[0].getBBox().width/2,
+                        clientY: arguments[0].getBBox().y + arguments[0].getBBox().height/2
+                    });
+                    arguments[0].dispatchEvent(evt);
+                """, selected_polygon)
+                time.sleep(2)
+                return True
+            else:
+                print("No selected polygon found to deselect")
+                return False
+                
+        except Exception as e:
+            print(f"Error clicking polygon to deselect: {e}")
+            return False
+    
+    else:
+        print(f"Unknown deselection method: {method}")
+        return False
+
+
 def verify_polygon_selection_persists(driver):
     """Verify that polygon selection persists after other interactions"""
     return driver.execute_script("""
@@ -611,6 +711,40 @@ def verify_polygon_selection_persists(driver):
         // Since visualization is working, assume polygon is still selected even if we can't detect it visually
         console.log('No visual selection detected, but visualization is working so polygon must be selected');
         return 1; // Assume at least one polygon is selected since visualization loaded
+    """)
+
+
+def get_selected_polygon_count(driver):
+    """Get the current number of selected polygons"""
+    return driver.execute_script("""
+        // Check React props first
+        let geoJsonLayer = document.querySelector('#geojson-layer');
+        if (geoJsonLayer) {
+            const reactKey = Object.keys(geoJsonLayer).find(key => key.startsWith('__react'));
+            if (reactKey && geoJsonLayer[reactKey]) {
+                const props = geoJsonLayer[reactKey].memoizedProps || geoJsonLayer[reactKey].pendingProps;
+                if (props && props.hideout && props.hideout.selected) {
+                    return props.hideout.selected.length;
+                }
+            }
+        }
+        
+        // Fallback to visual detection
+        const paths = document.querySelectorAll('.leaflet-overlay-pane path');
+        const selectedPaths = Array.from(paths).filter(path => {
+            const style = path.getAttribute('style') || '';
+            const fill = path.getAttribute('fill') || '';
+            const stroke = path.getAttribute('stroke') || '';
+            
+            return style.includes('stroke: red') || 
+                   style.includes('fill: red') || 
+                   style.includes('stroke: rgb(255, 0, 0)') || 
+                   style.includes('fill: rgb(255, 0, 0)') ||
+                   fill === 'red' ||
+                   stroke === 'red';
+        });
+        
+        return selectedPaths.length;
     """)
 
 
