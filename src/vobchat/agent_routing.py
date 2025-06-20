@@ -48,14 +48,26 @@ def agent_node(state: lg_State):
                 "selection_idx": None,
             }
             
-            # CRITICAL: For AddPlace/RemovePlace intents, clear any pending theme state to prevent interference
+            # CRITICAL: For AddPlace/RemovePlace intents, only clear theme state when there's actual interference
             if final_intent in [AssistantIntent.ADD_PLACE, AssistantIntent.REMOVE_PLACE]:
-                update_for_command.update({
-                    "extracted_theme": None,  # Clear any pending theme queries
-                    "current_node": None,     # Clear any pending node state
-                    "options": [],            # Clear any pending options
-                })
-                logging.info(f"agent_node: Cleared theme state for {final_intent.value} intent to prevent interference")
+                # Only clear theme state if we have existing theme data that might interfere
+                selected_theme = state.get("selected_theme")
+                extracted_theme = state.get("extracted_theme")
+                has_existing_theme = selected_theme or extracted_theme
+                
+                # Debug: Log the actual theme state values
+                logging.info(f"agent_node: DEBUG theme state - selected_theme='{selected_theme}', extracted_theme='{extracted_theme}', has_existing_theme={has_existing_theme}")
+                
+                if has_existing_theme:
+                    update_for_command.update({
+                        "extracted_theme": None,  # Clear any pending theme queries
+                        "current_node": None,     # Clear any pending node state
+                        "options": [],            # Clear any pending options
+                    })
+                    logging.info(f"agent_node: Cleared existing theme state for {final_intent.value} intent to prevent interference")
+                else:
+                    # Don't clear theme state when there's no existing theme - let theme buttons appear
+                    logging.info(f"agent_node: No existing theme state found for {final_intent.value} intent - preserving clean state for theme button generation")
             return Command(goto=target_node, update=update_for_command)
             # Clear the payload from the main state *after* using it for routing
             # to prevent accidental re-processing if the graph loops back here unexpectedly.

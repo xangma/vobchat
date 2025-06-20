@@ -12,7 +12,6 @@ import subprocess
 import os
 import signal
 
-
 class VobChatTestApp:
     """Test fixture to manage VobChat application lifecycle"""
 
@@ -23,6 +22,9 @@ class VobChatTestApp:
         self.test_email = os.environ.get("VOBCHAT_TEST_EMAIL", "VOBCHAT_TEST@email.com")
         self.test_password = os.environ.get("VOBCHAT_TEST_PASSWORD", "testpassword123")
         print(f"Test credentials: {self.test_email} / {self.test_password[:3]}...")
+        print(f"Working directory: {os.getcwd()}")
+        print(f"Python path: {os.environ.get('PYTHONPATH', 'Not set')}")
+        print(f"PATH: {os.environ.get('PATH')[:200]}...")  # First 200 chars
 
     def start(self):
         """Start the VobChat application"""
@@ -67,7 +69,7 @@ class VobChatTestApp:
             print(f"Final process state - Exit code: {self.process.returncode}")
             print(f"STDOUT: {stdout.decode()}")
             print(f"STDERR: {stderr.decode()}")
-        
+
         raise RuntimeError("Failed to start VobChat application")
 
     def stop(self):
@@ -109,266 +111,7 @@ def driver():
     driver.quit()
 
 
-def select_polygon_on_map(driver):
-    """Helper function to select a polygon on the map"""
-    # Wait for polygons to load and ensure they're interactable
-    WebDriverWait(driver, 20).until(
-        EC.presence_of_element_located((By.CSS_SELECTOR, ".leaflet-overlay-pane path"))
-    )
-    
-    # Additional wait to ensure map is fully interactive
-    time.sleep(2)
-    
-    # Force refresh the polygon elements to avoid stale references
-    driver.execute_script("""
-        // Trigger a map refresh to ensure event handlers are attached
-        const mapElement = document.getElementById('leaflet-map');
-        if (mapElement && mapElement._leaflet_map) {
-            mapElement._leaflet_map.invalidateSize();
-        }
-    """)
-    time.sleep(1)
-
-    # Check how many polygons are available
-    polygon_count = driver.execute_script("""
-        return document.querySelectorAll('.leaflet-overlay-pane path').length;
-    """)
-    print(f"Found {polygon_count} polygons on map")
-
-    if polygon_count == 0:
-        raise Exception("No polygons found on map")
-
-    # Try multiple methods to click the polygon
-    click_success = False
-    
-    # Method 1: Try clicking with proper event simulation
-    try:
-        print("Attempting polygon click with enhanced event simulation...")
-        click_result = driver.execute_script("""
-            const polygons = document.querySelectorAll('.leaflet-overlay-pane path');
-            if (polygons.length === 0) return {success: false, reason: 'No polygons found'};
-            
-            const polygon = polygons[0];
-            const bbox = polygon.getBBox();
-            const rect = polygon.getBoundingClientRect();
-            
-            // Calculate click position more accurately
-            const clickX = rect.left + (rect.width / 2);
-            const clickY = rect.top + (rect.height / 2);
-            
-            // Create and dispatch multiple events to ensure proper handling
-            const mousedownEvent = new MouseEvent('mousedown', {
-                view: window,
-                bubbles: true,
-                cancelable: true,
-                clientX: clickX,
-                clientY: clickY,
-                button: 0
-            });
-            
-            const mouseupEvent = new MouseEvent('mouseup', {
-                view: window,
-                bubbles: true,
-                cancelable: true,
-                clientX: clickX,
-                clientY: clickY,
-                button: 0
-            });
-            
-            const clickEvent = new MouseEvent('click', {
-                view: window,
-                bubbles: true,
-                cancelable: true,
-                clientX: clickX,
-                clientY: clickY,
-                button: 0
-            });
-            
-            // Dispatch events
-            polygon.dispatchEvent(mousedownEvent);
-            polygon.dispatchEvent(mouseupEvent);
-            polygon.dispatchEvent(clickEvent);
-            
-            return {
-                success: true, 
-                polygonInfo: {
-                    fill: polygon.getAttribute('fill'),
-                    stroke: polygon.getAttribute('stroke'),
-                    className: polygon.className.baseVal || polygon.className
-                }
-            };
-        """)
-        
-        if click_result.get('success'):
-            print(f"Polygon click dispatched successfully. Info: {click_result.get('polygonInfo')}")
-            click_success = True
-        else:
-            print(f"Polygon click failed: {click_result.get('reason')}")
-            
-    except Exception as e:
-        print(f"Error during enhanced polygon click: {e}")
-    
-    # Wait for selection to process
-    time.sleep(2)
-    
-    # Method 2: If JavaScript click didn't work, try ActionChains
-    if not click_success:
-        try:
-            print("Attempting polygon click with ActionChains...")
-            # Re-find the polygon to avoid stale references
-            polygon = driver.find_element(By.CSS_SELECTOR, ".leaflet-overlay-pane path")
-            
-            # Use ActionChains to click
-            actions = ActionChains(driver)
-            actions.move_to_element(polygon).click().perform()
-            print("Clicked polygon using ActionChains")
-            click_success = True
-            time.sleep(2)
-        except Exception as e:
-            print(f"ActionChains click failed: {e}")
-    
-    # Method 3: Try clicking on the map container at polygon coordinates
-    if not click_success:
-        try:
-            print("Attempting click on map at polygon coordinates...")
-            polygon_coords = driver.execute_script("""
-                const polygon = document.querySelector('.leaflet-overlay-pane path');
-                if (!polygon) return null;
-                
-                const rect = polygon.getBoundingClientRect();
-                const mapRect = document.getElementById('leaflet-map').getBoundingClientRect();
-                
-                return {
-                    x: rect.left + rect.width/2 - mapRect.left,
-                    y: rect.top + rect.height/2 - mapRect.top
-                };
-            """)
-            
-            if polygon_coords:
-                map_element = driver.find_element(By.ID, "leaflet-map")
-                actions = ActionChains(driver)
-                actions.move_to_element_with_offset(map_element, polygon_coords['x'], polygon_coords['y']).click().perform()
-                print(f"Clicked on map at polygon coordinates: {polygon_coords}")
-                time.sleep(2)
-                
-        except Exception as e:
-            print(f"Map coordinate click failed: {e}")
-
-    # Debug: Print what we see on the map
-    debug_info = driver.execute_script("""
-        const paths = document.querySelectorAll('.leaflet-overlay-pane path');
-        const info = {
-            totalPaths: paths.length,
-            sampleStyles: []
-        };
-
-        // Get style info from first few paths
-        for (let i = 0; i < Math.min(3, paths.length); i++) {
-            const path = paths[i];
-            info.sampleStyles.push({
-                style: path.getAttribute('style'),
-                fill: path.getAttribute('fill'),
-                stroke: path.getAttribute('stroke'),
-                className: path.className.baseVal || path.className
-            });
-        }
-
-        return info;
-    """)
-    print(f"Debug - Map info: {debug_info}")
-
-    # Check if selection worked by multiple methods
-    selected_count = driver.execute_script("""
-        // Method 1: Check the GeoJSON layer's props/hideout data
-        let geoJsonLayer = document.querySelector('#geojson-layer');
-        if (geoJsonLayer) {
-            // Check React props
-            const reactKey = Object.keys(geoJsonLayer).find(key => key.startsWith('__react'));
-            if (reactKey && geoJsonLayer[reactKey]) {
-                const props = geoJsonLayer[reactKey].memoizedProps || geoJsonLayer[reactKey].pendingProps;
-                if (props && props.hideout && props.hideout.selected) {
-                    console.log('Found selected in React props:', props.hideout.selected);
-                    return props.hideout.selected.length;
-                }
-            }
-        }
-
-        // Method 2: Check for red/selected styling
-        const paths = document.querySelectorAll('.leaflet-overlay-pane path');
-        const selectedPaths = Array.from(paths).filter(path => {
-            const style = path.getAttribute('style') || '';
-            const fill = path.getAttribute('fill') || '';
-            const stroke = path.getAttribute('stroke') || '';
-
-            // Check various ways selection might be indicated
-            return style.includes('stroke: red') ||
-                   style.includes('fill: red') ||
-                   style.includes('stroke: rgb(255, 0, 0)') ||
-                   style.includes('fill: rgb(255, 0, 0)') ||
-                   style.includes('stroke:red') ||
-                   style.includes('fill:red') ||
-                   fill === 'red' ||
-                   stroke === 'red' ||
-                   path.classList.contains('selected');
-        });
-
-        if (selectedPaths.length > 0) {
-            console.log('Found', selectedPaths.length, 'red/selected paths');
-            return selectedPaths.length;
-        }
-
-        // Method 3: Check if any chat messages indicate selection
-        const chatMessages = document.querySelectorAll('#chat-messages .message, #chat-messages p');
-        const hasSelectionMessage = Array.from(chatMessages).some(msg =>
-            msg.textContent.toLowerCase().includes('selected') ||
-            msg.textContent.toLowerCase().includes('added')
-        );
-
-        if (hasSelectionMessage) {
-            console.log('Found selection confirmation in chat');
-            return 1; // Assume at least one polygon selected
-        }
-
-        return 0;
-    """)
-
-    if selected_count == 0:
-        # Method 2: Use a chat command to select a polygon
-        print("Direct click didn't work, trying chat command to select a place")
-        chat_input = driver.find_element(By.ID, "chat-input")
-        chat_input.clear()
-        chat_input.send_keys("Add Westminster to the map")
-        send_button = driver.find_element(By.ID, "send-button")
-        send_button.click()
-        time.sleep(2)  # Give more time for the workflow to process
-
-        # Check again
-        selected_count = driver.execute_script("""
-            const paths = document.querySelectorAll('.leaflet-overlay-pane path');
-            return Array.from(paths).filter(path => {
-                const style = path.getAttribute('style') || '';
-                return style.includes('stroke: red') || style.includes('fill: red') ||
-                       style.includes('stroke: rgb(255, 0, 0)') || style.includes('fill: rgb(255, 0, 0)');
-            }).length;
-        """)
-
-    print(f"Selected {selected_count} polygon(s)")
-
-    # Even if we can't detect the selection visually, if the workflow continues
-    # (e.g., theme buttons appear), we can assume selection worked
-    if selected_count == 0:
-        print("Could not detect visual selection, checking for workflow continuation...")
-        # Check if theme buttons appeared (which would indicate selection worked)
-        theme_buttons = driver.find_elements(By.CSS_SELECTOR,
-            "#chat-messages button:not(#send-button), #chat-messages .btn:not(#send-button)")
-        if theme_buttons:
-            print(f"Found {len(theme_buttons)} theme buttons - selection must have worked!")
-            selected_count = 1  # Assume at least one polygon selected
-
-    return selected_count
-
-
-def click_chat_button(driver, button_text=None, button_keywords=None, wait_time=5):
+def click_chat_button(driver, button_text=None, button_keywords=None, wait_time=3):
     """
     Generic helper function to click buttons that appear in the chat
 
@@ -385,7 +128,7 @@ def click_chat_button(driver, button_text=None, button_keywords=None, wait_time=
 
     # Default to Population theme if no specific button requested
     if button_text is None and button_keywords is None:
-        button_keywords = ['population', 'people', 'demographic', 'census']
+        button_keywords = ['Population']
 
     print(f"Waiting for chat buttons to appear (looking for: {button_text or button_keywords})...")
     time.sleep(wait_time)
@@ -552,7 +295,7 @@ def click_chat_button(driver, button_text=None, button_keywords=None, wait_time=
 
 def click_theme_button_if_present(driver):
     """Helper function to click theme buttons that appear in the chat (backwards compatibility)"""
-    return click_chat_button(driver, button_keywords=['population', 'people', 'demographic', 'census'])
+    return click_chat_button(driver, button_keywords=["Population"])
 
 
 def login_to_vobchat(driver, vobchat_app):
@@ -714,105 +457,6 @@ def verify_plot_contains_data(driver):
     return plot_data
 
 
-def deselect_polygon_on_map(driver, method="click"):
-    """
-    Helper function to deselect polygons on the map
-
-    Args:
-        driver: Selenium WebDriver instance
-        method: Method to use for deselection - "click", "chat", or "reset"
-                - "click": Click on a selected polygon to deselect it
-                - "chat": Use chat command to remove polygon
-                - "reset": Use reset button to clear all selections
-
-    Returns:
-        bool: True if deselection was successful, False otherwise
-    """
-    print(f"Attempting to deselect polygon using method: {method}")
-
-    if method == "reset":
-        # Use the reset button to clear all selections
-        try:
-            reset_button = driver.find_element(By.ID, "reset-selections")
-            if reset_button and reset_button.is_displayed():
-                print("Found reset button, clicking to clear selections...")
-                driver.execute_script("arguments[0].click();", reset_button)
-                time.sleep(2)
-                return True
-            else:
-                print("Reset button not found or not visible")
-                return False
-        except Exception as e:
-            print(f"Error clicking reset button: {e}")
-            return False
-
-    elif method == "chat":
-        # Use chat command to remove a polygon
-        try:
-            chat_input = driver.find_element(By.ID, "chat-input")
-            chat_input.clear()
-            chat_input.send_keys("Remove the selected polygon from the map")
-            send_button = driver.find_element(By.ID, "send-button")
-            send_button.click()
-            print("Sent chat command to remove polygon")
-            time.sleep(3)
-            return True
-        except Exception as e:
-            print(f"Error sending chat command to deselect: {e}")
-            return False
-
-    elif method == "click":
-        # Click on a selected polygon to deselect it
-        try:
-            # First, find a selected polygon
-            selected_polygon = driver.execute_script("""
-                const paths = document.querySelectorAll('.leaflet-overlay-pane path');
-                const selectedPaths = Array.from(paths).filter(path => {
-                    const style = path.getAttribute('style') || '';
-                    const fill = path.getAttribute('fill') || '';
-                    const stroke = path.getAttribute('stroke') || '';
-
-                    return style.includes('stroke: red') ||
-                           style.includes('fill: red') ||
-                           style.includes('stroke: rgb(255, 0, 0)') ||
-                           style.includes('fill: rgb(255, 0, 0)') ||
-                           fill === 'red' ||
-                           stroke === 'red';
-                });
-
-                if (selectedPaths.length > 0) {
-                    return selectedPaths[0]; // Return the first selected polygon
-                }
-                return null;
-            """)
-
-            if selected_polygon:
-                print("Found selected polygon, clicking to deselect...")
-                # Click on the selected polygon to deselect it
-                driver.execute_script("""
-                    var evt = new MouseEvent('click', {
-                        view: window,
-                        bubbles: true,
-                        cancelable: true,
-                        clientX: arguments[0].getBBox().x + arguments[0].getBBox().width/2,
-                        clientY: arguments[0].getBBox().y + arguments[0].getBBox().height/2
-                    });
-                    arguments[0].dispatchEvent(evt);
-                """, selected_polygon)
-                time.sleep(2)
-                return True
-            else:
-                print("No selected polygon found to deselect")
-                return False
-
-        except Exception as e:
-            print(f"Error clicking polygon to deselect: {e}")
-            return False
-
-    else:
-        print(f"Unknown deselection method: {method}")
-        return False
-
 
 def verify_polygon_selection_persists(driver):
     """Verify that polygon selection persists after other interactions"""
@@ -894,6 +538,244 @@ def get_selected_polygon_count(driver):
     """)
 
 
+def interact_with_polygon_on_map(driver, action="select", target_coordinates=None):
+    """
+    Generic function to interact with polygons on the map for testing.
+
+    Args:
+        driver: Selenium WebDriver instance
+        action: "select" or "deselect"
+        target_coordinates: Optional tuple (x, y) for specific map coordinates to click
+
+    Returns:
+        dict: Information about the interaction including selected_count
+    """
+    print(f"Attempting to {action} polygon on map...")
+
+    # Store initial state
+    initial_count = get_selected_polygon_count(driver)
+    print(f"Initial selected polygon count: {initial_count}")
+
+    if action == "select":
+        # For selection, try to click on an unselected polygon
+        if target_coordinates:
+            offset_x, offset_y = target_coordinates
+        else:
+            # Find and click on an actual polygon element
+            pass
+
+        polygon_click_result = driver.execute_script("""
+                // Look for polygon paths in the map that are not selected (not red)
+                const paths = document.querySelectorAll('.leaflet-overlay-pane path');
+                console.log('Found', paths.length, 'paths in overlay pane');
+
+                // Filter for unselected polygons (not red)
+                const unselectedPaths = Array.from(paths).filter(path => {
+                    const style = path.getAttribute('style') || '';
+                    const fill = path.getAttribute('fill') || '';
+                    const stroke = path.getAttribute('stroke') || '';
+
+                    // Return paths that are NOT red (unselected)
+                    return !(style.includes('stroke: red') ||
+                           style.includes('fill: red') ||
+                           style.includes('stroke: rgb(255, 0, 0)') ||
+                           style.includes('fill: rgb(255, 0, 0)') ||
+                           fill === 'red' ||
+                           stroke === 'red');
+                });
+
+                console.log('Found', unselectedPaths.length, 'unselected paths');
+
+                if (unselectedPaths.length > 0) {
+                    // Click on the first unselected polygon
+                    const targetPath = unselectedPaths[0];
+
+                    // Get the bounding box and click in the center
+                    const bbox = targetPath.getBBox();
+                    const centerX = bbox.x + bbox.width / 2;
+                    const centerY = bbox.y + bbox.height / 2;
+
+                    // Create click event
+                    const clickEvent = new MouseEvent('click', {
+                        view: window,
+                        bubbles: true,
+                        cancelable: true
+                    });
+
+                    // Click the path directly
+                    targetPath.dispatchEvent(clickEvent);
+
+                    return {
+                        success: true,
+                        method: 'direct_path_click',
+                        pathCount: paths.length,
+                        unselectedCount: unselectedPaths.length,
+                        clickedElement: targetPath.tagName,
+                        bbox: {x: bbox.x, y: bbox.y, width: bbox.width, height: bbox.height}
+                    };
+                }
+
+                // Fallback: try to find any clickable polygon areas
+                const mapEl = document.getElementById('leaflet-map');
+                const mapRect = mapEl.getBoundingClientRect();
+
+                // Try clicking in different areas to find a polygon
+                const testPoints = [
+                    {x: mapRect.width * 0.4, y: mapRect.height * 0.4},
+                    {x: mapRect.width * 0.6, y: mapRect.height * 0.4},
+                    {x: mapRect.width * 0.4, y: mapRect.height * 0.6},
+                    {x: mapRect.width * 0.6, y: mapRect.height * 0.6},
+                    {x: mapRect.width * 0.5, y: mapRect.height * 0.5}
+                ];
+
+                for (let point of testPoints) {
+                    const elementAtPoint = document.elementFromPoint(mapRect.left + point.x, mapRect.top + point.y);
+                    if (elementAtPoint && elementAtPoint.tagName === 'path') {
+                        const clickEvent = new MouseEvent('click', {
+                            view: window,
+                            bubbles: true,
+                            cancelable: true,
+                            clientX: mapRect.left + point.x,
+                            clientY: mapRect.top + point.y
+                        });
+                        elementAtPoint.dispatchEvent(clickEvent);
+
+                        return {
+                            success: true,
+                            method: 'area_search_click',
+                            pathCount: paths.length,
+                            clickedElement: elementAtPoint.tagName,
+                            coordinates: point
+                        };
+                    }
+                }
+
+                return {
+                    success: false,
+                    method: 'no_polygons_found',
+                    pathCount: paths.length,
+                    unselectedCount: unselectedPaths.length
+                };
+            """)
+
+        print(f"Polygon click result: {polygon_click_result}")
+
+        # Additional debugging for failed selections
+        if action == "select" and polygon_click_result.get('success'):
+            # Wait a moment and check if selection actually worked
+            time.sleep(1)
+            post_click_count = get_selected_polygon_count(driver)
+            if post_click_count <= initial_count:
+                print(f"Click reported success but count didn't increase: {initial_count} -> {post_click_count}")
+                print("Trying alternative selection method...")
+
+                # Try clicking in different areas of the map
+                alternative_result = driver.execute_script("""
+                    const mapEl = document.getElementById('leaflet-map');
+                    const rect = mapEl.getBoundingClientRect();
+
+                    // Try multiple click points
+                    const points = [
+                        {x: rect.width * 0.3, y: rect.height * 0.3},
+                        {x: rect.width * 0.7, y: rect.height * 0.3},
+                        {x: rect.width * 0.3, y: rect.height * 0.7},
+                        {x: rect.width * 0.7, y: rect.height * 0.7}
+                    ];
+
+                    for (let point of points) {
+                        const element = document.elementFromPoint(rect.left + point.x, rect.top + point.y);
+                        if (element && element.tagName === 'path') {
+                            element.click();
+                            console.log('Alternative click at', point, 'on', element.tagName);
+                            return {success: true, clickPoint: point, element: element.tagName};
+                        }
+                    }
+                    return {success: false, message: 'No clickable paths found'};
+                """)
+                print(f"Alternative click result: {alternative_result}")
+                time.sleep(1)
+
+    elif action == "deselect":
+        # For deselection, find and click on a currently selected polygon
+        if initial_count == 0:
+            print("No polygons to deselect")
+            return {"selected_count": 0, "success": False, "message": "No polygons to deselect"}
+
+        # Find and click on a selected polygon directly (accounting for map changes)
+        deselect_result = driver.execute_script("""
+            // Find all selected (red) polygon paths
+            const paths = document.querySelectorAll('.leaflet-overlay-pane path');
+            const selectedPaths = Array.from(paths).filter(path => {
+                const style = path.getAttribute('style') || '';
+                const fill = path.getAttribute('fill') || '';
+                const stroke = path.getAttribute('stroke') || '';
+
+                return style.includes('stroke: red') ||
+                       style.includes('fill: red') ||
+                       style.includes('stroke: rgb(255, 0, 0)') ||
+                       style.includes('fill: rgb(255, 0, 0)') ||
+                       fill === 'red' ||
+                       stroke === 'red';
+            });
+
+            console.log('Found', selectedPaths.length, 'selected (red) paths for deselection');
+
+            if (selectedPaths.length > 0) {
+                // Click directly on the first selected path - no coordinate calculation needed
+                const targetPath = selectedPaths[0];
+
+                // Create and dispatch click event directly on the path
+                const clickEvent = new MouseEvent('click', {
+                    view: window,
+                    bubbles: true,
+                    cancelable: true
+                });
+
+                targetPath.dispatchEvent(clickEvent);
+                console.log('Directly clicked selected polygon path for deselection');
+
+                return {
+                    success: true,
+                    method: 'direct_path_click',
+                    selectedCount: selectedPaths.length,
+                    clickedElement: targetPath.tagName
+                };
+            }
+
+            return {
+                success: false,
+                method: 'no_selected_polygons_found',
+                selectedCount: selectedPaths.length
+            };
+        """)
+
+        print(f"Deselect result: {deselect_result}")
+
+    # Wait for the interaction to complete
+    time.sleep(2)
+
+    # Check final state
+    final_count = get_selected_polygon_count(driver)
+    success = False
+
+    if action == "select":
+        success = final_count > initial_count
+        message = f"Selection {'successful' if success else 'failed'}: {initial_count} -> {final_count}"
+    else:  # deselect
+        success = final_count < initial_count
+        message = f"Deselection {'successful' if success else 'failed'}: {initial_count} -> {final_count}"
+
+    print(message)
+
+    return {
+        "selected_count": final_count,
+        "initial_count": initial_count,
+        "success": success,
+        "message": message,
+        "action": action
+    }
+
+
 class TestVobChatIntegration:
     """Integration tests for VobChat polygon selection, theme selection, and visualization"""
 
@@ -910,7 +792,8 @@ class TestVobChatIntegration:
         wait_for_map_ready(driver)
 
         # 2. POLYGON SELECTION
-        selected_polygons = select_polygon_on_map(driver)
+        select_result = interact_with_polygon_on_map(driver, action="select")
+        selected_polygons = select_result["selected_count"]
 
         # 3. THEME SELECTION
         print("Waiting for theme buttons to appear after polygon selection...")
@@ -918,7 +801,7 @@ class TestVobChatIntegration:
 
         # Use the generic button clicker to find and click the Population button with extended wait
         print("Attempting to click Population button...")
-        theme_selected = click_chat_button(driver, button_text="Population", wait_time=8)
+        theme_selected = click_chat_button(driver, button_text="Population")
         print(f"Population button click result: {theme_selected}")
 
         # Fallback to chat if no theme buttons were clicked
@@ -933,7 +816,7 @@ class TestVobChatIntegration:
 
         # Wait for theme selection to process
         print("Waiting for visualization to appear...")
-        time.sleep(8)
+        time.sleep(4)
 
         # 4. VERIFY VISUALIZATION APPEARS AND CONTAINS DATA
         visualization_area = verify_visualization_appears(driver)
@@ -966,7 +849,8 @@ class TestVobChatIntegration:
 
         # 2. FIRST POLYGON SELECTION
         print("First cycle: Selecting polygon...")
-        selected_polygons_1 = select_polygon_on_map(driver)
+        select_result_1 = interact_with_polygon_on_map(driver, action="select")
+        selected_polygons_1 = select_result_1["selected_count"]
         assert selected_polygons_1 > 0, "First cycle: No polygon selected"
         print(f"First cycle: Selected {selected_polygons_1} polygon(s)")
 
@@ -1000,7 +884,11 @@ class TestVobChatIntegration:
 
         # 5. FIRST DESELECTION
         print("First cycle: Deselecting polygon...")
-        deselect_success_1 = deselect_polygon_on_map(driver, method="click")
+        initial_count_1 = get_selected_polygon_count(driver)
+        deselect_result_1 = interact_with_polygon_on_map(driver, action="deselect")
+        final_count_1 = deselect_result_1["selected_count"]
+        deselect_success_1 = final_count_1 < initial_count_1
+        print(f"First cycle deselection: initial={initial_count_1}, final={final_count_1}, stored_hashes={deselect_result_1.get('stored_hashes', [])}")
         assert deselect_success_1, "First cycle: Failed to deselect polygon"
 
         # Verify deselection worked
@@ -1013,7 +901,8 @@ class TestVobChatIntegration:
 
         # 6. SECOND POLYGON SELECTION
         print("Second cycle: Selecting polygon...")
-        selected_polygons_2 = select_polygon_on_map(driver)
+        select_result_2 = interact_with_polygon_on_map(driver, action="select")
+        selected_polygons_2 = select_result_2["selected_count"]
         assert selected_polygons_2 > 0, "Second cycle: No polygon selected"
         print(f"Second cycle: Selected {selected_polygons_2} polygon(s)")
 
@@ -1047,7 +936,11 @@ class TestVobChatIntegration:
 
         # 9. SECOND DESELECTION
         print("Second cycle: Deselecting polygon...")
-        deselect_success_2 = deselect_polygon_on_map(driver, method="reset")
+        initial_count_2 = get_selected_polygon_count(driver)
+        deselect_result_2 = interact_with_polygon_on_map(driver, action="deselect")
+        final_count_2 = deselect_result_2["selected_count"]
+        deselect_success_2 = final_count_2 < initial_count_2
+        print(f"Second cycle deselection: initial={initial_count_2}, final={final_count_2}, stored_hashes={deselect_result_2.get('stored_hashes', [])}")
         assert deselect_success_2, "Second cycle: Failed to deselect polygon"
 
         # Final verification
@@ -1072,7 +965,8 @@ class TestVobChatIntegration:
         wait_for_map_ready(driver)
 
         # Select polygon using helper function
-        initial_selection = select_polygon_on_map(driver)
+        select_result = interact_with_polygon_on_map(driver, action="select")
+        initial_selection = select_result["selected_count"]
 
         # Interact with chat
         chat_input = driver.find_element(By.ID, "chat-input")

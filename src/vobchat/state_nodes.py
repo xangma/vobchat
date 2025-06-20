@@ -535,6 +535,14 @@ def RemovePlace_node(state: lg_State):
     remaining_units = state.get("selected_place_g_units", [])
     cubes_filtered = pd.DataFrame(columns=["g_unit"])
     logger.info(f"DEBUG RemovePlace_node: After removal - remaining_units: {remaining_units}")
+    
+    # CRITICAL: If no polygons remain, also clear the theme selection
+    if not remaining_units:
+        logger.info("RemovePlace_node: No polygons remaining - clearing theme selection")
+        state["selected_theme"] = None
+        state["extracted_theme"] = None
+        # Also clear theme hint flag so it can be shown again later
+        state["_theme_hint_done"] = False
     if state.get("selected_cubes"):
         try:
             df = pd.read_json(state["selected_cubes"], orient="records")
@@ -573,6 +581,10 @@ def RemovePlace_node(state: lg_State):
     "current_node": "select_unit_on_map",
     # CRITICAL: Clear selection_idx in interrupt to ensure it's cleared
     "selection_idx": None,
+    # CRITICAL: Include theme clearing in persistent state when last polygon is removed
+    "selected_theme": state.get("selected_theme"),
+    "extracted_theme": state.get("extracted_theme"),
+    "_theme_hint_done": state.get("_theme_hint_done", False),
     })
 
 # ────────────────────────────────────────────────────────────────────────────

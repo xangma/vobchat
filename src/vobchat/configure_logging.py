@@ -14,7 +14,7 @@ class PrettyFormatter(logging.Formatter):
     def __init__(self):
         super().__init__()
         self.plain_formatter = logging.Formatter(
-            "%(asctime)s.%(msecs)03d [%(levelname)s] %(name)s - %(message)s",
+            "%(asctime)s.%(msecs)03d [%(levelname)s] %(name)s (%(filename)s:%(lineno)d) - %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S"
         )
 
