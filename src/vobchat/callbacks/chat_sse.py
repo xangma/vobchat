@@ -356,8 +356,20 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
                 # Start workflow in background thread with separate event loop
                 try:
                     print(f"DEBUG: Triggering workflow execution for {thread_id}")
-                    # Just trigger the workflow - let the SSE adapter handle the async parts
-                    # This should work since we're not doing any async operations here
+                    
+                    # Execute workflow using the async manager
+                    from vobchat.utils.async_manager import async_manager
+                    
+                    async def execute_workflow():
+                        async for event in workflow_adapter.stream_workflow_execution(
+                            workflow_input=workflow_input,
+                            config=config,
+                            thread_id=thread_id
+                        ):
+                            print(f"DEBUG: Workflow event: {event.get('type')}")
+                    
+                    # Run the workflow execution in the background
+                    async_manager.submit_task(execute_workflow())
                     print(f"DEBUG: Workflow triggered successfully")
                 except Exception as e:
                     print(f"DEBUG: Error triggering workflow: {e}")

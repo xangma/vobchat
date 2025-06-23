@@ -71,7 +71,11 @@ _INTENT_EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
         There can be multiple intents in the same message.
 
         • If the user explicitly asks to add / include a place/s, use AddPlace and return {{"place": "<name>"}}.
-        • IMPORTANT: Location queries like "Where's X?", "Show me X", "Find X", "What about X?" where X is a place name should use AddPlace with {{"place": "<name>"}}.
+        • IMPORTANT: Location queries like "Where's X?", "Show me X", "Find X" where X is a place name should use AddPlace with {{"place": "<name>"}}.
+        • For "What about X?" queries, analyze the context:
+            - If X appears to be asking for information/explanation about a concept, statistical category, or data theme, use DescribeTheme
+            - If X is clearly a geographic location (city, region, etc.), use AddPlace
+            - Consider the conversational context and what type of information the user is seeking
         • If they ask to remove a place/s, RemovePlace with {{"place": "<name>"}}.
         • If they mention a postcode, treat it as AddPlace with {{"postcode": "<code>"}}.
         • If they request a statistical topic, use AddTheme with {{"theme_query": "<words from user>"}}.
