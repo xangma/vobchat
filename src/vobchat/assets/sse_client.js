@@ -297,9 +297,27 @@ window.workflowSSE.onDisconnected = function() {
     }
 };
 
+// Message deduplication tracking
+window.workflowSSE.recentMessages = new Set();
+window.workflowSSE.cleanupInterval = setInterval(() => {
+    // Clear old messages every 30 seconds to prevent memory growth
+    window.workflowSSE.recentMessages.clear();
+}, 30000);
+
 // Integration with Dash callbacks
 window.workflowSSE.onMessage = function(content, isPartial) {
     console.log('SSE: Received message', content, 'isPartial:', isPartial);
+    
+    // Skip deduplication for partial messages (streaming)
+    if (!isPartial) {
+        // Check for duplicate complete messages
+        if (window.workflowSSE.recentMessages.has(content)) {
+            console.log('SSE: Ignoring duplicate message:', content.substring(0, 50));
+            return;
+        }
+        // Track this message to prevent duplicates
+        window.workflowSSE.recentMessages.add(content);
+    }
 
     if (isPartial) {
         // For partial messages, show real-time streaming
@@ -450,28 +468,53 @@ window.workflowSSE.onInterrupt = function(interruptData) {
         message = `Please make a selection to continue.`;
     }
 
-    // Add interrupt message to chat using direct DOM manipulation
+    // UNIFIED MESSAGE HANDLING: Route all messages through Dash app-state instead of direct DOM
     console.log('SSE: About to add message to chat:', message);
     if (message) {
-        const chatDisplay = document.getElementById('chat-display');
-        if (chatDisplay) {
-            const messageDiv = document.createElement('div');
-            messageDiv.className = 'speech-bubble ai-bubble';
-            messageDiv.textContent = message;
-            
-            // With column-reverse, we need to insert BEFORE any existing Dash-rendered messages
-            // to appear AFTER them visually. Find the first user message (Dash-rendered)
-            const firstUserMessage = chatDisplay.querySelector('.user-bubble');
-            if (firstUserMessage) {
-                chatDisplay.insertBefore(messageDiv, firstUserMessage);
+        // CRITICAL FIX: Deduplicate interrupt messages too
+        if (window.workflowSSE.recentMessages.has(message)) {
+            console.log('SSE: Ignoring duplicate interrupt message:', message.substring(0, 50));
+            return;
+        }
+        // Track this interrupt message to prevent duplicates
+        window.workflowSSE.recentMessages.add(message);
+        
+        // UNIFIED FIX: Use the same Dash app-state mechanism as regular SSE messages
+        // This ensures all messages follow the same insertion order and timing
+        try {
+            if (typeof dash_clientside !== 'undefined' && dash_clientside.set_props) {
+                // Create AI message div (same format as regular SSE messages)
+                const aiMessageDiv = {
+                    type: 'Div',
+                    props: {
+                        children: message,
+                        className: 'speech-bubble ai-bubble'
+                    }
+                };
+                
+                // Update app-state to trigger chat re-render (same as regular SSE messages)
+                dash_clientside.set_props('app-state', {
+                    data: {
+                        ...window.dash_clientside.callback_context?.states?.['app-state.data'] || {},
+                        pending_ai_message: aiMessageDiv,
+                        ai_message_timestamp: Date.now()
+                    }
+                });
+                console.log('SSE: Updated app-state with interrupt message via unified system');
             } else {
-                // No user messages yet, just append
-                chatDisplay.appendChild(messageDiv);
+                throw new Error('dash_clientside not available');
             }
-            
-            console.log('SSE: Added interrupt message to chat:', message);
-        } else {
-            console.warn('SSE: chat-display element not found for interrupt message');
+        } catch (error) {
+            console.error('SSE: Failed to update app-state for interrupt message, falling back to DOM:', error);
+            // Fallback to direct DOM (should rarely happen)
+            const chatDisplay = document.getElementById('chat-display');
+            if (chatDisplay) {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = 'speech-bubble ai-bubble';
+                messageDiv.textContent = message;
+                chatDisplay.insertBefore(messageDiv, chatDisplay.firstChild);
+                console.log('SSE: Added interrupt message via DOM fallback');
+            }
         }
     } else {
         console.log('SSE: No message to add to chat');

@@ -6,31 +6,18 @@ from typing import Dict, Any, Optional
 from uuid import uuid4
 import time
 import json
-import requests
 
 import dash
-from dash import html, Input, Output, State, ALL, ctx
+from dash import html, Input, Output, State, ALL
 from dash.exceptions import PreventUpdate
-import dash_bootstrap_components as dbc
 
-from vobchat.stores import app_state_data, map_state_data, place_state_data
-from vobchat.state_schema import lg_State
+from vobchat.stores import app_state_data
 from vobchat.intent_handling import AssistantIntent
 from vobchat.workflow_sse_adapter import create_workflow_sse_adapter
-from vobchat.sse_manager import sse_manager
 
 logger = logging.getLogger(__name__)
 
-# Global lock system to prevent concurrent workflow executions per thread
-_workflow_locks = {}
-_workflow_locks_lock = threading.Lock()
-
-def _get_workflow_lock(thread_id: str) -> threading.Lock:
-    """Get or create a lock for a specific thread to prevent concurrent workflow executions"""
-    with _workflow_locks_lock:
-        if thread_id not in _workflow_locks:
-            _workflow_locks[thread_id] = threading.Lock()
-        return _workflow_locks[thread_id]
+# Note: Workflow locking is now handled by the centralized workflow_lock_manager
 
 def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
     """Register SSE-based chat callbacks that replace the retriggering mechanism"""
@@ -220,38 +207,9 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
             logger.info(f"Starting SSE workflow for thread {thread_id} with input: {list(workflow_input.keys()) if workflow_input else 'None'}")
             logger.info(f"Workflow input details: {workflow_input}")
 
-            # For intent payloads (like RemovePlace), send directly to existing workflow via API
-            if intent_payload and thread_id:
-                try:
-                    print(f"DEBUG: Sending workflow input to existing connection via API")
-                    response = requests.post(
-                        'http://localhost:8050/api/workflow/input',
-                        json={
-                            'thread_id': thread_id,
-                            'input_data': workflow_input
-                        },
-                        timeout=10
-                    )
-                    print(f"DEBUG: API response status: {response.status_code}")
-                    if response.status_code == 200:
-                        print(f"DEBUG: Successfully sent workflow input to existing connection")
-                        callback_end_time = time.time()
-                        print(f"DEBUG: Callback completed at {callback_end_time:.3f} (took {callback_end_time - callback_start_time:.3f}s)")
-
-                        return (
-                            chat_history,
-                            "",  # Clear input
-                            app_state,
-                            thread_id,
-                            {"status": "workflow_input_sent", "thread_id": thread_id},
-                            False  # Re-enable send button after successful API call
-                        )
-                    else:
-                        print(f"DEBUG: API call failed with status {response.status_code}: {response.text}")
-                except Exception as e:
-                    print(f"DEBUG: Error sending workflow input via API: {e}")
-                    logger.error(f"Failed to send workflow input via API: {e}")
-
+            # SIMPLIFIED ARCHITECTURE: All workflow execution goes through SSE trigger path
+            # This eliminates race conditions and provides consistent execution flow
+            
             callback_end_time = time.time()
             print(f"DEBUG: Callback completed at {callback_end_time:.3f} (took {callback_end_time - callback_start_time:.3f}s)")
 
@@ -295,103 +253,67 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
         if status == "connect_and_start_workflow":
             workflow_input = sse_status.get("workflow_input", {})
 
-            # CRITICAL FIX: Use thread-level lock to prevent concurrent workflow executions
-            workflow_lock = _get_workflow_lock(thread_id)
-
-            if not workflow_lock.acquire(blocking=False):
+            # CRITICAL FIX: Use centralized workflow lock manager to prevent concurrent executions
+            from vobchat.utils.workflow_lock_manager import workflow_lock_manager
+            
+            if workflow_lock_manager.is_workflow_running(thread_id):
                 print(f"DEBUG: Workflow already running for thread {thread_id}, skipping duplicate execution")
                 raise PreventUpdate
 
+            # Use centralized workflow lock manager for proper concurrency control
             try:
-                workflow_start_time = time.time()
-                print(f"DEBUG: Starting workflow execution via SSE trigger for thread {thread_id}")
-                print(f"DEBUG: Workflow start time: {workflow_start_time:.3f} (trigger took {workflow_start_time - trigger_start_time:.3f}s)")
-                logger.info(f"SSE workflow triggered for thread {thread_id} with input: {list(workflow_input.keys()) if workflow_input else 'None'}")
+                with workflow_lock_manager.acquire_workflow_lock(thread_id) as execution:
+                    workflow_start_time = time.time()
+                    print(f"DEBUG: Starting workflow execution via SSE trigger for thread {thread_id} (execution: {execution.execution_id})")
+                    print(f"DEBUG: Workflow start time: {workflow_start_time:.3f} (trigger took {workflow_start_time - trigger_start_time:.3f}s)")
+                    logger.info(f"SSE workflow triggered for thread {thread_id} with input: {list(workflow_input.keys()) if workflow_input else 'None'}")
 
-                # Import and start workflow
-                import_start = time.time()
-                from vobchat.workflow_sse_adapter import create_workflow_sse_adapter
-                import threading
-                import asyncio
-                import_end = time.time()
-                print(f"DEBUG: Imports took {import_end - import_start:.3f}s")
+                    # Create workflow adapter
+                    from vobchat.workflow_sse_adapter import create_workflow_sse_adapter
+                    workflow_adapter = create_workflow_sse_adapter(compiled_workflow, base_workflow)
 
-                # Check current SSE manager state before waiting
-                sse_start = time.time()
-                from vobchat.sse_manager import sse_manager
-
-                # Direct Redis lookup instead of scanning all clients (much faster)
-                print(f"DEBUG: Checking for SSE client connection to thread {thread_id}")
-                client_key = f"{sse_manager.client_key_prefix}{thread_id}"
-                client_id = sse_manager.redis_client.get(client_key)
-                if client_id:
-                    print(f"DEBUG: SSE client {client_id} found for thread - proceeding")
-                else:
-                    print(f"DEBUG: No SSE client found for thread {thread_id} - proceeding anyway")
-
-                wait_end_time = time.time()
-                print(f"DEBUG: SSE check completed at {wait_end_time:.3f} (took {wait_end_time - sse_start:.3f}s)")
-
-                # Check SSE manager state after waiting (using direct Redis lookup)
-                print(f"DEBUG: After check - using direct Redis lookup for thread {thread_id}")
-                print(f"DEBUG: Client for thread {thread_id}: {client_id if client_id else 'None'}")
-
-                adapter_start = time.time()
-                workflow_adapter = create_workflow_sse_adapter(compiled_workflow, base_workflow)
-                adapter_end = time.time()
-                print(f"DEBUG: Workflow adapter creation took {adapter_end - adapter_start:.3f}s")
-
-                # Create config for this thread
-                config_start = time.time()
-                config = {
-                    "configurable": {
-                        "thread_id": thread_id,
-                        "checkpoint_ns": "",
-                        "checkpoint_id": None
+                    # Create config for this thread
+                    config = {
+                        "configurable": {
+                            "thread_id": thread_id,
+                            "checkpoint_ns": "",
+                            "checkpoint_id": None
+                        }
                     }
-                }
-                config_end = time.time()
-                print(f"DEBUG: Config creation took {config_end - config_start:.3f}s")
 
-                # Start workflow in background thread with separate event loop
-                try:
-                    print(f"DEBUG: Triggering workflow execution for {thread_id}")
-                    
                     # Execute workflow using the async manager
                     from vobchat.utils.async_manager import async_manager
                     
                     async def execute_workflow():
-                        async for event in workflow_adapter.stream_workflow_execution(
-                            workflow_input=workflow_input,
-                            config=config,
-                            thread_id=thread_id
-                        ):
-                            print(f"DEBUG: Workflow event: {event.get('type')}")
+                        try:
+                            print(f"DEBUG: Starting workflow execution for thread {thread_id}")
+                            event_count = 0
+                            async for event in workflow_adapter.stream_workflow_execution(
+                                workflow_input=workflow_input,
+                                config=config,
+                                thread_id=thread_id
+                            ):
+                                event_count += 1
+                                print(f"DEBUG: Workflow event #{event_count}: {event.get('type')}")
+                            print(f"DEBUG: Workflow execution completed successfully with {event_count} events")
+                        except Exception as e:
+                            print(f"DEBUG: ERROR in workflow execution: {e}")
+                            logger.error(f"Workflow execution failed for thread {thread_id}: {e}", exc_info=True)
                     
                     # Run the workflow execution in the background
                     async_manager.submit_task(execute_workflow())
                     print(f"DEBUG: Workflow triggered successfully")
-                except Exception as e:
-                    print(f"DEBUG: Error triggering workflow: {e}")
 
-                trigger_end_time = time.time()
-                print(f"DEBUG: Trigger callback completed at {trigger_end_time:.3f} (total trigger time: {trigger_end_time - trigger_start_time:.3f}s)")
+                    trigger_end_time = time.time()
+                    print(f"DEBUG: Trigger callback completed at {trigger_end_time:.3f} (total trigger time: {trigger_end_time - trigger_start_time:.3f}s)")
 
-                return {"processed": True, "thread_id": thread_id, "workflow_started": True}
-
-            finally:
-                # Always release the lock when workflow execution completes
-                workflow_lock.release()
-                print(f"DEBUG: Released workflow lock for thread {thread_id}")
+                    return {"processed": True, "thread_id": thread_id, "workflow_started": True}
+            except RuntimeError as e:
+                if "already running" in str(e):
+                    print(f"DEBUG: Concurrent execution prevented for thread {thread_id}: {e}")
+                    raise PreventUpdate
+                else:
+                    print(f"DEBUG: Workflow lock error for thread {thread_id}: {e}")
+                    raise
 
         raise PreventUpdate
-
-def _msg_to_div(msg, idx: int):
-    """Convert message to HTML div (same as original)"""
-    from langchain_core.messages import HumanMessage, AIMessage
-
-    if isinstance(msg, HumanMessage):
-        return html.Div(msg.content, className="speech-bubble user-bubble", key=f"user-{idx}")
-    if isinstance(msg, AIMessage):
-        return html.Div(msg.content, className="speech-bubble ai-bubble", key=f"ai-{idx}")
-    return None

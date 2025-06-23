@@ -601,6 +601,10 @@ def RemovePlace_node(state: lg_State):
     # show_visualization=True so the callback knows to refresh cube data.
     cubes_to_send = cubes_filtered_json if cubes_filtered_json else ([] if show_viz else None)
 
+    # CRITICAL: Clear last_intent_payload in the actual state to prevent duplicate operations
+    state["last_intent_payload"] = {}
+    logger.info("RemovePlace_node: Cleared last_intent_payload to prevent duplicate operations")
+
     interrupt(value={
     "message": f"Removed {place} from the selection.",
     "extracted_place_names": place_names,

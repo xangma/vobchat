@@ -1139,6 +1139,10 @@ def find_cubes_node(state: lg_State) -> lg_State | Command:
         "selected_place_g_unit_types": state.get("selected_place_g_unit_types", [])
     }
     
+    # CRITICAL: Clear last_intent_payload in the actual state to prevent duplicate operations
+    state["last_intent_payload"] = {}
+    logger.info("find_cubes_node: Cleared last_intent_payload to prevent duplicate operations")
+    
     interrupt(
         value={
             "message": f"Here is the data for '{theme_label}' across the selected area(s):",
@@ -2110,11 +2114,30 @@ def create_workflow(lg_state: TypedDict):
             logging.info(f"start_router: New {intent} intent detected, routing to agent_node for processing")
             return "agent_node"
 
-        # If we have a current_node and selection_idx (button click), resume from that node
-        if current_node and selection_idx is not None:
-            print(f"=== URGENT DEBUG: start_router RESUMING from {current_node} ===")
+        # Check if there's a new user message that needs intent processing
+        messages = state.get("messages", [])
+        has_new_user_message = False
+        if messages and len(messages) > 0:
+            last_message = messages[-1]
+            # Check if the last message is from a human (user)
+            if hasattr(last_message, 'type') and last_message.type == "human":
+                has_new_user_message = True
+            elif isinstance(last_message, tuple) and len(last_message) >= 2 and last_message[0] == "user":
+                has_new_user_message = True
+        
+        print(f"=== URGENT DEBUG: start_router message detection - messages_count={len(messages) if messages else 0}, has_new_user_message={has_new_user_message} ===")
+        
+        # If we have a current_node and selection_idx (button click), but no new user message, resume from that node
+        if current_node and selection_idx is not None and not has_new_user_message:
+            print(f"=== URGENT DEBUG: start_router RESUMING from {current_node} (no new user message) ===")
             logging.info(f"start_router: Resuming from current_node={current_node} with selection_idx={selection_idx}")
             return current_node
+        
+        # If there's a new user message, always route to agent_node for intent extraction
+        if has_new_user_message:
+            print(f"=== URGENT DEBUG: start_router ROUTING to agent_node (new user message detected) ===")
+            logging.info(f"start_router: New user message detected, routing to agent_node for intent extraction")
+            return "agent_node"
 
         # Otherwise start fresh with agent_node
         print("=== URGENT DEBUG: start_router STARTING FRESH with agent_node ===")
