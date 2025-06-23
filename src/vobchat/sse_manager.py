@@ -5,12 +5,24 @@ import logging
 import threading
 import time
 import queue
-import redis
 import os
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from flask import Response
+from vobchat.utils.redis_pool import redis_pool_manager
 
 logger = logging.getLogger(__name__)
+
+def make_json_safe(data: Any) -> Any:
+    """Recursively convert data to JSON-safe format"""
+    if isinstance(data, dict):
+        return {k: make_json_safe(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [make_json_safe(item) for item in data]
+    elif isinstance(data, (str, int, float, bool, type(None))):
+        return data
+    else:
+        # Convert non-serializable objects to string
+        return str(data)
 
 class SSEEvent:
     """Base class for SSE events"""
@@ -46,46 +58,24 @@ class InterruptEvent(SSEEvent):
     
     def __init__(self, interrupt_data: Dict[str, Any], thread_id: str):
         # Ensure interrupt_data is JSON serializable
-        safe_data = self._make_json_safe(interrupt_data)
+        safe_data = make_json_safe(interrupt_data)
         super().__init__("interrupt", {
             "data": safe_data,
             "thread_id": thread_id
         }, thread_id)
     
-    def _make_json_safe(self, data: Any) -> Any:
-        """Recursively convert data to JSON-safe format"""
-        if isinstance(data, dict):
-            return {k: self._make_json_safe(v) for k, v in data.items()}
-        elif isinstance(data, list):
-            return [self._make_json_safe(item) for item in data]
-        elif isinstance(data, (str, int, float, bool, type(None))):
-            return data
-        else:
-            # Convert non-serializable objects to string
-            return str(data)
 
 class StateUpdateEvent(SSEEvent):
     """Event for workflow state updates"""
     
     def __init__(self, state_updates: Dict[str, Any], thread_id: str):
         # Ensure state_updates is JSON serializable
-        safe_data = self._make_json_safe(state_updates)
+        safe_data = make_json_safe(state_updates)
         super().__init__("state_update", {
             "data": safe_data,
             "thread_id": thread_id
         }, thread_id)
     
-    def _make_json_safe(self, data: Any) -> Any:
-        """Recursively convert data to JSON-safe format"""
-        if isinstance(data, dict):
-            return {k: self._make_json_safe(v) for k, v in data.items()}
-        elif isinstance(data, list):
-            return [self._make_json_safe(item) for item in data]
-        elif isinstance(data, (str, int, float, bool, type(None))):
-            return data
-        else:
-            # Convert non-serializable objects to string
-            return str(data)
 
 class ErrorEvent(SSEEvent):
     """Event for errors"""
@@ -104,9 +94,13 @@ class RedisSSEManager:
         self.event_queues: Dict[str, queue.Queue] = {}  # client_id -> queue
         self.lock = threading.Lock()
         
-        # Redis connection for shared state
-        redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
-        self.redis_client = redis.from_url(redis_url, decode_responses=True)
+        # Redis connection for shared state using connection pool
+        self.redis_client = redis_pool_manager.get_sync_client()
+        
+        # Connection lifecycle management
+        self.client_last_seen: Dict[str, float] = {}  # client_id -> timestamp
+        self.heartbeat_interval = 30  # seconds
+        self.connection_timeout = 90  # seconds
         
         # Redis key prefixes
         self.client_key_prefix = "sse:clients:"  # {thread_id} -> {client_id}
@@ -119,12 +113,17 @@ class RedisSSEManager:
         
         # Redis pub/sub for cross-worker event delivery
         self.pubsub_channel = "sse_events"
-        self.pubsub = self.redis_client.pubsub()
+        # Create a dedicated client for pub/sub to avoid connection conflicts
+        self.pubsub_client = redis_pool_manager.get_sync_client()
+        self.pubsub = self.pubsub_client.pubsub()
         self.pubsub.subscribe(self.pubsub_channel)
         
         # Start background thread for pub/sub message handling
         self._pubsub_listener_started = False
         self._start_pubsub_listener()
+        
+        # Start cleanup thread for stale connections
+        self._start_cleanup_thread()
     
     def _start_pubsub_listener(self):
         """Start background thread to listen for Redis pub/sub messages"""
@@ -176,6 +175,32 @@ class RedisSSEManager:
         listener_thread.start()
         self._pubsub_listener_started = True
     
+    def _start_cleanup_thread(self):
+        """Start background thread to clean up stale connections"""
+        def cleanup_stale_connections():
+            while True:
+                try:
+                    time.sleep(30)  # Check every 30 seconds
+                    current_time = time.time()
+                    stale_clients = []
+                    
+                    with self.lock:
+                        for client_id, last_seen in list(self.client_last_seen.items()):
+                            if current_time - last_seen > self.connection_timeout:
+                                stale_clients.append(client_id)
+                                logger.warning(f"Client {client_id} timed out (last seen: {current_time - last_seen:.1f}s ago)")
+                    
+                    # Remove stale clients
+                    for client_id in stale_clients:
+                        self.remove_client(client_id)
+                        
+                except Exception as e:
+                    logger.error(f"Error in cleanup thread: {e}")
+        
+        cleanup_thread = threading.Thread(target=cleanup_stale_connections, daemon=True, name="SSE-Cleanup")
+        cleanup_thread.start()
+        logger.info("Started SSE connection cleanup thread")
+    
     def _deliver_local_event(self, client_id: str, event: SSEEvent):
         """Deliver an event to a local client"""
         if client_id in self.event_queues:
@@ -202,7 +227,10 @@ class RedisSSEManager:
             self.redis_client.set(worker_key, self.worker_id, ex=300)  # 5 min expiry
             
             # Create local event queue
-            self.event_queues[client_id] = queue.Queue()
+            self.event_queues[client_id] = queue.Queue(maxsize=1000)  # Limit queue size
+            
+            # Track client for lifecycle management
+            self.client_last_seen[client_id] = time.time()
             
             print(f"DEBUG: Added SSE client {client_id} for thread {thread_id} in worker {self.worker_id}")
             logger.info(f"Added SSE client {client_id} for thread {thread_id}")
@@ -228,8 +256,17 @@ class RedisSSEManager:
             
             # Remove local queue
             if client_id in self.event_queues:
+                # Signal queue to close by putting None
+                try:
+                    self.event_queues[client_id].put_nowait(None)
+                except queue.Full:
+                    pass
                 del self.event_queues[client_id]
                 print(f"DEBUG: Removed local queue for client {client_id}")
+            
+            # Remove from lifecycle tracking
+            if client_id in self.client_last_seen:
+                del self.client_last_seen[client_id]
     
     def clear_thread_clients(self, thread_id: str):
         """Remove all existing clients for a thread"""
@@ -312,6 +349,45 @@ class RedisSSEManager:
             if client_id:
                 result[client_id] = thread_id
         return result
+    
+    def get_clients_summary(self) -> Dict[str, List[str]]:
+        """Get a summary of clients by thread"""
+        summary: Dict[str, List[str]] = {}
+        for key in self.redis_client.scan_iter(match=f"{self.client_key_prefix}*"):
+            thread_id = key.replace(self.client_key_prefix, "")
+            client_id = self.redis_client.get(key)
+            if client_id:
+                if thread_id not in summary:
+                    summary[thread_id] = []
+                summary[thread_id].append(str(client_id))
+        return summary
+    
+    def update_client_heartbeat(self, client_id: str):
+        """Update the last seen timestamp for a client"""
+        with self.lock:
+            if client_id in self.event_queues:
+                self.client_last_seen[client_id] = time.time()
+                # Also update Redis TTL
+                worker_key = f"{self.worker_key_prefix}{client_id}"
+                self.redis_client.expire(worker_key, 300)  # Reset to 5 min
+    
+    def get_connection_status(self) -> Dict[str, Any]:
+        """Get detailed connection status"""
+        with self.lock:
+            current_time = time.time()
+            return {
+                'total_connections': len(self.event_queues),
+                'connections_by_thread': self.get_clients_summary(),
+                'worker_id': self.worker_id,
+                'stale_connections': [
+                    {
+                        'client_id': cid,
+                        'idle_time': current_time - last_seen
+                    }
+                    for cid, last_seen in self.client_last_seen.items()
+                    if current_time - last_seen > 60  # More than 1 minute idle
+                ]
+            }
 
 class SimpleSSEManager:
     """Simple, synchronous SSE manager that works with Flask - LEGACY"""
@@ -404,6 +480,19 @@ class SimpleSSEManager:
     def broadcast_event_sync(self, event: SSEEvent):
         """Synchronous version of broadcast_event"""
         self.broadcast_event(event)
+    
+    def update_client_heartbeat(self, client_id: str):
+        """Update heartbeat for client (no-op for simple manager)"""
+        pass  # Simple manager doesn't track heartbeats
+    
+    def get_connection_status(self) -> Dict[str, Any]:
+        """Get connection status"""
+        with self.lock:
+            return {
+                'total_connections': len(self.clients),
+                'connections_by_thread': dict(self.client_threads),
+                'worker_id': 'simple-manager'
+            }
 
 # Global SSE manager instance
 # Use Redis-backed manager for multi-worker support
@@ -457,6 +546,10 @@ def create_sse_response(client_id: str) -> Response:
                         print(f"DEBUG: Sending heartbeat: {heartbeat_event.strip()}")
                         yield heartbeat_event
                         last_heartbeat = current_time
+                        
+                        # Update client heartbeat in SSE manager if using Redis manager
+                        if hasattr(sse_manager, 'update_client_heartbeat'):
+                            sse_manager.update_client_heartbeat(client_id)
                     
                     # Very short sleep to yield control to other threads/processes
                     time.sleep(0.1)

@@ -19,6 +19,7 @@ from vobchat.api.polygon_routes import register_polygon_routes
 from vobchat.api.bounding_box_routes import register_bounding_box_routes
 from vobchat.models import register_app_routes
 from vobchat.sse_manager import sse_manager, create_sse_response
+from vobchat.utils.async_manager import async_manager
 from flask import render_template_string, redirect, url_for, request, session
 import uuid
 from authlib.integrations.flask_client import OAuth
@@ -74,11 +75,10 @@ def register_sse_routes(server, compiled_workflow, base_workflow):
                 workflow_input = json.loads(workflow_input_param)
                 print(f"DEBUG: Starting workflow automatically for new SSE connection with input: {workflow_input}")
 
-                # Start workflow in background thread
+                # Start workflow using async manager
                 def start_workflow():
                     try:
                         from vobchat.workflow_sse_adapter import create_workflow_sse_adapter
-                        import asyncio
 
                         workflow_adapter = create_workflow_sse_adapter(compiled_workflow, base_workflow)
                         config = {
@@ -89,10 +89,7 @@ def register_sse_routes(server, compiled_workflow, base_workflow):
                             }
                         }
 
-                        # Run workflow in new event loop
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-
+                        # Use async manager instead of creating new event loop
                         async def run_workflow():
                             async for result in workflow_adapter.stream_workflow_execution(
                                 workflow_input,
@@ -101,11 +98,13 @@ def register_sse_routes(server, compiled_workflow, base_workflow):
                             ):
                                 print(f"DEBUG: Auto-started workflow result: {result}")
 
-                        loop.run_until_complete(run_workflow())
-                        loop.close()
+                        # Run using the managed event loop
+                        async_manager.run_async(run_workflow(), timeout=300)  # 5 minute timeout
 
                     except Exception as e:
                         print(f"DEBUG: Error auto-starting workflow: {e}")
+                        import traceback
+                        traceback.print_exc()
 
                 import threading
                 workflow_thread = threading.Thread(target=start_workflow, daemon=True)
@@ -121,11 +120,16 @@ def register_sse_routes(server, compiled_workflow, base_workflow):
     @server.route('/api/sse/status')
     def sse_status():
         """Check SSE service status"""
-        return {
-            'status': 'active',
-            'connected_clients': len(sse_manager.clients),
-            'threads': list(set(sse_manager.client_threads.values()))
-        }
+        if hasattr(sse_manager, 'get_connection_status'):
+            # Use enhanced status if available
+            return sse_manager.get_connection_status()
+        else:
+            # Fallback to basic status
+            return {
+                'status': 'active',
+                'connected_clients': len(sse_manager.clients),
+                'threads': list(set(sse_manager.client_threads.values()))
+            }
 
     @server.route('/api/workflow/input', methods=['POST'])
     def workflow_input():
@@ -166,19 +170,23 @@ def register_sse_routes(server, compiled_workflow, base_workflow):
                 }
             }
 
-            # Run the async workflow processing in a background thread with its own event loop
+            # Run the async workflow processing using async manager
             def process_workflow_in_thread():
-                async def async_process():
-                    result = await workflow_adapter.handle_user_input(
-                        thread_id=thread_id,
-                        input_data=input_data,
-                        config=config
-                    )
-                    logging.info(f"Workflow processing completed for thread {thread_id}: {result.get('status')}")
-                    return result
+                try:
+                    async def async_process():
+                        result = await workflow_adapter.handle_user_input(
+                            thread_id=thread_id,
+                            input_data=input_data,
+                            config=config
+                        )
+                        logging.info(f"Workflow processing completed for thread {thread_id}: {result.get('status')}")
+                        return result
 
-                # Create and run the event loop in this thread
-                asyncio.run(async_process())
+                    # Use async manager instead of creating new event loop
+                    async_manager.run_async(async_process(), timeout=300)  # 5 minute timeout
+                    
+                except Exception as e:
+                    logging.error(f"Error in workflow processing thread: {e}", exc_info=True)
 
             # Start background processing in a separate thread
             import threading
@@ -227,23 +235,27 @@ def register_sse_routes(server, compiled_workflow, base_workflow):
                 }
             }
 
-            # Run the async workflow processing in a background thread with its own event loop
+            # Run the async workflow processing using async manager
             def process_workflow_in_thread():
-                async def async_process():
-                    # Stream workflow execution
-                    results = []
-                    async for result in workflow_adapter.stream_workflow_execution(
-                        workflow_input=workflow_input,
-                        config=config,
-                        thread_id=thread_id
-                    ):
-                        results.append(result)
+                try:
+                    async def async_process():
+                        # Stream workflow execution
+                        results = []
+                        async for result in workflow_adapter.stream_workflow_execution(
+                            workflow_input=workflow_input,
+                            config=config,
+                            thread_id=thread_id
+                        ):
+                            results.append(result)
 
-                    logging.info(f"Workflow execution completed for thread {thread_id}, {len(results)} events")
-                    return results
+                        logging.info(f"Workflow execution completed for thread {thread_id}, {len(results)} events")
+                        return results
 
-                # Create and run the event loop in this thread
-                asyncio.run(async_process())
+                    # Use async manager instead of creating new event loop
+                    async_manager.run_async(async_process(), timeout=300)  # 5 minute timeout
+                    
+                except Exception as e:
+                    logging.error(f"Error in workflow execution thread: {e}", exc_info=True)
 
             # Start background processing in a separate thread
             import threading

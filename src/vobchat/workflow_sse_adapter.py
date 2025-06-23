@@ -3,13 +3,14 @@
 import asyncio
 import json
 import logging
-import threading
+# import threading  # Not needed anymore, using workflow_lock_manager instead
 import time
 from typing import Dict, Any, Optional, AsyncGenerator
 from langchain_core.messages import AIMessage, HumanMessage, AIMessageChunk
 from langgraph.types import interrupt
-from redis.asyncio import Redis
 from vobchat.utils.redis_checkpoint import AsyncRedisSaver
+from vobchat.utils.redis_pool import redis_pool_manager
+from vobchat.utils.workflow_lock_manager import workflow_lock_manager
 
 from vobchat.sse_manager import (
     sse_manager,
@@ -18,20 +19,12 @@ from vobchat.sse_manager import (
     StateUpdateEvent,
     ErrorEvent
 )
-from vobchat.state_schema import lg_State
+# from vobchat.state_schema import lg_State  # Not used currently, kept for potential future use
 
 logger = logging.getLogger(__name__)
 
-# Global lock system to prevent concurrent workflow executions per thread
-_workflow_locks = {}
-_workflow_locks_lock = threading.Lock()
-
-def _get_workflow_lock(thread_id: str) -> threading.Lock:
-    """Get or create a lock for a specific thread to prevent concurrent workflow executions"""
-    with _workflow_locks_lock:
-        if thread_id not in _workflow_locks:
-            _workflow_locks[thread_id] = threading.Lock()
-        return _workflow_locks[thread_id]
+# Note: Workflow locking is now handled by workflow_lock_manager
+# The old thread-local locking has been replaced with a centralized lock manager
 
 class WorkflowSSEAdapter:
     """Adapter that converts workflow events to SSE streams"""
@@ -54,7 +47,6 @@ class WorkflowSSEAdapter:
         Stream workflow execution via SSE instead of using interrupts
         """
         try:
-            import time
             start_time = time.time()
             print(f"DEBUG: Workflow execution started at {start_time:.3f}")
 
@@ -332,60 +324,70 @@ class WorkflowSSEAdapter:
     ) -> Dict[str, Any]:
         """Handle user input with fresh workflow instance to avoid Redis connection issues"""
 
-        # Use thread-level lock to prevent concurrent workflow executions
-        workflow_lock = _get_workflow_lock(thread_id)
-
-        if not workflow_lock.acquire(blocking=False):
+        # Check if workflow is already running
+        if workflow_lock_manager.is_workflow_running(thread_id):
             print(f"DEBUG: Workflow already running for thread {thread_id}, rejecting duplicate request")
             return {"status": "busy", "message": "Workflow is already processing. Please wait."}
 
+        # Use workflow lock manager for proper concurrency control
         try:
-            print(f"DEBUG: Creating isolated workflow instance for user input handling")
+            with workflow_lock_manager.acquire_workflow_lock(thread_id) as execution:
+                print(f"DEBUG: Creating isolated workflow instance for user input handling (execution: {execution.execution_id})")
 
-            # Create a completely fresh workflow instance with its own Redis connection
-            # This ensures no event loop conflicts with existing connections
-            if not self.base_workflow:
-                return {"status": "error", "error": "Base workflow not available"}
+                # Create a completely fresh workflow instance with its own Redis connection
+                # This ensures no event loop conflicts with existing connections
+                if not self.base_workflow:
+                    return {"status": "error", "error": "Base workflow not available"}
 
-            from redis.asyncio import Redis
-            from vobchat.utils.redis_checkpoint import AsyncRedisSaver
+                # Create fresh Redis connection from pool for this specific operation
+                # Don't decode responses - let AsyncRedisSaver handle the decoding internally
+                fresh_redis = redis_pool_manager.get_async_client(decode_responses=False)
+                fresh_checkpointer = AsyncRedisSaver(conn=fresh_redis)
 
-            # Create fresh Redis connection for this specific operation
-            # Don't decode responses - let AsyncRedisSaver handle the decoding internally
-            fresh_redis = Redis(host="localhost", port=6379, db=0, decode_responses=False)
-            fresh_checkpointer = AsyncRedisSaver(conn=fresh_redis)
+                # Compile fresh workflow with isolated checkpointer
+                fresh_workflow = self.base_workflow.compile(checkpointer=fresh_checkpointer)
 
-            # Compile fresh workflow with isolated checkpointer
-            fresh_workflow = self.base_workflow.compile(checkpointer=fresh_checkpointer)
+                # Create temporary adapter with fresh workflow
+                temp_adapter = WorkflowSSEAdapter(fresh_workflow)
+                temp_adapter.set_base_workflow(self.base_workflow)
 
-            # Create temporary adapter with fresh workflow
-            temp_adapter = WorkflowSSEAdapter(fresh_workflow)
-            temp_adapter.set_base_workflow(self.base_workflow)
+                print(f"DEBUG: Starting isolated workflow execution for user input")
 
-            print(f"DEBUG: Starting isolated workflow execution for user input")
+                # Process the user input using the fresh workflow instance
+                async for evt in temp_adapter.stream_workflow_execution(
+                    workflow_input=input_data,
+                    config=config,
+                    thread_id=thread_id
+                ):
+                    print(f"DEBUG: User input event: {evt.get('type')}")
+                    # Continue processing all events, including state updates
 
-            # Process the user input using the fresh workflow instance
-            async for evt in temp_adapter.stream_workflow_execution(
-                workflow_input=input_data,
-                config=config,
-                thread_id=thread_id
-            ):
-                print(f"DEBUG: User input event: {evt.get('type')}")
-                # Continue processing all events, including state updates
+                # Redis connection will be handled by pool manager - no need to close explicitly
+                # await fresh_redis.aclose()  # Commented out - let pool manage connections
+                print(f"DEBUG: User input workflow completed successfully (execution: {execution.execution_id})")
+                return {"status": "success"}
 
-            # Close the fresh Redis connection
-            await fresh_redis.aclose()
-            print(f"DEBUG: User input workflow completed successfully with isolated instance")
-            return {"status": "success"}
-
+        except RuntimeError as e:
+            # Handle workflow lock errors specifically
+            if "already running" in str(e):
+                logger.warning(f"Concurrent execution prevented for thread {thread_id}: {e}")
+                return {"status": "error", "error": "Another workflow is already running for this conversation"}
+            else:
+                logger.error(f"Workflow lock error for thread {thread_id}: {e}")
+                return {"status": "error", "error": str(e)}
         except Exception as e:
             logger.error(f"Error handling user input: {e}", exc_info=True)
+            # Send error event to frontend
+            try:
+                sse_manager.broadcast_event(
+                    ErrorEvent(
+                        error=f"Failed to process input: {str(e)}",
+                        thread_id=thread_id
+                    )
+                )
+            except Exception as broadcast_error:
+                logger.error(f"Failed to broadcast error event: {broadcast_error}")
             return {"status": "error", "error": str(e)}
-
-        finally:
-            # Always release the workflow lock
-            workflow_lock.release()
-            print(f"DEBUG: Released workflow lock for thread {thread_id}")
 
 class SSEInterruptHandler:
     """Replacement for LangGraph interrupt() that sends SSE events instead"""
@@ -395,7 +397,7 @@ class SSEInterruptHandler:
         """Send interrupt data via SSE instead of blocking workflow"""
         try:
             # Send interrupt event immediately
-            sse_manager.broadcast_event_sync(
+            sse_manager.broadcast_event(
                 InterruptEvent(
                     interrupt_data=value,
                     thread_id=thread_id
@@ -416,7 +418,7 @@ def sse_interrupt(value: Dict[str, Any]):
     """SSE-based interrupt that doesn't block workflow execution"""
     # Try to get thread_id from current context
     # This is a simplified approach - in practice you might need more sophisticated context tracking
-    import contextvars
+    # import contextvars  # Might be needed for thread context tracking in the future
 
     # For now, we'll need to pass thread_id explicitly
     # This will be handled by modifying the workflow nodes

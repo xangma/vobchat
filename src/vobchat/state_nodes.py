@@ -217,9 +217,9 @@ def AddPlace_node(state: lg_State):
     existing_places = state.get("extracted_place_names", [])
     existing_units = state.get("selected_place_g_units", [])
     is_map_click_replacement = (
-        "polygon_id" in args and 
-        len(names_to_add) == 1 and 
-        len(existing_places) == 0 and 
+        "polygon_id" in args and
+        len(names_to_add) == 1 and
+        len(existing_places) == 0 and
         len(existing_units) == 0
     )
 
@@ -509,17 +509,16 @@ def RemovePlace_node(state: lg_State):
         selected_polygons = state.get("selected_polygons", []) or []
         selected_polygons_unit_types = state.get("selected_polygons_unit_types", []) or []
 
-        # Remove polygon ID from selected_polygons
-        polygon_str = str(g_unit)
-        if selected_polygons and polygon_str in selected_polygons:
-            polygon_idx = selected_polygons.index(polygon_str)
+        # Remove polygon ID from selected_polygons (compare as integers)
+        if selected_polygons and g_unit in selected_polygons:
+            polygon_idx = selected_polygons.index(g_unit)
             selected_polygons.pop(polygon_idx)
             # Also remove corresponding unit type
             if selected_polygons_unit_types and polygon_idx < len(selected_polygons_unit_types):
                 selected_polygons_unit_types.pop(polygon_idx)
             state["selected_polygons"] = selected_polygons
             state["selected_polygons_unit_types"] = selected_polygons_unit_types
-            logger.info(f"DEBUG RemovePlace_node: Removed polygon {polygon_str} from polygon arrays")
+            logger.info(f"DEBUG RemovePlace_node: Removed polygon {g_unit} from polygon arrays")
 
     # CRITICAL: Also remove the place from the places array to clear resolved state
     if places:
@@ -535,7 +534,7 @@ def RemovePlace_node(state: lg_State):
     remaining_units = state.get("selected_place_g_units", [])
     cubes_filtered = pd.DataFrame(columns=["g_unit"])
     logger.info(f"DEBUG RemovePlace_node: After removal - remaining_units: {remaining_units}")
-    
+
     # CRITICAL: If no polygons remain, also clear the theme selection
     if not remaining_units:
         logger.info("RemovePlace_node: No polygons remaining - clearing theme selection")
@@ -552,17 +551,55 @@ def RemovePlace_node(state: lg_State):
         except Exception:          # defensive - fallback to clearing
             cubes_filtered = pd.DataFrame(columns=["g_unit"])
 
+    # CRITICAL: If we have remaining units but no cube data, generate fresh cube data from theme
+    if remaining_units and cubes_filtered.empty and state.get("selected_theme"):
+        logger.info(f"DEBUG RemovePlace_node: No existing cube data, generating fresh cubes for {len(remaining_units)} units")
+        try:
+            from vobchat.tools import find_themes_for_unit
+            import json
+
+            # Parse selected theme
+            selected_theme = state.get("selected_theme")
+            if isinstance(selected_theme, str):
+                theme_data = json.loads(selected_theme)
+                theme_id = theme_data.get("ent_id")
+
+                if theme_id:
+                    # Get cube data for the first remaining unit and theme
+                    from vobchat.tools import find_cubes_for_unit_theme
+                    cubes_json = find_cubes_for_unit_theme.invoke({"g_unit": str(remaining_units[0]), "theme_id": theme_id})
+                    cubes_df = pd.read_json(io.StringIO(cubes_json), orient='records')
+
+                    if not cubes_df.empty:
+                        # Tag with unit ID like in the normal workflow
+                        cubes_df["g_unit"] = remaining_units[0]
+                        cubes_filtered = cubes_df
+                        logger.info(f"DEBUG RemovePlace_node: Generated {len(cubes_filtered)} fresh cube rows for unit {remaining_units[0]}, theme {theme_id}")
+        except Exception as e:
+            logger.warning(f"DEBUG RemovePlace_node: Error generating fresh cube data: {e}")
+
+    # CRITICAL: Show visualization if there are remaining units AND a theme is selected
+    # This ensures that when a polygon is removed, the visualization stays visible
+    # for the remaining polygons (the visualization callback will refresh the cube data)
+    show_viz = bool(remaining_units and state.get("selected_theme"))
+
     # CRITICAL: Persist the filtered cube data back to state to prevent old data from persisting
     if len(cubes_filtered) > 0:
-        show_viz = True
         cubes_filtered_json = cubes_filtered.to_json(orient="records")
         state["selected_cubes"] = cubes_filtered_json  # Persist filtered cubes
         logger.info(f"RemovePlace_node: Filtered and persisted {len(cubes_filtered)} cube rows for remaining units {remaining_units}")
     else:
-        show_viz = False
         cubes_filtered_json = []
         state["selected_cubes"] = None  # Clear all cube data when no units remain
         logger.info("RemovePlace_node: Cleared all cube data (no remaining units)")
+
+    logger.info(f"RemovePlace_node: show_viz={show_viz} (remaining_units={len(remaining_units)}, has_theme={bool(state.get('selected_theme'))})")
+
+    # CRITICAL: When show_viz=True, we need to either provide cube data or trigger
+    # the visualization callback to refresh. If we have filtered cubes, use them.
+    # If not, but we still want to show visualization, send empty cubes but ensure
+    # show_visualization=True so the callback knows to refresh cube data.
+    cubes_to_send = cubes_filtered_json if cubes_filtered_json else ([] if show_viz else None)
 
     interrupt(value={
     "message": f"Removed {place} from the selection.",
@@ -573,8 +610,8 @@ def RemovePlace_node(state: lg_State):
     "selected_place_g_places": state.get("selected_place_g_places", []),
     "selected_place_g_units": state.get("selected_place_g_units", []),
     "selected_place_g_unit_types": state.get("selected_place_g_unit_types", []),
-    # CRITICAL: Include filtered cube data so SSE client can update visualization correctly
-    "cubes": cubes_filtered_json if cubes_filtered_json else None,
+    # CRITICAL: Include cube data or empty list to trigger visualization refresh
+    "cubes": cubes_to_send,
     "show_visualization": show_viz,
     "selected_polygons": state.get("selected_polygons", []),
     "selected_polygons_unit_types": state.get("selected_polygons_unit_types", []),

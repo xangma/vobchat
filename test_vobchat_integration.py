@@ -557,14 +557,40 @@ def interact_with_polygon_on_map(driver, action="select", target_coordinates=Non
     print(f"Initial selected polygon count: {initial_count}")
 
     if action == "select":
-        # For selection, try to click on an unselected polygon
-        if target_coordinates:
-            offset_x, offset_y = target_coordinates
-        else:
-            # Find and click on an actual polygon element
-            pass
-
-        polygon_click_result = driver.execute_script("""
+        # Try to find and click an unselected polygon using Selenium
+        try:
+            paths = driver.find_elements(By.CSS_SELECTOR, '.leaflet-overlay-pane path')
+            unselected_path = None
+            
+            for path in paths:
+                style = path.get_attribute('style') or ''
+                fill = path.get_attribute('fill') or ''
+                stroke = path.get_attribute('stroke') or ''
+                
+                # Find an unselected (not red) polygon
+                if not any(color in style + fill + stroke for color in ['red', 'rgb(255, 0, 0)']):
+                    unselected_path = path
+                    break
+            
+            if unselected_path:
+                # Try direct Selenium click
+                unselected_path.click()
+                print("Clicked unselected polygon using Selenium click")
+                time.sleep(1)
+                
+                polygon_click_result = {
+                    'success': True,
+                    'method': 'selenium_direct_click',
+                    'pathCount': len(paths),
+                    'clickedElement': 'path'
+                }
+            else:
+                raise Exception("No unselected polygons found")
+                
+        except Exception as e:
+            print(f"Selenium click failed: {e}, falling back to JavaScript")
+            # Fallback to JavaScript clicking
+            polygon_click_result = driver.execute_script("""
                 // Look for polygon paths in the map that are not selected (not red)
                 const paths = document.querySelectorAll('.leaflet-overlay-pane path');
                 console.log('Found', paths.length, 'paths in overlay pane');
@@ -587,27 +613,70 @@ def interact_with_polygon_on_map(driver, action="select", target_coordinates=Non
                 console.log('Found', unselectedPaths.length, 'unselected paths');
 
                 if (unselectedPaths.length > 0) {
-                    // Click on the first unselected polygon
+                    // Click on the first unselected polygon using Leaflet's event system
                     const targetPath = unselectedPaths[0];
 
-                    // Get the bounding box and click in the center
-                    const bbox = targetPath.getBBox();
-                    const centerX = bbox.x + bbox.width / 2;
-                    const centerY = bbox.y + bbox.height / 2;
+                    // Get the path's parent layer (the Leaflet feature)
+                    let leafletLayer = targetPath;
+                    while (leafletLayer && !leafletLayer._leaflet_id) {
+                        leafletLayer = leafletLayer.parentElement;
+                    }
 
-                    // Create click event
+                    // Get the map element and trigger click through Leaflet
+                    const mapEl = document.getElementById('leaflet-map');
+                    const map = mapEl?._leaflet_map;
+                    
+                    if (map && leafletLayer && leafletLayer._leaflet_id) {
+                        // Find the actual Leaflet layer object
+                        let targetLayer = null;
+                        map.eachLayer(function(layer) {
+                            if (layer._leaflet_id === leafletLayer._leaflet_id || 
+                                (layer._path && layer._path === targetPath)) {
+                                targetLayer = layer;
+                            }
+                        });
+                        
+                        if (targetLayer) {
+                            // Trigger a Leaflet click event on the layer
+                            targetLayer.fire('click', {
+                                latlng: targetLayer.getCenter ? targetLayer.getCenter() : null,
+                                layerPoint: null,
+                                containerPoint: null,
+                                originalEvent: new MouseEvent('click')
+                            });
+                            console.log('Triggered Leaflet click event on layer');
+                        }
+                    }
+
+                    // Also try direct click as fallback
+                    const bbox = targetPath.getBBox();
+                    const mapRect = mapEl.getBoundingClientRect();
+                    
+                    // Calculate screen coordinates for the center of the polygon
+                    const screenX = mapRect.left + bbox.x + bbox.width / 2;
+                    const screenY = mapRect.top + bbox.y + bbox.height / 2;
+                    
+                    // Create and dispatch a click event at those coordinates
                     const clickEvent = new MouseEvent('click', {
                         view: window,
                         bubbles: true,
-                        cancelable: true
+                        cancelable: true,
+                        clientX: screenX,
+                        clientY: screenY
                     });
 
                     // Click the path directly
                     targetPath.dispatchEvent(clickEvent);
+                    
+                    // Also try clicking on the map element at those coordinates
+                    const elementAtPoint = document.elementFromPoint(screenX, screenY);
+                    if (elementAtPoint) {
+                        elementAtPoint.dispatchEvent(clickEvent);
+                    }
 
                     return {
                         success: true,
-                        method: 'direct_path_click',
+                        method: 'leaflet_and_direct_click',
                         pathCount: paths.length,
                         unselectedCount: unselectedPaths.length,
                         clickedElement: targetPath.tagName,
@@ -700,9 +769,41 @@ def interact_with_polygon_on_map(driver, action="select", target_coordinates=Non
         if initial_count == 0:
             print("No polygons to deselect")
             return {"selected_count": 0, "success": False, "message": "No polygons to deselect"}
-
-        # Find and click on a selected polygon directly (accounting for map changes)
-        deselect_result = driver.execute_script("""
+        
+        # Try to find and click a selected polygon using Selenium
+        try:
+            paths = driver.find_elements(By.CSS_SELECTOR, '.leaflet-overlay-pane path')
+            selected_path = None
+            
+            for path in paths:
+                style = path.get_attribute('style') or ''
+                fill = path.get_attribute('fill') or ''
+                stroke = path.get_attribute('stroke') or ''
+                
+                # Find a selected (red) polygon
+                if any(color in style + fill + stroke for color in ['red', 'rgb(255, 0, 0)']):
+                    selected_path = path
+                    break
+            
+            if selected_path:
+                # Try direct Selenium click
+                selected_path.click()
+                print("Clicked selected polygon using Selenium click for deselection")
+                time.sleep(1)
+                
+                deselect_result = {
+                    'success': True,
+                    'method': 'selenium_direct_click',
+                    'selectedCount': 1,
+                    'clickedElement': 'path'
+                }
+            else:
+                raise Exception("No selected polygons found")
+                
+        except Exception as e:
+            print(f"Selenium deselect click failed: {e}, falling back to JavaScript")
+            # Fallback to JavaScript clicking
+            deselect_result = driver.execute_script("""
             // Find all selected (red) polygon paths
             const paths = document.querySelectorAll('.leaflet-overlay-pane path');
             const selectedPaths = Array.from(paths).filter(path => {
@@ -721,22 +822,70 @@ def interact_with_polygon_on_map(driver, action="select", target_coordinates=Non
             console.log('Found', selectedPaths.length, 'selected (red) paths for deselection');
 
             if (selectedPaths.length > 0) {
-                // Click directly on the first selected path - no coordinate calculation needed
+                // Click on the first selected polygon using Leaflet's event system
                 const targetPath = selectedPaths[0];
 
-                // Create and dispatch click event directly on the path
+                // Get the path's parent layer (the Leaflet feature)
+                let leafletLayer = targetPath;
+                while (leafletLayer && !leafletLayer._leaflet_id) {
+                    leafletLayer = leafletLayer.parentElement;
+                }
+
+                // Get the map element and trigger click through Leaflet
+                const mapEl = document.getElementById('leaflet-map');
+                const map = mapEl?._leaflet_map;
+                
+                if (map && leafletLayer && leafletLayer._leaflet_id) {
+                    // Find the actual Leaflet layer object
+                    let targetLayer = null;
+                    map.eachLayer(function(layer) {
+                        if (layer._leaflet_id === leafletLayer._leaflet_id || 
+                            (layer._path && layer._path === targetPath)) {
+                            targetLayer = layer;
+                        }
+                    });
+                    
+                    if (targetLayer) {
+                        // Trigger a Leaflet click event on the layer
+                        targetLayer.fire('click', {
+                            latlng: targetLayer.getCenter ? targetLayer.getCenter() : null,
+                            layerPoint: null,
+                            containerPoint: null,
+                            originalEvent: new MouseEvent('click')
+                        });
+                        console.log('Triggered Leaflet click event on selected layer for deselection');
+                    }
+                }
+
+                // Also try direct click as fallback
+                const bbox = targetPath.getBBox();
+                const mapRect = mapEl.getBoundingClientRect();
+                
+                // Calculate screen coordinates for the center of the polygon
+                const screenX = mapRect.left + bbox.x + bbox.width / 2;
+                const screenY = mapRect.top + bbox.y + bbox.height / 2;
+                
+                // Create and dispatch a click event at those coordinates
                 const clickEvent = new MouseEvent('click', {
                     view: window,
                     bubbles: true,
-                    cancelable: true
+                    cancelable: true,
+                    clientX: screenX,
+                    clientY: screenY
                 });
 
+                // Click the path directly
                 targetPath.dispatchEvent(clickEvent);
-                console.log('Directly clicked selected polygon path for deselection');
+                
+                // Also try clicking on the map element at those coordinates
+                const elementAtPoint = document.elementFromPoint(screenX, screenY);
+                if (elementAtPoint) {
+                    elementAtPoint.dispatchEvent(clickEvent);
+                }
 
                 return {
                     success: true,
-                    method: 'direct_path_click',
+                    method: 'leaflet_and_direct_click',
                     selectedCount: selectedPaths.length,
                     clickedElement: targetPath.tagName
                 };

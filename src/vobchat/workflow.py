@@ -50,7 +50,7 @@ from vobchat.tools import (  # Custom functions to interact with the database/da
 )
 # Import Redis checkpointer for persistent state saving
 from vobchat.utils.redis_checkpoint import RedisSaver, AsyncRedisSaver
-from redis.asyncio import Redis  # Asynchronous Redis client
+from vobchat.utils.redis_pool import redis_pool_manager
 import asyncio  # For running asynchronous operations (like Redis interaction)
 from vobchat.state_nodes import (
     ShowState_node, ListThemesForSelection_node,
@@ -2368,9 +2368,9 @@ def create_workflow(lg_state: TypedDict):
     # --- Compile the workflow ---
     logger.info("Compiling workflow with Redis checkpointer...")
     try:
-        # Set up asynchronous Redis connection for the checkpointer.
-        # Ensure Redis server is running at this host/port/db.
-        conn = Redis(host="localhost", port=6379, db=0, decode_responses=False)
+        # Get asynchronous Redis connection from the pool for the checkpointer.
+        # decode_responses=False is required for the checkpointer to work correctly
+        conn = redis_pool_manager.get_async_client(decode_responses=False)
 
         # Initialize the asynchronous Redis checkpointer. This persists the state.
         checkpointer = AsyncRedisSaver(conn=conn)

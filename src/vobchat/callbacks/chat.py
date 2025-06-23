@@ -1,4 +1,4 @@
-# src/callbacks/chat.py (Revised: Sync callback with asyncio.run)
+# src/callbacks/chat.py (DEPRECATED - OLD CELERY/BACKGROUND CALLBACK METHOD)\n#\n# *** THIS FILE IS DEPRECATED ***\n# This file contains the old Celery-based background callback implementation.\n# The new SSE-based implementation is in chat_sse.py\n# This file is kept for reference and potential fallback scenarios.\n# *** DO NOT USE FOR NEW DEVELOPMENT ***
 
 # =============================================================================
 #  DDME - Dash Chat ↔ LangGraph Bridge

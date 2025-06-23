@@ -18,13 +18,13 @@ class WorkflowSSEClient {
         this.onInterrupt = null;
         this.onStateUpdate = null;
         this.onError = null;
-        
+
         // Frontend logging
         this.logBuffer = [];
         this.setupFrontendLogging();
         this.onConnected = null;
         this.onDisconnected = null;
-        
+
         // Set up periodic log saving (every 5 seconds)
         this.logSaveInterval = setInterval(() => {
             this.saveLogsToFile();
@@ -36,17 +36,17 @@ class WorkflowSSEClient {
         const originalLog = console.log;
         const originalDebug = console.debug;
         const originalError = console.error;
-        
+
         console.log = (...args) => {
             this.logToFile('LOG', ...args);
             originalLog.apply(console, args);
         };
-        
+
         console.debug = (...args) => {
             this.logToFile('DEBUG', ...args);
             originalDebug.apply(console, args);
         };
-        
+
         console.error = (...args) => {
             this.logToFile('ERROR', ...args);
             originalError.apply(console, args);
@@ -55,13 +55,13 @@ class WorkflowSSEClient {
 
     logToFile(level, ...args) {
         const timestamp = new Date().toISOString();
-        const message = args.map(arg => 
+        const message = args.map(arg =>
             typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
         ).join(' ');
-        
+
         const logEntry = `${timestamp} [${level}] ${message}\n`;
         this.logBuffer.push(logEntry);
-        
+
         // Keep only last 1000 entries to prevent memory issues
         if (this.logBuffer.length > 1000) {
             this.logBuffer = this.logBuffer.slice(-1000);
@@ -70,7 +70,7 @@ class WorkflowSSEClient {
 
     saveLogsToFile() {
         if (this.logBuffer.length === 0) return;
-        
+
         // Send logs to backend to save to file
         try {
             const logContent = this.logBuffer.join('');
@@ -84,7 +84,7 @@ class WorkflowSSEClient {
                 // Silently fail - don't use console.error to avoid recursion
                 // Backend will handle logging errors
             });
-            
+
             // Clear buffer after sending
             this.logBuffer = [];
         } catch (error) {
@@ -104,7 +104,7 @@ class WorkflowSSEClient {
         console.log('SSE: Connecting to thread', threadId, 'with workflow input:', workflowInput);
 
         let url = `/api/sse/connect?thread_id=${encodeURIComponent(threadId)}`;
-        
+
         // Add workflow input if provided
         if (workflowInput) {
             const encodedInput = encodeURIComponent(JSON.stringify(workflowInput));
@@ -113,7 +113,7 @@ class WorkflowSSEClient {
         } else {
             console.log('SSE: No workflow input provided');
         }
-        
+
         console.log('SSE: Final connection URL:', url);
         this.eventSource = new EventSource(url);
 
@@ -301,37 +301,71 @@ window.workflowSSE.onDisconnected = function() {
 window.workflowSSE.onMessage = function(content, isPartial) {
     console.log('SSE: Received message', content, 'isPartial:', isPartial);
 
-    // Update chat display directly
-    const chatDisplay = document.getElementById('chat-display');
-    if (!chatDisplay) {
-        console.warn('SSE: chat-display element not found');
-        return;
-    }
-
-    // Create or update AI message bubble for streaming
-    // Use a specific class to identify streaming messages vs interrupt messages
-    let messageDiv = chatDisplay.querySelector('.ai-bubble.streaming:first-child');
-
     if (isPartial) {
+        // For partial messages, show real-time streaming
+        const chatDisplay = document.getElementById('chat-display');
+        if (!chatDisplay) {
+            console.warn('SSE: chat-display element not found');
+            return;
+        }
+
+        // Find existing streaming message or create new one
+        let messageDiv = chatDisplay.querySelector('.ai-bubble.streaming');
+        
         if (!messageDiv) {
             // Create new AI bubble for partial message
             messageDiv = document.createElement('div');
             messageDiv.className = 'speech-bubble ai-bubble streaming';
-            chatDisplay.insertBefore(messageDiv, chatDisplay.firstChild);
+            chatDisplay.appendChild(messageDiv);
         }
         messageDiv.textContent = content;
     } else {
-        // Complete message
-        if (messageDiv) {
-            messageDiv.textContent = content;
-            // Remove streaming class since message is complete
-            messageDiv.classList.remove('streaming');
-        } else {
-            // Create new complete message
-            messageDiv = document.createElement('div');
-            messageDiv.className = 'speech-bubble ai-bubble';
-            messageDiv.textContent = content;
-            chatDisplay.insertBefore(messageDiv, chatDisplay.firstChild);
+        // For complete messages, try to add to app-state via Dash
+        console.log('SSE: Complete message received, attempting to add to app-state');
+        
+        // Remove streaming message
+        const chatDisplay = document.getElementById('chat-display');
+        if (chatDisplay) {
+            const streamingDiv = chatDisplay.querySelector('.ai-bubble.streaming');
+            if (streamingDiv) {
+                streamingDiv.remove();
+            }
+        }
+        
+        // Try to update app-state to include this AI message
+        try {
+            if (typeof dash_clientside !== 'undefined' && dash_clientside.set_props) {
+                // Create AI message div
+                const aiMessageDiv = {
+                    type: 'Div',
+                    props: {
+                        children: content,
+                        className: 'speech-bubble ai-bubble'
+                    }
+                };
+                
+                // Update app-state to trigger chat re-render
+                // We'll update a special field that the chat callback can watch
+                dash_clientside.set_props('app-state', {
+                    data: {
+                        ...window.dash_clientside.callback_context?.states?.['app-state.data'] || {},
+                        pending_ai_message: aiMessageDiv,
+                        ai_message_timestamp: Date.now()
+                    }
+                });
+                console.log('SSE: Updated app-state with AI message');
+            } else {
+                throw new Error('dash_clientside not available');
+            }
+        } catch (error) {
+            console.error('SSE: Failed to update app-state, falling back to DOM:', error);
+            // Fallback to direct DOM manipulation
+            if (chatDisplay) {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = 'speech-bubble ai-bubble';
+                messageDiv.textContent = content;
+                chatDisplay.appendChild(messageDiv);
+            }
         }
     }
 };
@@ -424,8 +458,17 @@ window.workflowSSE.onInterrupt = function(interruptData) {
             const messageDiv = document.createElement('div');
             messageDiv.className = 'speech-bubble ai-bubble';
             messageDiv.textContent = message;
-            // Insert at the top but don't overwrite - let messages stack
-            chatDisplay.insertBefore(messageDiv, chatDisplay.firstChild);
+            
+            // With column-reverse, we need to insert BEFORE any existing Dash-rendered messages
+            // to appear AFTER them visually. Find the first user message (Dash-rendered)
+            const firstUserMessage = chatDisplay.querySelector('.user-bubble');
+            if (firstUserMessage) {
+                chatDisplay.insertBefore(messageDiv, firstUserMessage);
+            } else {
+                // No user messages yet, just append
+                chatDisplay.appendChild(messageDiv);
+            }
+            
             console.log('SSE: Added interrupt message to chat:', message);
         } else {
             console.warn('SSE: chat-display element not found for interrupt message');
@@ -448,8 +491,8 @@ window.workflowSSE.onStateUpdate = function(stateData) {
 
         // Only ignore state updates if we're in a removal scenario (not multi-place unit selection)
         // Multi-place workflows will have interrupts with empty units for new places, but state keeps all units
-        const isMultiPlaceUnitSelection = interruptNode === 'resolve_place_and_unit' && 
-                                         window.workflowSSE.latestInterruptData.options && 
+        const isMultiPlaceUnitSelection = interruptNode === 'resolve_place_and_unit' &&
+                                         window.workflowSSE.latestInterruptData.options &&
                                          window.workflowSSE.latestInterruptData.options.length > 0;
 
         if (isMultiPlaceUnitSelection) {
@@ -790,7 +833,7 @@ function updateMapState(stateData) {
             updates.unit_types = uniqueUnitTypes;
             console.log('SSE: Updating unit_types from state update to:', uniqueUnitTypes);
         }
-        
+
         // CRITICAL: Add zoom flag if present in state data
         if (stateData.zoom_to_selection !== undefined) {
             updates.zoom_to_selection = stateData.zoom_to_selection;

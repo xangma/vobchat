@@ -48,9 +48,14 @@ def register_visualization_callbacks(app, compiled_workflow):
         logger.info(f"Visualization callback triggered - app_state: {app_state is not None}, show_visualization: {app_state.get('show_visualization') if app_state else 'None'}")
         logger.info(f"Place state cubes: {bool(place_state.get('cubes') if place_state else False)}")
 
-        # Check if we have cube data - if so, show visualization regardless of app_state
+        # Check if we have cube data OR if we should show visualization based on app_state
         has_cubes = place_state and place_state.get('cubes')
-        should_show = (app_state and app_state.get("show_visualization")) or has_cubes
+        # Also consider if we have selected units and theme (so we can fetch cube data)
+        has_units_and_theme = (place_state and 
+                              place_state.get('selected_place_g_units') and 
+                              place_state.get('selected_theme'))
+        should_show = ((app_state and app_state.get("show_visualization")) or 
+                      has_cubes or has_units_and_theme)
         
         print(f"DEBUG: Visualization decision - has_cubes: {bool(has_cubes)}, should_show: {should_show}")
         print(f"DEBUG: app_state.show_visualization: {app_state.get('show_visualization') if app_state else 'None'}")
@@ -70,11 +75,51 @@ def register_visualization_callbacks(app, compiled_workflow):
             cubes = place_state.get("cubes", [])
             print(f"DEBUG: Retrieved cubes: {type(cubes)} - {len(cubes) if isinstance(cubes, (list, str)) else 'N/A'}")
             logger.info(f"Retrieved cubes from place_state: {type(cubes)} - {len(cubes) if isinstance(cubes, (list, str)) else 'N/A'}")
-            if not cubes:
-                print(f"DEBUG: No cubes found in place_state - hiding visualization")
-                logger.info("No cubes found in place_state - hiding visualization")
-                # Hide both if no cubes
+            
+            # CRITICAL: If we have no cubes but we have units and theme, try to generate cube data
+            if not cubes and has_units_and_theme:
+                print(f"DEBUG: No cubes but have units+theme - trying to generate cube data")
+                selected_theme = place_state.get('selected_theme')
+                g_units = place_state.get('selected_place_g_units', [])
+                
+                if selected_theme and g_units:
+                    try:
+                        # Parse theme to get available cubes
+                        if isinstance(selected_theme, str):
+                            import json
+                            theme_data = json.loads(selected_theme)
+                        else:
+                            theme_data = selected_theme
+                        
+                        # Get theme cubes using find_themes_for_unit (reuse existing logic)
+                        from vobchat.tools import find_themes_for_unit
+                        theme_cubes_json = find_themes_for_unit(str(g_units[0]))
+                        theme_cubes_df = pd.read_json(io.StringIO(theme_cubes_json), orient='records')
+                        
+                        # Filter to current theme
+                        if 'ent_id' in theme_data:
+                            current_theme_cubes = theme_cubes_df[theme_cubes_df['ent_id'] == theme_data['ent_id']]
+                            if not current_theme_cubes.empty:
+                                cubes = current_theme_cubes.to_json(orient='records')
+                                print(f"DEBUG: Generated cube data from theme: {len(current_theme_cubes)} cubes")
+                                logger.info(f"Generated cube data from theme: {len(current_theme_cubes)} cubes")
+                    except Exception as e:
+                        print(f"DEBUG: Error generating cube data from theme: {e}")
+                        logger.warning(f"Error generating cube data from theme: {e}")
+            
+            # CRITICAL: Don't hide visualization if app_state says show_visualization=True
+            # This handles the case where polygon removal sends empty cubes but wants to keep viz visible
+            force_show_viz = app_state and app_state.get("show_visualization")
+            if not cubes and not force_show_viz:
+                print(f"DEBUG: No cubes found and not forced to show - hiding visualization")
+                logger.info("No cubes found and not forced to show - hiding visualization")
+                # Hide both if no cubes and not forced to show
                 return hidden_container_style, hidden_area_style, [], [], "true"
+            elif not cubes and force_show_viz:
+                print(f"DEBUG: No cubes but forced to show visualization - will show empty state")
+                logger.info("No cubes but forced to show visualization - will show empty state")
+                # For empty cubes but forced show, return minimal visualization state
+                return visible_container_style, visible_area_style, [], [], "false"
 
             # Handle cubes data - if it's a string (JSON), parse it; if it's already a list, use directly
             print(f"DEBUG: About to parse cube data")
