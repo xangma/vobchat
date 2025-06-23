@@ -18,3 +18,8 @@ CLAUDE.md
 cache/
 src/instance/users.db
 *.db
+
+# Log files
+backend.log
+frontend.log
+*.log
