@@ -48,9 +48,11 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
         Output("app-state", "data", allow_duplicate=True),
         Output("thread-id", "data", allow_duplicate=True),
         Output("sse-connection-status", "data"),  # New output for SSE status
+        Output("send-button", "disabled", allow_duplicate=True),  # Control send button state
 
         # Inputs
         Input("send-button", "n_clicks"),
+        Input("chat-input", "n_submit"),  # Handle Enter key
         Input({"option_type": ALL, "type": "dynamic-button-user-choice", "index": ALL}, "n_clicks"),
         Input("reset-button", "n_clicks"),
         Input("map-click-add-trigger", "data"),
@@ -66,7 +68,7 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
         prevent_initial_call=True
     )
     def update_chat_sse(
-        n_clicks, button_clicks, reset_n_clicks,
+        n_clicks, n_submit, button_clicks, reset_n_clicks,
         map_add_payload, map_remove_payload, app_state_input,
         thread_id, app_state, user_input, chat_history
     ):
@@ -118,7 +120,8 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
                     "",  # Clear input
                     app_state_input_copy,
                     thread_id,
-                    {"status": "ai_message_added", "thread_id": thread_id}
+                    {"status": "ai_message_added", "thread_id": thread_id},
+                    False  # Re-enable send button
                 )
 
         # Handle reset
@@ -129,15 +132,16 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
                 "",  # Clear input
                 app_state_data.copy(),  # Reset app state
                 str(uuid4()),  # New thread ID
-                {"status": "reset", "thread_id": thread_id}
+                {"status": "reset", "thread_id": thread_id},
+                False  # Re-enable send button
             )
 
         # Prepare workflow input based on trigger
         workflow_input = None
         intent_payload = None
 
-        # Handle text input
-        if user_input and user_input.strip() and "send-button" in ctx_trigger:
+        # Handle text input (both Send button and Enter key)
+        if user_input and user_input.strip() and ("send-button" in ctx_trigger or "chat-input" in ctx_trigger):
             # Add user message to chat immediately
             user_message_div = html.Div(user_input, className="speech-bubble user-bubble")
             chat_history.insert(0, user_message_div)
@@ -162,7 +166,8 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
                     "",
                     app_state,
                     thread_id,
-                    {"status": "button_acknowledged", "thread_id": thread_id}
+                    {"status": "button_acknowledged", "thread_id": thread_id},
+                    False  # Keep send button enabled for button clicks
                 )
             except (json.JSONDecodeError, KeyError) as e:
                 logger.error(f"Error parsing button selection: {e}")
@@ -238,7 +243,8 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
                             "",  # Clear input
                             app_state,
                             thread_id,
-                            {"status": "workflow_input_sent", "thread_id": thread_id}
+                            {"status": "workflow_input_sent", "thread_id": thread_id},
+                            False  # Re-enable send button after successful API call
                         )
                     else:
                         print(f"DEBUG: API call failed with status {response.status_code}: {response.text}")
@@ -259,7 +265,8 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
                     "thread_id": thread_id,
                     "workflow_input": workflow_input,
                     "connect_sse": True  # Signal to trigger SSE connection
-                }
+                },
+                True  # Disable send button while workflow is processing
             )
 
         # No updates needed
