@@ -54,6 +54,69 @@ def merge_bool(existing: Optional[bool], new: Optional[bool]) -> Optional[bool]:
     return existing
 
 
+# Helper functions to derive values from the single source of truth (places array)
+def get_selected_units(state) -> List[int]:
+    """Get list of selected g_unit IDs from places array."""
+    places = state.get("places", []) or []
+    return [p.get("g_unit") for p in places if p.get("g_unit") is not None]
+
+
+def get_selected_unit_types(state) -> List[str]:
+    """Get list of selected unit types from places array."""
+    places = state.get("places", []) or []
+    return [p.get("g_unit_type") for p in places if p.get("g_unit_type") is not None]
+
+
+def get_selected_place_names(state) -> List[str]:
+    """Get list of selected place names from places array."""
+    places = state.get("places", []) or []
+    return [p.get("name") for p in places if p.get("name")]
+
+
+def get_selected_place_ids(state) -> List[int]:
+    """Get list of selected g_place IDs from places array."""
+    places = state.get("places", []) or []
+    return [p.get("g_place") for p in places if p.get("g_place") is not None]
+
+
+def add_place_to_state(state, name: str, g_unit: Optional[int] = None, g_unit_type: Optional[str] = None, g_place: Optional[int] = None) -> None:
+    """Add a place to the state using single source of truth."""
+    places = state.get("places", []) or []
+
+    # Check if place already exists (by g_unit if available, otherwise by name)
+    for existing_place in places:
+        if g_unit and existing_place.get("g_unit") == g_unit:
+            return  # Already exists
+        if not g_unit and existing_place.get("name") == name:
+            return  # Already exists
+
+    # Add new place
+    new_place = {
+        "name": name,
+        "g_unit": g_unit,
+        "g_unit_type": g_unit_type,
+        "g_place": g_place,
+        "candidate_rows": [],
+        "unit_rows": []
+    }
+    places.append(new_place)
+    state["places"] = places
+
+
+def remove_place_from_state(state, identifier) -> bool:
+    """Remove a place from state by name or g_unit ID. Returns True if removed."""
+    places = state.get("places", []) or []
+
+    # Try to remove by g_unit first, then by name
+    for i, place in enumerate(places):
+        if (isinstance(identifier, int) and place.get("g_unit") == identifier) or \
+           (isinstance(identifier, str) and place.get("name", "").lower() == identifier.lower()):
+            places.pop(i)
+            state["places"] = places
+            return True
+    return False
+
+
 class lg_State(TypedDict):
     # conversation
     messages: Annotated[List[AnyMessage], add_messages]
@@ -63,40 +126,26 @@ class lg_State(TypedDict):
     # user-choice plumbing
     selection_idx: Annotated[Optional[int], merge_int]
 
-    # place + unit selections
+    # place + unit selections - SINGLE SOURCE OF TRUTH
+    # places array contains: {"name": str, "g_unit": int, "g_unit_type": str, "g_place": int, ...}
     places: Annotated[Optional[List[dict]], merge_places]
-    selected_place_g_places: Annotated[List[Optional[int]], merge_lists]
-    selected_place_g_units: Annotated[List[Optional[int]], merge_lists]
-    selected_place_g_unit_types: Annotated[List[Optional[str]], merge_lists]
 
     # theme selection
-    selected_place_themes: Optional[str]
     selected_theme: Annotated[Optional[str], merge_string]
+    extracted_theme: Annotated[Optional[str], merge_string]
 
     # cube selection
     cubes : Annotated[Optional[List[str]], merge_lists]
     selected_cubes: Annotated[Optional[List[str]], merge_lists]
 
-    # extraction results
-    extracted_place_names: Annotated[List[str], merge_lists]
-    extracted_counties: Annotated[List[str], merge_lists]
-    extracted_unit_types: Annotated[Optional[List[str]], merge_lists]
-    extracted_polygon_ids: Annotated[Optional[List[Optional[int]]], merge_lists]  # polygon IDs from map clicks
-    extracted_theme: Annotated[Optional[str], merge_string]
+    # processing state
+    current_place_index: Annotated[Optional[int], merge_int]
     is_postcode: Optional[bool]
     extracted_postcode: Optional[str]
-
-    # multi-place machinery
-    multi_place_search_df: Optional[str]
-    current_place_index: Annotated[Optional[int], merge_int]
 
     # year filters
     min_year: Optional[int]
     max_year: Optional[int]
-
-    # map interaction
-    selected_polygons: Annotated[Optional[List[str]], merge_lists]
-    selected_polygons_unit_types: Annotated[Optional[List[str]], merge_lists]
 
     # misc / meta
     current_node: Annotated[Optional[str], merge_string]
@@ -106,5 +155,5 @@ class lg_State(TypedDict):
     continue_to_next_place: Annotated[Optional[bool], merge_bool]
     units_needing_map_selection: Annotated[Optional[List[int]], merge_lists]
     map_update_request: Annotated[Optional[dict], merge_dict]
-    _theme_hint_done: Optional[bool]
     _prompted_for_place: Optional[bool]
+    show_visualization: Annotated[Optional[bool], merge_bool]

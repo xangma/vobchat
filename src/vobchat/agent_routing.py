@@ -41,23 +41,23 @@ def agent_node(state: lg_State):
             target_node = f"{final_intent.value}_node"
             logging.info(f"agent_node: Routing to target node: {target_node}")
             # Ensure the payload used for the update is the one we determined needed routing
+            # CRITICAL: Don't include last_intent_payload in Command update to prevent re-setting after target node clears it
             update_for_command = {
-                "last_intent_payload": payload_to_route,
                 "intent_queue": state.get("intent_queue", []), # Pass cleaned queue (cleaning happened earlier)
                 # CRITICAL: Clear selection_idx when routing to prevent stale values
                 "selection_idx": None,
             }
-            
+
             # CRITICAL: For AddPlace/RemovePlace intents, only clear theme state when there's actual interference
             if final_intent in [AssistantIntent.ADD_PLACE, AssistantIntent.REMOVE_PLACE]:
                 # Only clear theme state if we have existing theme data that might interfere
                 selected_theme = state.get("selected_theme")
                 extracted_theme = state.get("extracted_theme")
                 has_existing_theme = selected_theme or extracted_theme
-                
+
                 # Debug: Log the actual theme state values
                 logging.info(f"agent_node: DEBUG theme state - selected_theme='{selected_theme}', extracted_theme='{extracted_theme}', has_existing_theme={has_existing_theme}")
-                
+
                 if has_existing_theme:
                     update_for_command.update({
                         "extracted_theme": None,  # Clear any pending theme queries
@@ -68,11 +68,11 @@ def agent_node(state: lg_State):
                 else:
                     # Don't clear theme state when there's no existing theme - let theme buttons appear
                     logging.info(f"agent_node: No existing theme state found for {final_intent.value} intent - preserving clean state for theme button generation")
+            # CRITICAL: DON'T clear last_intent_payload here - let the target node clear it after processing
+            # If we clear it in the Command update, the target node won't see the arguments
+            logger.info(f"agent_node: Routing to {target_node} with payload intact - target node will clear after processing")
+
             return Command(goto=target_node, update=update_for_command)
-            # Clear the payload from the main state *after* using it for routing
-            # to prevent accidental re-processing if the graph loops back here unexpectedly.
-            # The Command's update ensures the next node gets it this time.
-            # state["last_intent_payload"] = None
         except ValueError:
             logging.warning(f"agent_node: Invalid intent '{pre_set_payload.get('intent')}' in last_intent_payload.")
             state["last_intent_payload"] = None # Clear invalid payload
@@ -341,13 +341,13 @@ def agent_node(state: lg_State):
         target_node = f"{final_intent.value}_node"
         logging.info(f"agent_node: Routing to target node: {target_node}")
         # Ensure the payload used for the update is the one we determined needed routing
+        # CRITICAL: Don't include last_intent_payload in Command update to prevent re-setting after target node clears it
         update_for_command = {
-            "last_intent_payload": payload_to_route,
             "intent_queue": state.get("intent_queue", []), # Pass cleaned queue (cleaning happened earlier)
             # CRITICAL: Clear selection_idx when routing to prevent stale values
             "selection_idx": None,
         }
-        
+
         # CRITICAL: For AddPlace/RemovePlace intents, clear any pending theme state to prevent interference
         if final_intent in [AssistantIntent.ADD_PLACE, AssistantIntent.REMOVE_PLACE]:
             update_for_command.update({
@@ -356,7 +356,10 @@ def agent_node(state: lg_State):
                 "options": [],            # Clear any pending options
             })
             logging.info(f"agent_node: Cleared theme state for {final_intent.value} intent to prevent interference")
-        
+
+        # CRITICAL: DON'T clear last_intent_payload here - let the target node clear it after processing
+        # If we clear it in the Command update, the target node won't see the arguments
+
         return Command(goto=target_node, update=update_for_command)
 
     else:

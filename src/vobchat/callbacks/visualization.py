@@ -11,6 +11,9 @@ from dash import no_update
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 from vobchat.tools import get_all_cube_data
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Background loop removed - now using fresh workflow instances with ThreadPoolExecutor
 
@@ -33,9 +36,9 @@ def register_visualization_callbacks(app, compiled_workflow):
     def handle_visualization_request(app_state, place_state, thread_id, current_visibility_data_attr, current_cube_selection):
         import logging
         logger = logging.getLogger(__name__)
-        print(f"DEBUG: Visualization callback triggered! app_state={app_state is not None}, place_state={place_state is not None}")
-        print(f"DEBUG: place_state keys: {list(place_state.keys()) if place_state else 'None'}")
-        print(f"DEBUG: place_state cubes: {bool(place_state.get('cubes')) if place_state else 'None'}")
+        logger.debug(f" Visualization callback triggered! app_state={app_state is not None}, place_state={place_state is not None}")
+        logger.debug(f" place_state keys: {list(place_state.keys()) if place_state else 'None'}")
+        logger.debug(f" place_state cubes: {bool(place_state.get('cubes')) if place_state else 'None'}")
 
         # Define styles for visible/hidden states
         # Style for the outer container
@@ -47,6 +50,20 @@ def register_visualization_callbacks(app, compiled_workflow):
 
         logger.info(f"Visualization callback triggered - app_state: {app_state is not None}, show_visualization: {app_state.get('show_visualization') if app_state else 'None'}")
         logger.info(f"Place state cubes: {bool(place_state.get('cubes') if place_state else False)}")
+        
+        # CRITICAL DEBUG: Log the exact content of place_state to understand what's missing
+        if place_state:
+            logger.info(f"FULL PLACE STATE: {place_state}")
+            logger.info(f"selected_place_g_units in place_state: {place_state.get('selected_place_g_units', 'NOT_FOUND')}")
+            logger.info(f"selected_theme in place_state: {place_state.get('selected_theme', 'NOT_FOUND')}")
+        else:
+            logger.info("PLACE STATE IS NONE OR EMPTY")
+            
+        # Also log app_state for debugging
+        if app_state:
+            logger.info(f"APP STATE show_visualization: {app_state.get('show_visualization', 'NOT_FOUND')}")
+        else:
+            logger.info("APP STATE IS NONE OR EMPTY")
 
         # Check if we have cube data OR if we should show visualization based on app_state
         has_cubes = place_state and place_state.get('cubes')
@@ -57,12 +74,12 @@ def register_visualization_callbacks(app, compiled_workflow):
         should_show = ((app_state and app_state.get("show_visualization")) or 
                       has_cubes or has_units_and_theme)
         
-        print(f"DEBUG: Visualization decision - has_cubes: {bool(has_cubes)}, should_show: {should_show}")
-        print(f"DEBUG: app_state.show_visualization: {app_state.get('show_visualization') if app_state else 'None'}")
+        logger.debug(f" Visualization decision - has_cubes: {bool(has_cubes)}, should_show: {should_show}")
+        logger.debug(f" app_state.show_visualization: {app_state.get('show_visualization') if app_state else 'None'}")
         logger.info(f"Visualization decision - has_cubes: {bool(has_cubes)}, should_show: {should_show}")
 
         if not should_show:
-            print(f"DEBUG: HIDING visualization - no cubes and show_visualization=False")
+            logger.debug(f" HIDING visualization - no cubes and show_visualization=False")
             logger.info("Hiding visualization - no cubes and show_visualization=False")
             # Return styles to hide BOTH container and inner area
             hidden_container_style = {"flex": "0 0 0%", "display": "none"}
@@ -70,15 +87,15 @@ def register_visualization_callbacks(app, compiled_workflow):
             return hidden_container_style, hidden_area_style, [], [], "true"
 
         try:
-            print(f"DEBUG: SHOWING visualization - processing cube data")
+            logger.debug(f" SHOWING visualization - processing cube data")
             # Get cube data directly from place_state (populated by SSE system)
             cubes = place_state.get("cubes", [])
-            print(f"DEBUG: Retrieved cubes: {type(cubes)} - {len(cubes) if isinstance(cubes, (list, str)) else 'N/A'}")
+            logger.debug(f" Retrieved cubes: {type(cubes)} - {len(cubes) if isinstance(cubes, (list, str)) else 'N/A'}")
             logger.info(f"Retrieved cubes from place_state: {type(cubes)} - {len(cubes) if isinstance(cubes, (list, str)) else 'N/A'}")
             
             # CRITICAL: If we have no cubes but we have units and theme, try to generate cube data
             if not cubes and has_units_and_theme:
-                print(f"DEBUG: No cubes but have units+theme - trying to generate cube data")
+                logger.debug(f" No cubes but have units+theme - trying to generate cube data")
                 selected_theme = place_state.get('selected_theme')
                 g_units = place_state.get('selected_place_g_units', [])
                 
@@ -101,35 +118,35 @@ def register_visualization_callbacks(app, compiled_workflow):
                             current_theme_cubes = theme_cubes_df[theme_cubes_df['ent_id'] == theme_data['ent_id']]
                             if not current_theme_cubes.empty:
                                 cubes = current_theme_cubes.to_json(orient='records')
-                                print(f"DEBUG: Generated cube data from theme: {len(current_theme_cubes)} cubes")
+                                logger.debug(f" Generated cube data from theme: {len(current_theme_cubes)} cubes")
                                 logger.info(f"Generated cube data from theme: {len(current_theme_cubes)} cubes")
                     except Exception as e:
-                        print(f"DEBUG: Error generating cube data from theme: {e}")
+                        logger.debug(f" Error generating cube data from theme: {e}")
                         logger.warning(f"Error generating cube data from theme: {e}")
             
             # CRITICAL: Don't hide visualization if app_state says show_visualization=True
             # This handles the case where polygon removal sends empty cubes but wants to keep viz visible
             force_show_viz = app_state and app_state.get("show_visualization")
             if not cubes and not force_show_viz:
-                print(f"DEBUG: No cubes found and not forced to show - hiding visualization")
+                logger.debug(f" No cubes found and not forced to show - hiding visualization")
                 logger.info("No cubes found and not forced to show - hiding visualization")
                 # Hide both if no cubes and not forced to show
                 return hidden_container_style, hidden_area_style, [], [], "true"
             elif not cubes and force_show_viz:
-                print(f"DEBUG: No cubes but forced to show visualization - will show empty state")
+                logger.debug(f" No cubes but forced to show visualization - will show empty state")
                 logger.info("No cubes but forced to show visualization - will show empty state")
                 # For empty cubes but forced show, return minimal visualization state
                 return visible_container_style, visible_area_style, [], [], "false"
 
             # Handle cubes data - if it's a string (JSON), parse it; if it's already a list, use directly
-            print(f"DEBUG: About to parse cube data")
+            logger.debug(f" About to parse cube data")
             if isinstance(cubes, str):
                 cubes_df = pd.read_json(io.StringIO(cubes), orient='records')
             else:
                 cubes_df = pd.DataFrame(cubes)
-            print(f"DEBUG: Parsed cubes_df successfully: {len(cubes_df)} rows")
+            logger.debug(f" Parsed cubes_df successfully: {len(cubes_df)} rows")
             cube_ids = cubes_df['Cube_ID'].tolist()
-            print(f"DEBUG: Extracted cube_ids: {cube_ids}")
+            logger.debug(f" Extracted cube_ids: {cube_ids}")
             logger.info(f"Processed cubes_df: {len(cubes_df)} rows, cube_ids: {cube_ids}")
 
             # Preserve current cube selection if it's valid, otherwise use first cube as default
@@ -139,33 +156,33 @@ def register_visualization_callbacks(app, compiled_workflow):
                 cube_selector_value = valid_selection if valid_selection else cube_ids[:1]
             else:
                 cube_selector_value = cube_ids[:1]
-            print(f"DEBUG: Selected cube_selector_value: {cube_selector_value}")
+            logger.debug(f" Selected cube_selector_value: {cube_selector_value}")
             
             g_units = place_state.get('selected_place_g_units', [])
-            print(f"DEBUG: g_units: {g_units}")
+            logger.debug(f" g_units: {g_units}")
             if not g_units:
-                 print(f"DEBUG: No g_units - hiding visualization")
+                 logger.debug(f" No g_units - hiding visualization")
                  # Hide both if no units selected
                  return hidden_container_style, hidden_area_style, [], [], "true"
 
-            print(f"DEBUG: About to process g_units data for visualization")
+            logger.debug(f" About to process g_units data for visualization")
             cube_list = []
             for g_unit in g_units:
                  try:
-                    print(f"DEBUG: Getting cube data for g_unit: {g_unit}, cube_ids: {cube_ids}")
+                    logger.debug(f" Getting cube data for g_unit: {g_unit}, cube_ids: {cube_ids}")
                     # Ensure get_all_cube_data is defined and imported in tools.py
                     cube_data = pd.read_json(io.StringIO(get_all_cube_data({"g_unit": str(g_unit), "cube_ids": cube_ids})), orient='records')
-                    print(f"DEBUG: Retrieved cube_data: {len(cube_data) if not cube_data.empty else 0} rows")
+                    logger.debug(f" Retrieved cube_data: {len(cube_data) if not cube_data.empty else 0} rows")
                     if not cube_data.empty:
                         cube_list.append(cube_data)
                  except Exception as e:
-                     print(f"DEBUG: Error retrieving cube data for unit {g_unit}: {e}")
-                     print(f"Error getting cube data for unit {g_unit}: {e}")
+                     logger.debug(f" Error retrieving cube data for unit {g_unit}: {e}")
+                     logger.error(f"Error getting cube data for unit {g_unit}: {e}")
                      continue
 
-            print(f"DEBUG: Total cube_list entries: {len(cube_list)}")
+            logger.debug(f" Total cube_list entries: {len(cube_list)}")
             if not cube_list: # No data found for any unit
-                 print(f"DEBUG: No cube data found - hiding visualization")
+                 logger.debug(f" No cube data found - hiding visualization")
                  # Hide both if no data retrieved
                  return hidden_container_style, hidden_area_style, [], [], "true"
 
@@ -192,7 +209,7 @@ def register_visualization_callbacks(app, compiled_workflow):
                  for idx, row in cubes_df.iterrows()
             ]
             # Return styles to SHOW BOTH container and inner area
-            print(f"DEBUG: SUCCESS! Showing visualization with {len(options)} cube options")
+            logger.debug(f" SUCCESS! Showing visualization with {len(options)} cube options")
             logger.info(f"Successfully showing visualization with {len(options)} cube options")
             return visible_container_style, visible_area_style, options, cube_selector_value, "false"
 
@@ -209,12 +226,12 @@ def register_visualization_callbacks(app, compiled_workflow):
         prevent_initial_call=True
     )
     def update_visualization(selected_cubes, place_state):
-        print(f"DEBUG: update_visualization called with selected_cubes: {selected_cubes}")
-        print(f"DEBUG: place_state keys: {list(place_state.keys()) if place_state else 'None'}")
+        logger.debug(f" update_visualization called with selected_cubes: {selected_cubes}")
+        logger.debug(f" place_state keys: {list(place_state.keys()) if place_state else 'None'}")
         
         # Check for cube data in the cubes field (from SSE) instead of cube_data field
         if not place_state.get("cubes") and not place_state.get("cube_data"):
-             print(f"DEBUG: No cube data found in place_state, returning empty chart")
+             logger.debug(f" No cube data found in place_state, returning empty chart")
              # CRITICAL: Return empty chart instead of preventing update
              # This ensures that when data is cleared, the chart is also cleared
              return go.Figure().update_layout(
@@ -254,44 +271,44 @@ def register_visualization_callbacks(app, compiled_workflow):
             )
 
         try:
-            print(f"DEBUG: About to process cube data for chart")
+            logger.debug(f" About to process cube data for chart")
             
             # Get the selected units from place_state
             selected_units = place_state.get("selected_place_g_units", [])
-            print(f"DEBUG: Selected units from place_state: {selected_units}")
+            logger.debug(f" Selected units from place_state: {selected_units}")
             
             if not selected_units:
-                print(f"DEBUG: No selected units found in place_state")
+                logger.debug(f" No selected units found in place_state")
                 return go.Figure().update_layout(title="No areas selected")
 
             if not isinstance(selected_cubes, list):
                 selected_cubes = [selected_cubes]
             
-            print(f"DEBUG: Selected cubes for chart: {selected_cubes}")
-            print(f"DEBUG: Selected units: {selected_units}")
+            logger.debug(f" Selected cubes for chart: {selected_cubes}")
+            logger.debug(f" Selected units: {selected_units}")
 
             # Fetch actual statistical data using get_all_cube_data
             all_data_list = []
             for g_unit in selected_units:
                 try:
-                    print(f"DEBUG: Fetching chart data for unit {g_unit}, cubes {selected_cubes}")
+                    logger.debug(f" Fetching chart data for unit {g_unit}, cubes {selected_cubes}")
                     cube_data_json = get_all_cube_data.invoke({"g_unit": str(g_unit), "cube_ids": selected_cubes})
                     cube_data_df = pd.read_json(io.StringIO(cube_data_json), orient='records')
-                    print(f"DEBUG: Retrieved {len(cube_data_df)} rows for unit {g_unit}")
+                    logger.debug(f" Retrieved {len(cube_data_df)} rows for unit {g_unit}")
                     if not cube_data_df.empty:
                         all_data_list.append(cube_data_df)
                 except Exception as e:
-                    print(f"DEBUG: Error fetching data for unit {g_unit}: {e}")
+                    logger.debug(f" Error fetching data for unit {g_unit}: {e}")
                     continue
 
             if not all_data_list:
-                print(f"DEBUG: No statistical data retrieved for any unit")
+                logger.debug(f" No statistical data retrieved for any unit")
                 return go.Figure().update_layout(title="No data available for selected cubes and areas")
 
             # Combine all data
             all_data_df = pd.concat(all_data_list, ignore_index=True)
-            print(f"DEBUG: Combined data: {len(all_data_df)} rows")
-            print(f"DEBUG: Data columns: {list(all_data_df.columns)}")
+            logger.debug(f" Combined data: {len(all_data_df)} rows")
+            logger.debug(f" Data columns: {list(all_data_df.columns)}")
 
             # The data is already pivoted - each cube measurement is a separate column
             # We need to melt it back to get a normalized format for plotting
@@ -300,7 +317,7 @@ def register_visualization_callbacks(app, compiled_workflow):
             id_vars = ['g_name', 'year']
             value_vars = [col for col in all_data_df.columns if col not in id_vars]
             
-            print(f"DEBUG: Value columns for chart: {value_vars}")
+            logger.debug(f" Value columns for chart: {value_vars}")
             
             if not value_vars:
                 return go.Figure().update_layout(title="No data columns found")
@@ -309,7 +326,7 @@ def register_visualization_callbacks(app, compiled_workflow):
             chart_data = pd.melt(all_data_df, id_vars=id_vars, value_vars=value_vars, 
                                var_name='measurement', value_name='value')
             
-            print(f"DEBUG: Melted data: {len(chart_data)} rows")
+            logger.debug(f" Melted data: {len(chart_data)} rows")
 
             # CRITICAL: Filter out rows with NaN values to prevent empty series in the plot
             chart_data = chart_data.dropna(subset=['value'])
@@ -327,8 +344,8 @@ def register_visualization_callbacks(app, compiled_workflow):
             # Sort data for better visualization
             chart_data = chart_data.sort_values(['g_name', 'measurement', 'year'])
             
-            print(f"DEBUG: Final chart data: {len(chart_data)} rows")
-            print(f"DEBUG: Sample data: {chart_data.head()}")
+            logger.debug(f" Final chart data: {len(chart_data)} rows")
+            logger.debug(f" Sample data: {chart_data.head()}")
 
             fig = px.line(chart_data, x='year', y='value', color='display_name',
                           title="Historical Data Visualization",
@@ -350,7 +367,7 @@ def register_visualization_callbacks(app, compiled_workflow):
             return fig
 
         except Exception as e:
-             print(f"Error updating visualization plot: {e}")
+             logger.error(f"Error updating visualization plot: {e}")
              return go.Figure().update_layout(title=f"Error generating plot: {e}")
 
 

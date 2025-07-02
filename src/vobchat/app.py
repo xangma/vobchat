@@ -10,13 +10,12 @@ from vobchat.utils.polygon_cache import polygon_cache
 from vobchat.components.chat import create_chat_layout
 from vobchat.components.map import create_map_layout
 from vobchat.components.visualization import create_visualization_layout
-# from vobchat.callbacks.chat import register_chat_callbacks  # Replaced with SSE
-# from .callbacks.map_leaflet import register_map_leaflet_callbacks
 from vobchat.callbacks.visualization import register_visualization_callbacks
 from vobchat.callbacks.clientside_callbacks import register_clientside_callbacks
 from vobchat.callbacks.chat_sse import register_sse_chat_callbacks
 from vobchat.api.polygon_routes import register_polygon_routes
 from vobchat.api.bounding_box_routes import register_bounding_box_routes
+from vobchat.api.map_state_routes import register_map_state_routes
 from vobchat.models import register_app_routes
 from vobchat.sse_manager import sse_manager, create_sse_response
 from vobchat.utils.async_manager import async_manager
@@ -31,7 +30,6 @@ from vobchat.cli import register_commands
 logger = logging.getLogger(__name__)
 
 from dash import DiskcacheManager, CeleryManager
-from geoalchemy2 import Geometry
 
 if 'REDIS_URL' in os.environ:
     # Use Redis & Celery if REDIS_URL set as an env variable
@@ -57,9 +55,9 @@ def register_sse_routes(server, compiled_workflow, base_workflow):
         thread_id = request.args.get('thread_id', str(uuid.uuid4()))
         workflow_input_param = request.args.get('workflow_input')
 
-        print(f"DEBUG: SSE connection request - client_id: {client_id}, thread_id: {thread_id}")
-        print(f"DEBUG: SSE workflow_input_param: {workflow_input_param}")
-        print(f"DEBUG: SSE request.args: {dict(request.args)}")
+        logger.debug(f"SSE connection request - client_id: {client_id}, thread_id: {thread_id}")
+        logger.debug(f"SSE workflow_input_param: {workflow_input_param}")
+        logger.debug(f"SSE request.args: {dict(request.args)}")
         logger.info(f"SSE connection request - client_id: {client_id}, thread_id: {thread_id}")
 
         # Clear any existing clients for this thread first
@@ -73,7 +71,7 @@ def register_sse_routes(server, compiled_workflow, base_workflow):
             try:
                 import json
                 workflow_input = json.loads(workflow_input_param)
-                print(f"DEBUG: Starting workflow automatically for new SSE connection with input: {workflow_input}")
+                logger.debug(f"Starting workflow automatically for new SSE connection with input: {workflow_input}")
 
                 # Start workflow using async manager
                 def start_workflow():
@@ -96,25 +94,23 @@ def register_sse_routes(server, compiled_workflow, base_workflow):
                                 config,
                                 thread_id
                             ):
-                                print(f"DEBUG: Auto-started workflow result: {result}")
+                                logger.debug(f"Auto-started workflow result: {result}")
 
                         # Run using the managed event loop
                         async_manager.run_async(run_workflow(), timeout=300)  # 5 minute timeout
 
                     except Exception as e:
-                        print(f"DEBUG: Error auto-starting workflow: {e}")
-                        import traceback
-                        traceback.print_exc()
+                        logger.error(f"Error auto-starting workflow: {e}", exc_info=True)
 
                 import threading
                 workflow_thread = threading.Thread(target=start_workflow, daemon=True)
                 workflow_thread.start()
-                print(f"DEBUG: Auto-started workflow thread for new connection")
+                logger.debug(f"Auto-started workflow thread for new connection")
 
             except Exception as e:
-                print(f"DEBUG: Error parsing workflow_input parameter: {e}")
+                logger.error(f"Error parsing workflow_input parameter: {e}")
 
-        print(f"DEBUG: SSE client added to manager, creating response stream")
+        logger.debug(f"SSE client added to manager, creating response stream")
         return create_sse_response(client_id)
 
     @server.route('/api/sse/status')
@@ -134,24 +130,24 @@ def register_sse_routes(server, compiled_workflow, base_workflow):
     @server.route('/api/workflow/input', methods=['POST'])
     def workflow_input():
         """Handle user input for workflow via SSE"""
-        print(f"DEBUG: /api/workflow/input called")
+        logger.debug(f"/api/workflow/input called")
         try:
             data = request.get_json()
-            print(f"DEBUG: Request data: {data}")
+            logger.debug(f"Request data: {data}")
             if not data:
-                print(f"DEBUG: No JSON data provided")
+                logger.debug(f"No JSON data provided")
                 return {'error': 'No JSON data provided'}, 400
 
             thread_id = data.get('thread_id')
             input_data = data.get('input_data', {})
-            print(f"DEBUG: Parsed thread_id: {thread_id}, input_data: {input_data}")
-            print(f"VOBCHAT DEBUG API RAW INPUT: {data}")
+            logger.debug(f"Parsed thread_id: {thread_id}, input_data: {input_data}")
+            logger.debug(f"VOBCHAT API RAW INPUT: {data}")
 
             if not thread_id:
-                print(f"DEBUG: No thread_id provided")
+                logger.debug(f"No thread_id provided")
                 return {'error': 'thread_id is required'}, 400
 
-            print(f"DEBUG: SSE workflow input for thread {thread_id}: {input_data}")
+            logger.debug(f"SSE workflow input for thread {thread_id}: {input_data}")
             logging.info(f"SSE workflow input for thread {thread_id}: {input_data}")
 
             # Import here to avoid circular imports
@@ -294,10 +290,6 @@ def register_sse_routes(server, compiled_workflow, base_workflow):
 
 def create_app():
     """Initialize and configure the Dash app."""
-    
-    # Configure enhanced logging first
-    from vobchat.configure_logging import configure_enhanced_logging
-    configure_enhanced_logging()
 
     assets_folder = os.path.join(os.path.dirname(__file__), 'assets')
 
@@ -305,7 +297,8 @@ def create_app():
                     external_stylesheets=[dbc.themes.BOOTSTRAP],
                     url_base_pathname=DASH_PREFIX + '/',
                     suppress_callback_exceptions=True,
-                    background_callback_manager=background_callback_manager,)
+                    background_callback_manager=background_callback_manager,
+                    assets_folder=assets_folder)
 
     # initial_gdf = polygon_cache.get_polygons('MOD_REG')
     date_ranges_df = get_date_ranges_by_type()
@@ -314,7 +307,8 @@ def create_app():
     # Create a resizable layout
     app.layout = html.Div([
         create_stores(),
-        # Include SSE client script
+        # Include SSE client script and new pure map state manager
+        html.Script(src=f"{DASH_PREFIX}/assets/pure_map_state.js"),
         html.Script(src=f"{DASH_PREFIX}/assets/sse_client.js"),
         html.Div(className="resizable-container", children=[
             html.Div(className="resizable-horizontal", style={"display": "flex", "width": "100%", "height": "100%"}, children=[
@@ -348,26 +342,16 @@ def create_app():
 
     register_app_routes(app.server)
 
-    # Try SSE-based chat callbacks with proper error handling
-    try:
-        print("DEBUG: About to register SSE chat callbacks")
-        register_sse_chat_callbacks(app, compiled_workflow, base_workflow)
-        print("DEBUG: SSE chat callbacks registered successfully")
-    except Exception as e:
-        print(f"ERROR: Failed to register SSE chat callbacks: {e}")
-        import traceback
-        traceback.print_exc()
-
-        # Fallback to old chat system if SSE fails
-        print("FALLBACK: Using old chat callbacks due to SSE registration failure")
-        from vobchat.callbacks.chat import register_chat_callbacks
-        register_chat_callbacks(app, compiled_workflow, background_callback_manager)
-    # register_map_leaflet_callbacks(app, date_ranges_df)
+    # Register SSE-based chat callbacks (single source of truth)
+    logger.debug("About to register SSE chat callbacks")
+    register_sse_chat_callbacks(app, compiled_workflow, base_workflow)
+    logger.debug("SSE chat callbacks registered successfully")
     register_clientside_callbacks(app)
     register_visualization_callbacks(app, compiled_workflow)
 
     register_polygon_routes(app.server)
     register_bounding_box_routes(app.server)
+    register_map_state_routes(app.server)
 
     # Register SSE endpoints
     register_sse_routes(app.server, compiled_workflow, base_workflow)
@@ -376,7 +360,7 @@ def create_app():
 
     # Register Celery tasks if Redis is available
     if 'REDIS_URL' in os.environ:
-        print("DEBUG: Registering Celery tasks")
+        logger.debug("Registering Celery tasks")
         app.register_celery_tasks()
 
     return app
@@ -429,9 +413,9 @@ with server.app_context():
     try:
         db.create_all()
     except Exception as exception:
-        print("got the following exception when attempting db.create_all() in __init__.py: " + str(exception))
+        logger.error("Got the following exception when attempting db.create_all() in __init__.py: " + str(exception))
     finally:
-        print("db.create_all() in __init__.py was successfull - no exceptions were raised")
+        logger.info("db.create_all() in __init__.py was successful - no exceptions were raised")
 
 
 

@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
     """Register SSE-based chat callbacks that replace the retriggering mechanism"""
 
-    print("DEBUG: Registering SSE chat callbacks")
+    logger.debug("DEBUG: Registering SSE chat callbacks")
     logger.info("Registering SSE chat callbacks")
 
     # Create workflow SSE adapter
@@ -36,6 +36,8 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
         Output("thread-id", "data", allow_duplicate=True),
         Output("sse-connection-status", "data"),  # New output for SSE status
         Output("send-button", "disabled", allow_duplicate=True),  # Control send button state
+        Output("map-click-add-trigger", "data", allow_duplicate=True),  # Clear map click triggers
+        Output("map-click-remove-trigger", "data", allow_duplicate=True),  # Clear map click triggers
 
         # Inputs
         Input("send-button", "n_clicks"),
@@ -68,16 +70,24 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
 
         # Debug: Check if this is actually being called
         callback_start_time = time.time()
-        print(f"DEBUG: SSE chat callback called with trigger: {ctx_trigger}")
-        print(f"DEBUG: User input: '{user_input}'")
-        print(f"DEBUG: Map add payload: {map_add_payload}")
-        print(f"DEBUG: Map remove payload: {map_remove_payload}")
-        print(f"DEBUG: Thread ID passed to callback: {thread_id}")
-        print(f"DEBUG: Callback started at {callback_start_time:.3f}")
+        logger.debug(f"SSE chat callback called with trigger: {ctx_trigger}")
+        logger.debug(f"User input: '{user_input}'")
+        logger.debug(f"Map add payload: {map_add_payload}")
+        logger.debug(f"Map remove payload: {map_remove_payload}")
+        logger.debug(f"Thread ID passed to callback: {thread_id}")
+        logger.debug(f"Callback started at {callback_start_time:.3f}")
 
         # Initialize or get thread ID
         if not thread_id:
+            # CRITICAL FIX: Check if SSE client already has a thread ID before creating new one
+            # This prevents thread ID mismatches when polygon clicks happen
+            # The SSE client might already be connected with a thread ID
+            logger.debug(f" No thread ID in store, checking for existing SSE connection")
+            
+            # For now, create a new thread ID but log a warning
+            # In production, we should get this from the SSE client's current connection
             thread_id = str(uuid4())
+            logger.warning(f"Creating new thread ID {thread_id} - SSE client may be on different thread!")
             logger.info(f"Starting new SSE conversation thread: {thread_id}")
         else:
             logger.info(f"Using existing SSE conversation thread: {thread_id}")
@@ -108,7 +118,9 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
                     app_state_input_copy,
                     thread_id,
                     {"status": "ai_message_added", "thread_id": thread_id},
-                    False  # Re-enable send button
+                    False,  # Re-enable send button
+                    None,  # Clear map add trigger
+                    None   # Clear map remove trigger
                 )
 
         # Handle reset
@@ -120,7 +132,9 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
                 app_state_data.copy(),  # Reset app state
                 str(uuid4()),  # New thread ID
                 {"status": "reset", "thread_id": thread_id},
-                False  # Re-enable send button
+                False,  # Re-enable send button
+                None,  # Clear map add trigger
+                None   # Clear map remove trigger
             )
 
         # Prepare workflow input based on trigger
@@ -154,56 +168,53 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
                     app_state,
                     thread_id,
                     {"status": "button_acknowledged", "thread_id": thread_id},
-                    False  # Keep send button enabled for button clicks
+                    False,  # Keep send button enabled for button clicks
+                    None,  # Clear map add trigger
+                    None   # Clear map remove trigger
                 )
             except (json.JSONDecodeError, KeyError) as e:
                 logger.error(f"Error parsing button selection: {e}")
                 raise PreventUpdate
 
-        # Handle map clicks
+        # Handle map clicks with simple API (bypass workflow for direct polygon operations)
         elif ctx_trigger == 'map-click-add-trigger.data' and map_add_payload:
-            print(f"DEBUG: Processing map click ADD with payload: {map_add_payload}")
+            logger.debug(f" Processing map click ADD with payload: {map_add_payload}")
             logger.info(f"Map click (Add): {map_add_payload}")
-
-            # Build AddPlace intent
-            place_name = map_add_payload.get("name", map_add_payload.get("id", "Unknown Place"))
-            unit_type = map_add_payload.get("type")
-
+            
+            # Always trigger workflow for polygon selection - let the workflow decide what to do
+            logger.info("Polygon selection - triggering workflow")
             intent_payload = {
                 "intent": AssistantIntent.ADD_PLACE.value,
                 "arguments": {
-                    "place": place_name,
-                    "unit_type": unit_type,
+                    "place": map_add_payload.get("name", map_add_payload.get("id", "Unknown Place")),
+                    "unit_type": map_add_payload.get("type"),
                     "polygon_id": int(map_add_payload["id"]) if str(map_add_payload["id"]).isdigit() else None
                 }
             }
-            print(f"DEBUG: Created intent payload: {intent_payload}")
 
         elif ctx_trigger == 'map-click-remove-trigger.data' and map_remove_payload:
-            print(f"DEBUG: Processing map click REMOVE with payload: {map_remove_payload}")
+            logger.debug(f" Processing map click REMOVE with payload: {map_remove_payload}")
             logger.info(f"Map click (Remove): {map_remove_payload}")
-
-            # Build RemovePlace intent
-            place_name = map_remove_payload.get("name", map_remove_payload.get("id", "Unknown Place"))
-
+            
+            # For remove, we need to trigger the workflow to handle any state cleanup
             intent_payload = {
                 "intent": AssistantIntent.REMOVE_PLACE.value,
                 "arguments": {
-                    "place": place_name,
-                    "unit_type": map_remove_payload.get("type")  # Use 'type' instead of 'unit_type'
+                    "place": map_remove_payload.get("name", map_remove_payload.get("id", "Unknown Place")),
+                    "unit_type": map_remove_payload.get("type"),
+                    "polygon_id": int(map_remove_payload["id"]) if str(map_remove_payload["id"]).isdigit() else None
                 }
             }
-            print(f"DEBUG: Created REMOVE intent payload: {intent_payload}")
 
         # If we have workflow input, trigger SSE connection first, then workflow
-        print(f"DEBUG: Checking workflow execution - workflow_input: {bool(workflow_input)}, intent_payload: {bool(intent_payload)}")
+        logger.debug(f" Checking workflow execution - workflow_input: {bool(workflow_input)}, intent_payload: {bool(intent_payload)}")
 
         if workflow_input or intent_payload:
             if intent_payload:
                 workflow_input = {"last_intent_payload": intent_payload}
 
-            print(f"DEBUG: Starting SSE workflow execution")
-            print(f"DEBUG: Workflow input being sent: {workflow_input}")
+            logger.debug(f" Starting SSE workflow execution")
+            logger.debug(f" Workflow input being sent: {workflow_input}")
             logger.info(f"Starting SSE workflow for thread {thread_id} with input: {list(workflow_input.keys()) if workflow_input else 'None'}")
             logger.info(f"Workflow input details: {workflow_input}")
 
@@ -211,7 +222,7 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
             # This eliminates race conditions and provides consistent execution flow
             
             callback_end_time = time.time()
-            print(f"DEBUG: Callback completed at {callback_end_time:.3f} (took {callback_end_time - callback_start_time:.3f}s)")
+            logger.debug(f" Callback completed at {callback_end_time:.3f} (took {callback_end_time - callback_start_time:.3f}s)")
 
             return (
                 chat_history,
@@ -224,7 +235,9 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
                     "workflow_input": workflow_input,
                     "connect_sse": True  # Signal to trigger SSE connection
                 },
-                True  # Disable send button while workflow is processing
+                True,  # Disable send button while workflow is processing
+                None,  # Clear map add trigger - prevents stale payload accumulation
+                None   # Clear map remove trigger - prevents stale payload accumulation
             )
 
         # No updates needed
@@ -248,7 +261,7 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
 
         # if status == "button_acknowledged":
         #     # Button was acknowledged - no workflow execution needed
-        #     print(f"DEBUG: Button click acknowledged for thread {thread_id}, no workflow execution needed")
+        #     logger.debug(f" Button click acknowledged for thread {thread_id}, no workflow execution needed")
         #     raise PreventUpdate
         if status == "connect_and_start_workflow":
             workflow_input = sse_status.get("workflow_input", {})
@@ -256,16 +269,28 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
             # CRITICAL FIX: Use centralized workflow lock manager to prevent concurrent executions
             from vobchat.utils.workflow_lock_manager import workflow_lock_manager
             
+            # CRITICAL FIX: Use the thread ID from SSE status which should match the SSE connection
+            # The thread_id parameter might be stale or None
+            workflow_thread_id = sse_status.get("thread_id")
+            if not workflow_thread_id:
+                logger.debug(f" ERROR - No thread ID in SSE status, cannot execute workflow")
+                raise PreventUpdate
+                
+            logger.debug(f" Using thread ID from SSE status for workflow execution: {workflow_thread_id}")
+            
+            # Replace the local thread_id variable to use the correct one
+            thread_id = workflow_thread_id
+            
             if workflow_lock_manager.is_workflow_running(thread_id):
-                print(f"DEBUG: Workflow already running for thread {thread_id}, skipping duplicate execution")
+                logger.debug(f" Workflow already running for thread {thread_id}, skipping duplicate execution")
                 raise PreventUpdate
 
             # Use centralized workflow lock manager for proper concurrency control
             try:
                 with workflow_lock_manager.acquire_workflow_lock(thread_id) as execution:
                     workflow_start_time = time.time()
-                    print(f"DEBUG: Starting workflow execution via SSE trigger for thread {thread_id} (execution: {execution.execution_id})")
-                    print(f"DEBUG: Workflow start time: {workflow_start_time:.3f} (trigger took {workflow_start_time - trigger_start_time:.3f}s)")
+                    logger.debug(f" Starting workflow execution via SSE trigger for thread {thread_id} (execution: {execution.execution_id})")
+                    logger.debug(f" Workflow start time: {workflow_start_time:.3f} (trigger took {workflow_start_time - trigger_start_time:.3f}s)")
                     logger.info(f"SSE workflow triggered for thread {thread_id} with input: {list(workflow_input.keys()) if workflow_input else 'None'}")
 
                     # Create workflow adapter
@@ -286,7 +311,7 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
                     
                     async def execute_workflow():
                         try:
-                            print(f"DEBUG: Starting workflow execution for thread {thread_id}")
+                            logger.debug(f" Starting workflow execution for thread {thread_id}")
                             event_count = 0
                             async for event in workflow_adapter.stream_workflow_execution(
                                 workflow_input=workflow_input,
@@ -294,26 +319,26 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
                                 thread_id=thread_id
                             ):
                                 event_count += 1
-                                print(f"DEBUG: Workflow event #{event_count}: {event.get('type')}")
-                            print(f"DEBUG: Workflow execution completed successfully with {event_count} events")
+                                logger.debug(f" Workflow event #{event_count}: {event.get('type')}")
+                            logger.debug(f" Workflow execution completed successfully with {event_count} events")
                         except Exception as e:
-                            print(f"DEBUG: ERROR in workflow execution: {e}")
+                            logger.debug(f" ERROR in workflow execution: {e}")
                             logger.error(f"Workflow execution failed for thread {thread_id}: {e}", exc_info=True)
                     
                     # Run the workflow execution in the background
                     async_manager.submit_task(execute_workflow())
-                    print(f"DEBUG: Workflow triggered successfully")
+                    logger.debug(f" Workflow triggered successfully")
 
                     trigger_end_time = time.time()
-                    print(f"DEBUG: Trigger callback completed at {trigger_end_time:.3f} (total trigger time: {trigger_end_time - trigger_start_time:.3f}s)")
+                    logger.debug(f" Trigger callback completed at {trigger_end_time:.3f} (total trigger time: {trigger_end_time - trigger_start_time:.3f}s)")
 
                     return {"processed": True, "thread_id": thread_id, "workflow_started": True}
             except RuntimeError as e:
                 if "already running" in str(e):
-                    print(f"DEBUG: Concurrent execution prevented for thread {thread_id}: {e}")
+                    logger.debug(f" Concurrent execution prevented for thread {thread_id}: {e}")
                     raise PreventUpdate
                 else:
-                    print(f"DEBUG: Workflow lock error for thread {thread_id}: {e}")
+                    logger.debug(f" Workflow lock error for thread {thread_id}: {e}")
                     raise
 
         raise PreventUpdate

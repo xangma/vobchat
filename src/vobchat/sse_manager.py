@@ -109,7 +109,7 @@ class RedisSSEManager:
         # Worker ID for this process
         self.worker_id = f"worker_{os.getpid()}"
         
-        print(f"DEBUG: Initialized Redis SSE Manager for worker {self.worker_id}")
+        logger.debug(f" Initialized Redis SSE Manager for worker {self.worker_id}")
         
         # Redis pub/sub for cross-worker event delivery
         self.pubsub_channel = "sse_events"
@@ -128,12 +128,12 @@ class RedisSSEManager:
     def _start_pubsub_listener(self):
         """Start background thread to listen for Redis pub/sub messages"""
         if self._pubsub_listener_started:
-            print(f"DEBUG: Pub/sub listener already started for worker {self.worker_id}")
+            logger.debug(f" Pub/sub listener already started for worker {self.worker_id}")
             return
             
         def listen_for_events():
             try:
-                print(f"DEBUG: Started pub/sub listener for worker {self.worker_id}")
+                logger.debug(f" Started pub/sub listener for worker {self.worker_id}")
                 for message in self.pubsub.listen():
                     if message['type'] == 'message':
                         try:
@@ -145,7 +145,7 @@ class RedisSSEManager:
                                 event_type = event_data.get('event_type')
                                 thread_id = event_data.get('thread_id')
                                 
-                                print(f"DEBUG: Received cross-worker event {event_type} for client {client_id}")
+                                logger.debug(f" Received cross-worker event {event_type} for client {client_id}")
                                 
                                 # Reconstruct the SSE event
                                 if event_type == 'message':
@@ -166,9 +166,9 @@ class RedisSSEManager:
                                 # Deliver to local client
                                 self._deliver_local_event(client_id, event)
                         except Exception as e:
-                            print(f"DEBUG: Error processing pub/sub message: {e}")
+                            logger.debug(f" Error processing pub/sub message: {e}")
             except Exception as e:
-                print(f"DEBUG: Pub/sub listener error: {e}")
+                logger.debug(f" Pub/sub listener error: {e}")
         
         import threading
         listener_thread = threading.Thread(target=listen_for_events, daemon=True)
@@ -206,11 +206,11 @@ class RedisSSEManager:
         if client_id in self.event_queues:
             try:
                 self.event_queues[client_id].put_nowait(event)
-                print(f"DEBUG: Successfully delivered cross-worker {event.event_type} event to client {client_id}")
+                logger.debug(f" Successfully delivered cross-worker {event.event_type} event to client {client_id}")
             except queue.Full:
-                print(f"DEBUG: Event queue full for client {client_id}")
+                logger.debug(f" Event queue full for client {client_id}")
         else:
-            print(f"DEBUG: No local event queue found for client {client_id}")
+            logger.debug(f" No local event queue found for client {client_id}")
     
     def add_client(self, client_id: str, thread_id: str):
         """Add a new SSE client using Redis for shared state"""
@@ -232,7 +232,7 @@ class RedisSSEManager:
             # Track client for lifecycle management
             self.client_last_seen[client_id] = time.time()
             
-            print(f"DEBUG: Added SSE client {client_id} for thread {thread_id} in worker {self.worker_id}")
+            logger.debug(f" Added SSE client {client_id} for thread {thread_id} in worker {self.worker_id}")
             logger.info(f"Added SSE client {client_id} for thread {thread_id}")
     
     def remove_client(self, client_id: str):
@@ -252,7 +252,7 @@ class RedisSSEManager:
                         self.redis_client.delete(key)
                         break
                 
-                print(f"DEBUG: Removed SSE client {client_id} from Redis")
+                logger.debug(f" Removed SSE client {client_id} from Redis")
             
             # Remove local queue
             if client_id in self.event_queues:
@@ -262,7 +262,7 @@ class RedisSSEManager:
                 except queue.Full:
                     pass
                 del self.event_queues[client_id]
-                print(f"DEBUG: Removed local queue for client {client_id}")
+                logger.debug(f" Removed local queue for client {client_id}")
             
             # Remove from lifecycle tracking
             if client_id in self.client_last_seen:
@@ -274,21 +274,21 @@ class RedisSSEManager:
         existing_client = self.redis_client.get(client_key)
         
         if existing_client:
-            print(f"DEBUG: Clearing existing client {existing_client} for thread {thread_id}")
+            logger.debug(f" Clearing existing client {existing_client} for thread {thread_id}")
             worker_key = f"{self.worker_key_prefix}{existing_client}"
             self.redis_client.delete(client_key)
             self.redis_client.delete(worker_key)
     
     def broadcast_event(self, event: SSEEvent):
         """Broadcast event to all clients listening to the thread"""
-        print(f"DEBUG: Broadcasting {event.event_type} event to thread {event.thread_id}")
+        logger.debug(f" Broadcasting {event.event_type} event to thread {event.thread_id}")
         
         # Find client for this thread in Redis
         client_key = f"{self.client_key_prefix}{event.thread_id}"
         client_id = self.redis_client.get(client_key)
         
         if not client_id:
-            print(f"DEBUG: No Redis client found for thread {event.thread_id}")
+            logger.debug(f" No Redis client found for thread {event.thread_id}")
             logger.warning(f"No clients found for thread {event.thread_id} - event not delivered")
             return
         
@@ -297,8 +297,8 @@ class RedisSSEManager:
         stored_worker = self.redis_client.get(worker_key)
         
         if stored_worker != self.worker_id:
-            print(f"DEBUG: Client {client_id} is on worker {stored_worker}, not {self.worker_id}")
-            print(f"DEBUG: Sending cross-worker event via Redis pub/sub")
+            logger.debug(f" Client {client_id} is on worker {stored_worker}, not {self.worker_id}")
+            logger.debug(f" Sending cross-worker event via Redis pub/sub")
             
             # Send event via Redis pub/sub for cross-worker delivery
             event_message = {
@@ -320,10 +320,10 @@ class RedisSSEManager:
             
             try:
                 self.redis_client.publish(self.pubsub_channel, json.dumps(event_message))
-                print(f"DEBUG: Published cross-worker event to Redis channel")
+                logger.debug(f" Published cross-worker event to Redis channel")
                 logger.info(f"Sent {event.event_type} event to client {client_id} via pub/sub")
             except Exception as pub_error:
-                print(f"DEBUG: Error publishing to Redis: {pub_error}")
+                logger.debug(f" Error publishing to Redis: {pub_error}")
                 logger.error(f"Failed to publish event via Redis: {pub_error}")
             return
         
@@ -331,13 +331,13 @@ class RedisSSEManager:
         if client_id in self.event_queues:
             try:
                 self.event_queues[client_id].put_nowait(event)
-                print(f"DEBUG: Successfully queued {event.event_type} event for client {client_id}")
+                logger.debug(f" Successfully queued {event.event_type} event for client {client_id}")
                 logger.debug(f"Sent {event.event_type} event to client {client_id}")
             except queue.Full:
-                print(f"DEBUG: Event queue full for client {client_id}")
+                logger.debug(f" Event queue full for client {client_id}")
                 logger.warning(f"Event queue full for client {client_id}")
         else:
-            print(f"DEBUG: No local event queue found for client {client_id}")
+            logger.debug(f" No local event queue found for client {client_id}")
     
     @property
     def clients(self):
@@ -406,7 +406,7 @@ class SimpleSSEManager:
                 if tid == thread_id
             ]
             for client_id in clients_to_remove:
-                print(f"DEBUG: Clearing old client {client_id} for thread {thread_id}")
+                logger.debug(f" Clearing old client {client_id} for thread {thread_id}")
                 if client_id in self.clients:
                     del self.clients[client_id]
                 if client_id in self.client_threads:
@@ -419,7 +419,7 @@ class SimpleSSEManager:
                         pass
                     del self.event_queues[client_id]
             if clients_to_remove:
-                print(f"DEBUG: Cleared {len(clients_to_remove)} old clients for thread {thread_id}")
+                logger.debug(f" Cleared {len(clients_to_remove)} old clients for thread {thread_id}")
 
     def add_client(self, client_id: str, thread_id: str):
         """Add a new SSE client"""
@@ -427,8 +427,8 @@ class SimpleSSEManager:
             self.clients[client_id] = thread_id
             self.client_threads[client_id] = thread_id
             self.event_queues[client_id] = queue.Queue()
-            print(f"DEBUG: Added SSE client {client_id} for thread {thread_id}")
-            print(f"DEBUG: Total clients now: {len(self.clients)}, All mappings: {dict(self.clients)}")
+            logger.debug(f" Added SSE client {client_id} for thread {thread_id}")
+            logger.debug(f" Total clients now: {len(self.clients)}, All mappings: {dict(self.clients)}")
             logger.info(f"Added SSE client {client_id} for thread {thread_id}")
     
     def remove_client(self, client_id: str):
@@ -436,45 +436,45 @@ class SimpleSSEManager:
         with self.lock:
             if client_id in self.clients:
                 thread_id = self.clients[client_id]
-                print(f"DEBUG: Removing SSE client {client_id} for thread {thread_id}")
+                logger.debug(f" Removing SSE client {client_id} for thread {thread_id}")
                 import traceback
-                print(f"DEBUG: Remove client called from: {traceback.format_stack()[-2].strip()}")
+                logger.debug(f" Remove client called from: {traceback.format_stack()[-2].strip()}")
                 del self.clients[client_id]
                 del self.client_threads[client_id]
                 if client_id in self.event_queues:
                     del self.event_queues[client_id]
-                print(f"DEBUG: Client {client_id} removed, {len(self.clients)} clients remaining")
+                logger.debug(f" Client {client_id} removed, {len(self.clients)} clients remaining")
                 logger.info(f"Removed SSE client {client_id} for thread {thread_id}")
             else:
-                print(f"DEBUG: Attempted to remove non-existent client {client_id}")
+                logger.debug(f" Attempted to remove non-existent client {client_id}")
     
     def broadcast_event(self, event: SSEEvent):
         """Broadcast event to all clients listening to the thread"""
         with self.lock:
-            print(f"DEBUG: Broadcasting {event.event_type} event to thread {event.thread_id}")
-            print(f"DEBUG: Current clients: {dict(self.clients)}")
+            logger.debug(f" Broadcasting {event.event_type} event to thread {event.thread_id}")
+            logger.debug(f" Current clients: {dict(self.clients)}")
             
             clients_to_notify = [
                 client_id for client_id, thread_id in self.clients.items()
                 if thread_id == event.thread_id
             ]
             
-            print(f"DEBUG: Found {len(clients_to_notify)} clients for thread {event.thread_id}: {clients_to_notify}")
+            logger.debug(f" Found {len(clients_to_notify)} clients for thread {event.thread_id}: {clients_to_notify}")
             
             for client_id in clients_to_notify:
                 if client_id in self.event_queues:
                     try:
                         self.event_queues[client_id].put_nowait(event)
-                        print(f"DEBUG: Successfully queued {event.event_type} event for client {client_id}")
+                        logger.debug(f" Successfully queued {event.event_type} event for client {client_id}")
                         logger.debug(f"Sent {event.event_type} event to client {client_id}")
                     except queue.Full:
-                        print(f"DEBUG: Event queue full for client {client_id}")
+                        logger.debug(f" Event queue full for client {client_id}")
                         logger.warning(f"Event queue full for client {client_id}")
                 else:
-                    print(f"DEBUG: No event queue found for client {client_id}")
+                    logger.debug(f" No event queue found for client {client_id}")
             
             if not clients_to_notify:
-                print(f"DEBUG: No clients found for thread {event.thread_id} - event not delivered")
+                logger.debug(f" No clients found for thread {event.thread_id} - event not delivered")
                 logger.warning(f"No clients found for thread {event.thread_id} - event not delivered")
     
     def broadcast_event_sync(self, event: SSEEvent):
@@ -498,10 +498,10 @@ class SimpleSSEManager:
 # Use Redis-backed manager for multi-worker support
 try:
     sse_manager = RedisSSEManager()
-    print("DEBUG: Using Redis-backed SSE manager")
+    logger.info("Using Redis-backed SSE manager")
 except Exception as e:
-    print(f"DEBUG: Failed to initialize Redis SSE manager: {e}")
-    print("DEBUG: Falling back to simple SSE manager")
+    logger.debug(f" Failed to initialize Redis SSE manager: {e}")
+    logger.info("Falling back to simple SSE manager")
     sse_manager = SimpleSSEManager()
 
 def create_sse_response(client_id: str) -> Response:
@@ -509,11 +509,11 @@ def create_sse_response(client_id: str) -> Response:
     
     def event_stream():
         try:
-            print(f"DEBUG: Starting SSE stream for client {client_id}")
+            logger.debug(f" Starting SSE stream for client {client_id}")
             # Send initial connection event
             connected_data = {'client_id': client_id, 'timestamp': time.time()}
             connected_event = f"event: connected\ndata: {json.dumps(connected_data)}\n\n"
-            print(f"DEBUG: Sending connected event: {connected_event.strip()}")
+            logger.debug(f" Sending connected event: {connected_event.strip()}")
             yield connected_event
             
             # Keep connection alive and yield events from queue
@@ -530,10 +530,10 @@ def create_sse_response(client_id: str) -> Response:
                             event = queue_obj.get(timeout=0.1)  # Much shorter timeout
                             # Check for shutdown signal
                             if event is None:
-                                print(f"DEBUG: Shutdown signal received for client {client_id}")
+                                logger.debug(f" Shutdown signal received for client {client_id}")
                                 break
                             event_data = event.to_sse_format()
-                            print(f"DEBUG: Sending SSE event: {event.event_type} - {event_data[:100]}...")
+                            logger.debug(f" Sending SSE event: {event.event_type} - {event_data[:100]}...")
                             yield event_data
                             continue  # Skip sleep if we got an event
                         except queue.Empty:
@@ -543,7 +543,7 @@ def create_sse_response(client_id: str) -> Response:
                     current_time = time.time()
                     if current_time - last_heartbeat > 10:  # Send heartbeat every 10 seconds
                         heartbeat_event = f"event: heartbeat\ndata: {json.dumps({'timestamp': current_time})}\n\n"
-                        print(f"DEBUG: Sending heartbeat: {heartbeat_event.strip()}")
+                        logger.debug(f" Sending heartbeat: {heartbeat_event.strip()}")
                         yield heartbeat_event
                         last_heartbeat = current_time
                         
@@ -555,24 +555,24 @@ def create_sse_response(client_id: str) -> Response:
                     time.sleep(0.1)
                         
                 except Exception as e:
-                    print(f"DEBUG: Error in event stream loop for client {client_id}: {e}")
+                    logger.debug(f" Error in event stream loop for client {client_id}: {e}")
                     logger.error(f"Error in event stream for client {client_id}: {e}", exc_info=True)
                     # Break on error to avoid infinite loops
                     break
                     
         except Exception as e:
-            print(f"DEBUG: Error in SSE stream setup for client {client_id}: {e}")
+            logger.debug(f" Error in SSE stream setup for client {client_id}: {e}")
             logger.error(f"Error in SSE stream for client {client_id}: {e}", exc_info=True)
             try:
                 error_event = f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
-                print(f"DEBUG: Sending error event: {error_event.strip()}")
+                logger.debug(f" Sending error event: {error_event.strip()}")
                 yield error_event
             except Exception as error_e:
-                print(f"DEBUG: Failed to send error event: {error_e}")
+                logger.debug(f" Failed to send error event: {error_e}")
         finally:
             # Clean up client when connection closes
-            print(f"DEBUG: SSE stream generator finished for client {client_id}")
-            print(f"DEBUG: About to clean up SSE client {client_id}")
+            logger.debug(f" SSE stream generator finished for client {client_id}")
+            logger.debug(f" About to clean up SSE client {client_id}")
             sse_manager.remove_client(client_id)
             logger.info(f"SSE connection closed for client {client_id}")
     

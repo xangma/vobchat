@@ -12,6 +12,58 @@ js_default_min_year = 1800
 # js_current_year is handled by the first callback
 
 def register_clientside_callbacks(app: Dash):
+    # SSE Store Update Handler - Updates place-state store from SSE events
+    # IMPORTANT: Only updates place-state to avoid circular dependencies with app-state
+    app.clientside_callback(
+        """
+        function(trigger_data, current_place_state) {
+            // Check if this is an SSE trigger with state data
+            if (trigger_data && trigger_data.hasUpdate && trigger_data.stateData) {
+                const stateData = trigger_data.stateData;
+                console.log('Clientside callback: Processing SSE state update for place-state:', stateData);
+                
+                // Build place state updates only
+                const place_updates = Object.assign({}, current_place_state || {});
+                let hasPlaceUpdates = false;
+                
+                if (stateData.selected_place_g_units !== undefined) {
+                    place_updates.selected_place_g_units = stateData.selected_place_g_units;
+                    hasPlaceUpdates = true;
+                }
+                if (stateData.selected_theme !== undefined) {
+                    place_updates.selected_theme = stateData.selected_theme;
+                    hasPlaceUpdates = true;
+                }
+                if (stateData.cubes !== undefined) {
+                    place_updates.cubes = stateData.cubes;
+                    hasPlaceUpdates = true;
+                }
+                if (stateData.selected_cubes !== undefined) {
+                    place_updates.selected_cubes = stateData.selected_cubes;
+                    hasPlaceUpdates = true;
+                }
+                
+                // CRITICAL: Also include show_visualization in place-state to avoid app-state conflicts
+                if (stateData.show_visualization !== undefined) {
+                    place_updates.show_visualization = stateData.show_visualization;
+                    hasPlaceUpdates = true;
+                }
+                
+                console.log('Clientside callback: hasPlaceUpdates:', hasPlaceUpdates);
+                console.log('Clientside callback: place_updates:', place_updates);
+                
+                return hasPlaceUpdates ? place_updates : window.dash_clientside.no_update;
+            }
+            
+            return window.dash_clientside.no_update;
+        }
+        """,
+        Output('place-state', 'data'),
+        Input('sse-event-processor', 'data'),
+        State('place-state', 'data'),
+        prevent_initial_call=True
+    )
+
     # Get current year dynamically in JS (NO CHANGE)
     app.clientside_callback(
         """
@@ -57,15 +109,13 @@ def register_clientside_callbacks(app: Dash):
 
             // --- Handle Reset ---
             if (triggered_id.includes('reset-selections.n_clicks') && reset_clicks) {
-                const currentYear = new Date().getFullYear();
-                new_state.unit_types = ['MOD_REG'];
-                new_state.selected_polygons = [];
-                new_state.selected_polygons_unit_types = [];
-                new_state.year_range = [currentYear, currentYear]; // Reset year range too
-                new_state.show_unselected = true; // Reset toggle
+                // NEW ARCHITECTURE: Use pure map state for reset
+                if (window.pureMapState) {
+                    window.pureMapState.userReset();
+                    console.log("Client (Cb1): Pure map state reset");
+                }
                 new_toggle_text = "Hide unselected polygons";
                 state_changed = true;
-                console.log("Client (Cb1): Reset map state");
             }
             // --- Handle Unit Filters ---
             else if (triggered_id.includes('unit-filter')) {
@@ -87,15 +137,24 @@ def register_clientside_callbacks(app: Dash):
                 } else {
                     current_types = new Set([clicked_type]);
                 }
+                // NEW ARCHITECTURE: Use pure map state for unit type changes
+                if (window.pureMapState) {
+                    window.pureMapState.userSetUnitTypes(Array.from(current_types));
+                    console.log("Client (Cb1): Pure map state unit types updated", Array.from(current_types));
+                }
                 new_state.unit_types = Array.from(current_types);
                 state_changed = true;
-                console.log("Client (Cb1): Updated unit types", new_state.unit_types);
             }
             // --- Handle Year Slider ---
             else if (triggered_id.includes('year-range-slider.value') && slider_value) {
                  const currentYear = new Date().getFullYear();
                  const y0 = Math.min(slider_value[0], currentYear);
                  const y1 = Math.min(slider_value[1], currentYear);
+                 // NEW ARCHITECTURE: Use pure map state for year range changes
+                 if (window.pureMapState) {
+                     window.pureMapState.userSetYearRange([y0, y1]);
+                     console.log("Client (Cb1): Pure map state year range updated", [y0, y1]);
+                 }
                  // Only update if the value actually changed to prevent loops
                  if (!new_state.year_range || new_state.year_range[0] !== y0 || new_state.year_range[1] !== y1) {
                     new_state.year_range = [y0, y1];
@@ -108,13 +167,11 @@ def register_clientside_callbacks(app: Dash):
                  const fid = String(click_data.id); // Convert to string for consistent comparison
                  const unit_type = click_data.properties.g_unit_type;
                  if (fid != null) { // Check for null or undefined
-                    const selected_ids = new_state.selected_polygons || [];
-                    const selected_units = new_state.selected_polygons_unit_types || [];
-                    const index = selected_ids.indexOf(fid);
-
-                    if (index > -1) { // Already selected, deselect
-                       selected_ids.splice(index, 1);
-                       selected_units.splice(index, 1);
+                    // NEW ARCHITECTURE: Check pure map state for current selection
+                    const isCurrentlySelected = window.pureMapState && 
+                        window.pureMapState.getSelectedPolygons().includes(fid);
+                    
+                    if (isCurrentlySelected) { // Already selected, deselect
                         // Prepare payload for RemovePlace trigger
                         remove_trigger_data = {
                             id: fid,
@@ -123,9 +180,13 @@ def register_clientside_callbacks(app: Dash):
                             timestamp: Date.now()
                         };
                         console.log("Client (Cb1): Firing Remove trigger for:", remove_trigger_data);
+                        
+                        // NEW ARCHITECTURE: Use pure map state for immediate feedback
+                        if (window.pureMapState) {
+                            const success = window.pureMapState.userDeselectPolygon(fid);
+                            console.log("Client (Cb1): Pure map state deselect result:", success);
+                        }
                     } else { // Not selected, select
-                        selected_ids.push(fid);
-                        selected_units.push(unit_type);
                         // Prepare payload for AddPlace trigger
                         add_trigger_data = {
                             id: fid,
@@ -134,13 +195,18 @@ def register_clientside_callbacks(app: Dash):
                             timestamp: Date.now()
                         };
                         console.log("Client (Cb1): Firing Add trigger for:", add_trigger_data);
+                        
+                        // NEW ARCHITECTURE: Use pure map state for immediate feedback
+                        if (window.pureMapState) {
+                            const success = window.pureMapState.userSelectPolygon(fid, unit_type);
+                            console.log("Client (Cb1): Pure map state select result:", success);
+                        }
                     }
-                    new_state.selected_polygons = selected_ids;
-                    new_state.selected_polygons_unit_types = selected_units;
-                    // *** Set zoom flag when selection changes ***
-                    new_state.zoom_to_selection = true; // Flag to trigger zoom in Cb8
-                    state_changed = true;
-                    console.log("Client (Cb1): Updated selections, set zoom flag", new_state.selected_polygons);
+                    // NEW ARCHITECTURE: Don't update old map state - pure map state handles this
+                    console.log("Client (Cb1): Pure map state handles polygon selection - not updating old state");
+                    
+                    // But we still need to trigger the workflow, so force return with triggers
+                    return [window.dash_clientside.no_update, window.dash_clientside.no_update, add_trigger_data, remove_trigger_data];
                  }
             }
             // --- Handle Toggle Unselected ---
@@ -899,23 +965,67 @@ def register_clientside_callbacks(app: Dash):
         function(threadId, sseStatus) {
             console.log("SSE Initialization callback triggered with thread ID:", threadId, "and status:", sseStatus);
             
+            // CRITICAL FIX: Check for stale thread connections and clear them
+            // If SSE client is connected but failing repeatedly, force a fresh start
+            if (window.workflowSSE && window.workflowSSE.threadId && 
+                window.workflowSSE.reconnectAttempts >= window.workflowSSE.maxReconnectAttempts) {
+                console.log("SSE: Max reconnect attempts reached for thread:", window.workflowSSE.threadId, 
+                           "- forcing fresh thread ID");
+                window.workflowSSE.disconnect();
+                // Generate a fresh thread ID and clear the stale one
+                const freshThreadId = 'thread_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+                console.log("SSE: Generated fresh thread ID:", freshThreadId);
+                return [
+                    {
+                        status: "thread_reset",
+                        thread_id: freshThreadId,
+                        timestamp: Date.now()
+                    },
+                    freshThreadId  // Update thread-id store with fresh ID
+                ];
+            }
+            
             // Priority 1: Handle explicit connect signals with workflow input
             if (sseStatus && sseStatus.connect_sse && sseStatus.thread_id && sseStatus.workflow_input) {
                 console.log("SSE: Connecting with workflow input from status:", sseStatus.workflow_input);
                 if (window.workflowSSE) {
-                    window.workflowSSE.connect(sseStatus.thread_id, sseStatus.workflow_input);
-                    return {
-                        status: "connected_with_workflow",
-                        thread_id: sseStatus.thread_id,
-                        timestamp: Date.now()
-                    };
+                    // CRITICAL FIX: Always use the thread ID from the status/store for new workflows
+                    // This ensures SSE client connects to the same thread ID that the workflow will execute on
+                    const targetThreadId = sseStatus.thread_id;
+                    console.log("SSE: Using thread ID from status for workflow execution:", targetThreadId, 
+                               "(previous connection:", window.workflowSSE.threadId, ")");
+                    
+                    // Disconnect from old thread if different
+                    if (window.workflowSSE.isConnected && window.workflowSSE.threadId !== targetThreadId) {
+                        console.log("SSE: Disconnecting from old thread:", window.workflowSSE.threadId);
+                        window.workflowSSE.disconnect();
+                    }
+                    
+                    window.workflowSSE.connect(targetThreadId, sseStatus.workflow_input);
+                    return [
+                        {
+                            status: "connected_with_workflow",
+                            thread_id: targetThreadId,
+                            timestamp: Date.now()
+                        },
+                        targetThreadId  // CRITICAL: Update thread-id store
+                    ];
                 }
             }
             
             // Priority 2: Handle thread ID changes (reconnections)
             if (!threadId) {
-                console.log("No thread ID available for SSE connection");
-                return window.dash_clientside.no_update;
+                console.log("SSE: No thread ID available - generating fresh one");
+                const freshThreadId = 'thread_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+                console.log("SSE: Generated fresh thread ID:", freshThreadId);
+                return [
+                    {
+                        status: "fresh_thread_created",
+                        thread_id: freshThreadId,
+                        timestamp: Date.now()
+                    },
+                    freshThreadId
+                ];
             }
             
             // Initialize SSE connection (without workflow input for existing connections)
@@ -923,26 +1033,33 @@ def register_clientside_callbacks(app: Dash):
                 console.log("Connecting to SSE for thread:", threadId);
                 window.workflowSSE.connect(threadId);
                 
-                return {
-                    status: "connected",
-                    thread_id: threadId,
-                    timestamp: Date.now()
-                };
+                return [
+                    {
+                        status: "connected",
+                        thread_id: threadId,
+                        timestamp: Date.now()
+                    },
+                    threadId  // Update thread-id store
+                ];
             } else if (window.workflowSSE && window.workflowSSE.threadId !== threadId) {
                 console.log("Reconnecting SSE for new thread:", threadId);
                 window.workflowSSE.connect(threadId);
                 
-                return {
-                    status: "reconnected", 
-                    thread_id: threadId,
-                    timestamp: Date.now()
-                };
+                return [
+                    {
+                        status: "reconnected", 
+                        thread_id: threadId,
+                        timestamp: Date.now()
+                    },
+                    threadId  // Update thread-id store
+                ];
             }
             
-            return window.dash_clientside.no_update;
+            return [window.dash_clientside.no_update, window.dash_clientside.no_update];
         }
         """,
         Output('sse-connection-status', 'data', allow_duplicate=True),
+        Output('thread-id', 'data', allow_duplicate=True),  # CRITICAL: Also update thread-id store
         Input('thread-id', 'data'),
         Input('sse-connection-status', 'data'),
         prevent_initial_call=False

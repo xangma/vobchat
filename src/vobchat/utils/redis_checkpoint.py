@@ -118,7 +118,9 @@ def _load_writes(
         try:
             # Check if required keys exist
             if b"type" not in data or b"value" not in data or b"channel" not in data:
-                print(f"Warning: Skipping corrupted write data for task {task_id}, missing keys: {list(data.keys())}")
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Skipping corrupted write data for task {task_id}, missing keys: {list(data.keys())}")
                 continue
                 
             writes.append((
@@ -127,7 +129,9 @@ def _load_writes(
                 serde.loads_typed((data[b"type"].decode(), data[b"value"])),
             ))
         except Exception as e:
-            print(f"Warning: Failed to load write for task {task_id}: {e}")
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to load write for task {task_id}: {e}")
             continue
     return writes
 

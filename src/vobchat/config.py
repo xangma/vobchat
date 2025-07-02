@@ -68,7 +68,9 @@ def get_db(config):
         db.run("SET statement_timeout = '30s';")  # 30 second query timeout
         db.run("SET idle_in_transaction_session_timeout = '60s';")  # Close idle transactions
     except Exception as e:
-        print(f"Warning: Could not set database session parameters: {e}")
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Could not set database session parameters: {e}")
 
     if use_tunnel and not localdb:
         db.tunnel = tunnel  # Store tunnel on the db object for later teardown
