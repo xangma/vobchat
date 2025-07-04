@@ -46,11 +46,12 @@ class SSEEvent:
 class MessageEvent(SSEEvent):
     """Event for streaming AI messages"""
     
-    def __init__(self, content: str, thread_id: str, is_partial: bool = False):
+    def __init__(self, content: str, thread_id: str, is_partial: bool = False, message_id: Optional[str] = None):
         super().__init__("message", {
             "content": content,
             "is_partial": is_partial,
-            "thread_id": thread_id
+            "thread_id": thread_id,
+            "message_id": message_id
         }, thread_id)
 
 class InterruptEvent(SSEEvent):

@@ -80,10 +80,14 @@ class PureMapState {
         this._notifyWorkflow('unit_types_changed', { unitTypes: this.userState.unitTypes });
     }
     
-    userSetYearRange(yearRange) {
+    userSetYearRange(yearRange, notifyWorkflow = false) {
         this.userState.yearRange = [...yearRange];
         console.log('PureMapState: User set year range:', this.userState.yearRange);
-        this._notifyWorkflow('year_range_changed', { yearRange: this.userState.yearRange });
+        
+        // Only notify workflow if explicitly requested (for true user interactions)
+        if (notifyWorkflow) {
+            this._notifyWorkflow('year_range_changed', { yearRange: this.userState.yearRange });
+        }
     }
     
     userReset() {

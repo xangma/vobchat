@@ -457,7 +457,9 @@ class AsyncRedisSaver(BaseCheckpointSaver):
             else "",
         }
 
+
         await self.conn.hset(key, mapping=data)
+        
         return {
             "configurable": {
                 "thread_id": thread_id,
@@ -536,6 +538,7 @@ class AsyncRedisSaver(BaseCheckpointSaver):
         pending_writes = await self._aload_pending_writes(
             thread_id, checkpoint_ns, checkpoint_id
         )
+        
         return _parse_redis_checkpoint_data(
             self.serde, checkpoint_key, checkpoint_data, pending_writes=pending_writes
         )

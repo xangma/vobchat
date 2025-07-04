@@ -1,5 +1,21 @@
 // src/vobchat/assets/sse_client.js
 
+// Helper functions to extract data from places array (single source of truth)
+function getSelectedUnits(state) {
+    const places = state.places || [];
+    return places.map(place => place.g_unit).filter(unit => unit !== null && unit !== undefined);
+}
+
+function getSelectedUnitTypes(state) {
+    const places = state.places || [];
+    return places.map(place => place.g_unit_type).filter(type => type !== null && type !== undefined);
+}
+
+function getSelectedPlaceNames(state) {
+    const places = state.places || [];
+    return places.map(place => place.name).filter(name => name !== null && name !== undefined);
+}
+
 class WorkflowSSEClient {
     // Store the latest interrupt so we know the current options/node for user input
     setLatestInterrupt(interruptData) {
@@ -18,6 +34,9 @@ class WorkflowSSEClient {
         this.onInterrupt = null;
         this.onStateUpdate = null;
         this.onError = null;
+
+        // Track streamed message UUIDs across entire connection to prevent duplicates
+        this.streamedMessageIds = new Set();
 
         // Frontend logging
         this.logBuffer = [];
@@ -100,6 +119,10 @@ class WorkflowSSEClient {
 
         this.disconnect(); // Close existing connection
 
+        // Clear tracked message IDs for new connection
+        this.streamedMessageIds.clear();
+        console.log('SSE: Cleared tracked message IDs for new connection');
+
         this.threadId = threadId;
         console.log('SSE: Connecting to thread', threadId, 'with workflow input:', workflowInput);
 
@@ -140,7 +163,7 @@ class WorkflowSSEClient {
                 console.log('SSE: Received message event', data);
 
                 if (this.onMessage) {
-                    this.onMessage(data.content, data.is_partial);
+                    this.onMessage(data.content, data.is_partial, data.message_id);
                 }
             } catch (e) {
                 console.error('SSE: Error parsing message event', e);
@@ -210,6 +233,10 @@ class WorkflowSSEClient {
 
         this.isConnected = false;
         this.threadId = null;
+        
+        // Clear tracked message IDs when disconnecting
+        this.streamedMessageIds.clear();
+        console.log('SSE: Cleared tracked message IDs on disconnect');
     }
 
     attemptReconnect() {
@@ -299,26 +326,21 @@ window.workflowSSE.onDisconnected = function() {
     }
 };
 
-// Message deduplication tracking
-window.workflowSSE.recentMessages = new Set();
-window.workflowSSE.cleanupInterval = setInterval(() => {
-    // Clear old messages every 30 seconds to prevent memory growth
-    window.workflowSSE.recentMessages.clear();
-}, 30000);
-
 // Integration with Dash callbacks
-window.workflowSSE.onMessage = function(content, isPartial) {
-    console.log('SSE: Received message', content, 'isPartial:', isPartial);
+window.workflowSSE.onMessage = function(content, isPartial, messageId) {
+    console.log('SSE: Received message', content, 'isPartial:', isPartial, 'messageId:', messageId);
 
-    // Skip deduplication for partial messages (streaming)
-    if (!isPartial) {
-        // Check for duplicate complete messages
-        if (window.workflowSSE.recentMessages.has(content)) {
-            console.log('SSE: Ignoring duplicate message:', content.substring(0, 50));
-            return;
-        }
-        // Track this message to prevent duplicates
-        window.workflowSSE.recentMessages.add(content);
+    // CRITICAL FIX: Skip duplicate messages using UUID tracking
+    // This prevents the same message from being displayed multiple times across workflow executions
+    if (messageId && window.workflowSSE.streamedMessageIds.has(messageId)) {
+        console.log('SSE: Skipping duplicate message with ID', messageId, ':', content);
+        return;
+    }
+
+    // Track this message ID to prevent future duplicates
+    if (messageId) {
+        window.workflowSSE.streamedMessageIds.add(messageId);
+        console.log('SSE: Tracked message ID', messageId, '- total tracked:', window.workflowSSE.streamedMessageIds.size);
     }
 
     if (isPartial) {
@@ -395,26 +417,39 @@ window.workflowSSE.onInterrupt = function(interruptData) {
 
     // CRITICAL: Handle PureMapState synchronization for interrupts with polygon data
     // This ensures interrupts properly clear or set polygon selections just like state updates
-    if (interruptData.selected_place_g_units !== undefined || interruptData.selected_polygons !== undefined) {
-        const polygons = interruptData.selected_place_g_units || interruptData.selected_polygons || [];
-        if (window.pureMapState) {
-            if (polygons.length > 0) {
-                console.log('SSE: Syncing workflow polygons to pure map state:', polygons);
-                window.pureMapState.executeWorkflowCommand({
-                    type: 'sync_state',
-                    state: { selectedPolygons: polygons }
-                });
-                console.log('SSE: Sent map sync command to pure map state');
-            } else {
-                // CRITICAL: Handle clearing selections from interrupts (e.g., RemovePlace)
-                console.log('SSE: Clearing workflow polygons from interrupt');
-                window.pureMapState.executeWorkflowCommand({
-                    type: 'sync_state',
-                    state: { selectedPolygons: [] }
-                });
-                console.log('SSE: Sent map sync command to pure map state');
-            }
+    // Use helper function to get units from places array
+    const selectedUnits = getSelectedUnits(interruptData) || [];
+    console.log('SSE: Interrupt selectedUnits extracted:', selectedUnits);
+    console.log('SSE: Interrupt places array:', interruptData.places);
+    
+    // Handle map_update_request if present
+    if (interruptData.map_update_request && interruptData.map_update_request.action === 'update_map_selection') {
+        console.log('SSE: Processing map update request from interrupt:', interruptData.map_update_request);
+        const request = interruptData.map_update_request;
+        
+        if (window.pureMapState && request.places) {
+            // Extract units from places array
+            const units = getSelectedUnits({places: request.places});
+            console.log('SSE: Extracted units from map update request:', units);
+            window.pureMapState.executeWorkflowCommand({
+                type: 'sync_state',
+                state: { selectedPolygons: units }
+            });
+            console.log('SSE: Synced map state via map_update_request');
         }
+    } else if (selectedUnits.length > 0) {
+        // Fallback to direct sync if no map_update_request
+        const polygons = selectedUnits;
+        if (window.pureMapState) {
+            console.log('SSE: Syncing workflow polygons to pure map state (fallback):', polygons);
+            window.pureMapState.executeWorkflowCommand({
+                type: 'sync_state',
+                state: { selectedPolygons: polygons }
+            });
+            console.log('SSE: Sent map sync command to pure map state (fallback)');
+        }
+    } else {
+        console.log('SSE: No map updates needed from interrupt');
     }
 
     // CRITICAL: Check if map_update_request was explicitly cleared in interrupt data
@@ -424,7 +459,7 @@ window.workflowSSE.onInterrupt = function(interruptData) {
 
     // CRITICAL: Always update visualization state based on interrupt data
     // This handles both data delivery (when cubes present) and removal (when units empty)
-    if (interruptData.cubes || interruptData.selected_place_g_units !== undefined) {
+    if (interruptData.cubes || interruptData.places !== undefined) {
         try {
             updateVisualizationFromInterrupt(interruptData);
             console.log('SSE: Visualization update completed successfully');
@@ -446,19 +481,22 @@ window.workflowSSE.onInterrupt = function(interruptData) {
         if (!message || (!message.includes('Removed') && !message.includes('removed'))) {
             // CRITICAL: For unit type selections, don't ask user to select on map again
             // Check if this is a unit type button selection result
-            const hasSelectedUnits = interruptData.selected_place_g_units && interruptData.selected_place_g_units.length > 0;
-            const hasUnitTypes = interruptData.selected_place_g_unit_types && interruptData.selected_place_g_unit_types.length > 0;
+            const hasSelectedUnits = getSelectedUnits(interruptData).length > 0;
+            const hasUnitTypes = getSelectedUnitTypes(interruptData).length > 0;
 
             if (hasSelectedUnits && hasUnitTypes && message && message.includes('Using')) {
                 // Keep the existing message that shows unit type selection result
                 console.log('SSE: Keeping unit type selection message:', message);
             } else if (hasSelectedUnits && hasUnitTypes) {
                 // Show that we're proceeding with the selection
-                const placeName = interruptData.extracted_place_names?.[0] || 'the area';
-                const unitType = interruptData.selected_place_g_unit_types[0];
+                const placeNames = getSelectedPlaceNames(interruptData);
+                const unitTypes = getSelectedUnitTypes(interruptData);
+                const placeName = placeNames[0] || 'the area';
+                const unitType = unitTypes[0];
                 // message = `Using ${unitType} data for ${placeName}.`;
             } else {
-                const placeName = interruptData.extracted_place_names?.[0] || 'the place';
+                const placeNames = getSelectedPlaceNames(interruptData);
+                const placeName = placeNames[0] || 'the place';
                 // message = `I found "${placeName}". Please select it on the map to continue.`;
             }
         }
@@ -470,13 +508,6 @@ window.workflowSSE.onInterrupt = function(interruptData) {
     // UNIFIED MESSAGE HANDLING: Route all messages through Dash app-state instead of direct DOM
     console.log('SSE: About to add message to chat:', message);
     if (message) {
-        // CRITICAL FIX: Deduplicate interrupt messages too
-        if (window.workflowSSE.recentMessages.has(message)) {
-            console.log('SSE: Ignoring duplicate interrupt message:', message.substring(0, 50));
-            return;
-        }
-        // Track this interrupt message to prevent duplicates
-        window.workflowSSE.recentMessages.add(message);
 
         // UNIFIED FIX: Use direct DOM manipulation for all messages to ensure consistent ordering
         // This ensures all messages follow the same insertion order and timing
@@ -514,9 +545,9 @@ window.workflowSSE.onStateUpdate = function(stateData) {
     // NEW ARCHITECTURE: SSE no longer handles map state directly
     // Instead, send commands to the pure map state manager
 
-    // Handle workflow commands for map state
-    if (stateData.selected_place_g_units !== undefined || stateData.selected_polygons !== undefined) {
-        const polygons = stateData.selected_place_g_units || stateData.selected_polygons || [];
+    // Handle workflow commands for map state - extract polygons from places array
+    const polygons = getSelectedUnits(stateData) || stateData.selected_polygons || [];
+    if (polygons.length >= 0) {
         if (window.pureMapState) {
             if (polygons.length > 0) {
                 console.log('SSE: Syncing workflow polygons to pure map state:', polygons);
@@ -526,7 +557,7 @@ window.workflowSSE.onStateUpdate = function(stateData) {
                 });
 
                 // Trigger zoom if requested
-                if (stateData.zoom_to_selection || (stateData.selected_place_g_units && stateData.selected_place_g_units.length > 0)) {
+                if (stateData.zoom_to_selection || polygons.length > 0) {
                     window.pureMapState.executeWorkflowCommand({
                         type: 'zoom_to_selection'
                     });
@@ -557,10 +588,12 @@ window.workflowSSE.onStateUpdate = function(stateData) {
         console.log('SSE: Processing map update request from state:', stateData.map_update_request);
         const request = stateData.map_update_request;
 
-        if (window.pureMapState && request.selected_place_g_units) {
+        if (window.pureMapState && request.places) {
+            // Extract units from places array
+            const units = getSelectedUnits({places: request.places});
             window.pureMapState.executeWorkflowCommand({
                 type: 'sync_state',
-                state: { selectedPolygons: request.selected_place_g_units }
+                state: { selectedPolygons: units }
             });
         }
     } else if (stateData.map_update_request === null) {
@@ -625,17 +658,21 @@ function renderInterruptButtons(interruptData) {
 }
 
 function updateMapFromInterrupt(interruptData) {
+    // Use helper functions to extract data from places array
+    const selectedUnits = getSelectedUnits(interruptData) || [];
+    const selectedUnitTypes = getSelectedUnitTypes(interruptData) || [];
+    
     const mapUpdates = {
-        selected_polygons: interruptData.selected_place_g_units?.map(String) || [],
-        selected_polygons_unit_types: interruptData.selected_place_g_unit_types || [],
-        zoom_to_selection: interruptData.selected_place_g_units?.length > 0  // Only zoom if there are selections
+        selected_polygons: selectedUnits.map(String),
+        selected_polygons_unit_types: selectedUnitTypes,
+        zoom_to_selection: selectedUnits.length > 0  // Only zoom if there are selections
     };
 
     // CRITICAL: Also update unit_types when unit types change from workflow
     // This ensures the unit filter buttons reflect the new selection
-    if (interruptData.selected_place_g_unit_types && interruptData.selected_place_g_unit_types.length > 0) {
+    if (selectedUnitTypes.length > 0) {
         // Get unique unit types from the selection
-        const uniqueUnitTypes = [...new Set(interruptData.selected_place_g_unit_types)];
+        const uniqueUnitTypes = [...new Set(selectedUnitTypes)];
         mapUpdates.unit_types = uniqueUnitTypes;
         console.log('SSE: Updating unit_types from interrupt to:', uniqueUnitTypes);
     }
@@ -765,9 +802,9 @@ function updateVisualizationFromInterrupt(interruptData) {
             // REMOVED: Broken document.querySelector approach
             // Now handled by proper clientside callback via sse-event-processor
 
-            // Use interrupt data for selected units - this is authoritative
+            // Use interrupt data for selected units - get from places array
             // If interrupt has empty units array, it means units were removed
-            const selectedUnits = interruptData.selected_place_g_units || [];
+            const selectedUnits = getSelectedUnits(interruptData) || [];
 
             console.log('SSE: Updating visualization with interrupt data - selected units:', selectedUnits);
             console.log('SSE: Interrupt has cubes:', !!interruptData.cubes);
@@ -780,15 +817,15 @@ function updateVisualizationFromInterrupt(interruptData) {
                 newPlaceState = {
                     cubes: null,
                     cube_data: null,
-                    selected_place_g_units: []
+                    places: []  // Clear places array as single source of truth
                 };
             } else {
-                // Partial removal or addition case - use filtered cube data from interrupt
+                // Partial removal or addition case - use cube data from interrupt
                 console.log('SSE: Updating visualization data (partial removal or addition)');
                 newPlaceState = {
-                    cubes: interruptData.cubes || currentPlaceState.cubes,
-                    cube_data: interruptData.cube_data || currentPlaceState.cube_data,
-                    selected_place_g_units: selectedUnits
+                    cubes: interruptData.cubes,
+                    cube_data: interruptData.cube_data,
+                    places: interruptData.places || []  // Store places array as single source of truth
                 };
             }
 
@@ -810,15 +847,19 @@ function updateMapState(stateData) {
         // Dash stores cannot be accessed via DOM - this was always failing silently
 
         const updates = {};
-        if (stateData.selected_place_g_units) {
-            updates.selected_polygons = stateData.selected_place_g_units.map(String);
+        // Extract data from places array using helper functions
+        const selectedUnits = getSelectedUnits(stateData) || [];
+        const selectedUnitTypes = getSelectedUnitTypes(stateData) || [];
+        
+        if (selectedUnits.length > 0) {
+            updates.selected_polygons = selectedUnits.map(String);
         }
-        if (stateData.selected_place_g_unit_types) {
-            updates.selected_polygons_unit_types = stateData.selected_place_g_unit_types;
+        if (selectedUnitTypes.length > 0) {
+            updates.selected_polygons_unit_types = selectedUnitTypes;
 
             // CRITICAL: Also update unit_types when unit types change from state updates
             // This ensures consistency between workflow state and map filter state
-            const uniqueUnitTypes = [...new Set(stateData.selected_place_g_unit_types)];
+            const uniqueUnitTypes = [...new Set(selectedUnitTypes)];
             updates.unit_types = uniqueUnitTypes;
             console.log('SSE: Updating unit_types from state update to:', uniqueUnitTypes);
         }

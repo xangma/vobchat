@@ -1,5 +1,6 @@
 from __future__ import annotations
 import io
+import uuid
 from langgraph.types import interrupt
 from langgraph.graph import END
 """Intent-handler nodes (no LLM) for the flexible DDME workflow.
@@ -28,9 +29,13 @@ logger = logging.getLogger(__name__)
 
 def _append_ai(state: lg_State, text: str):
     # Mark user-facing messages as streamable
+    # Add a unique ID to each message to prevent duplicate streaming
     message = AIMessage(
         content=text,
-        response_metadata={"stream_mode": "stream"}
+        response_metadata={
+            "stream_mode": "stream",
+            "message_id": str(uuid.uuid4())  # Unique ID for duplicate detection
+        }
     )
     state.setdefault("messages", []).append(message)
 
@@ -67,11 +72,8 @@ def _initial_state() -> Dict:
         # user-choice plumbing
         "selection_idx": None,
 
-        # place + unit selections
+        # place + unit selections - single source of truth
         "places": [],
-        "selected_place_g_places": [],
-        "selected_place_g_units": [],
-        "selected_place_g_unit_types": [],
 
         # theme selection
         "selected_place_themes": None,
@@ -117,7 +119,7 @@ def _initial_state() -> Dict:
 def ShowState_node(state: lg_State):
     summary: List[str] = []
 
-    g_units = state.get("selected_place_g_units", [])
+    g_units = get_selected_units(state)
     place_names = state.get("extracted_place_names", [])
     for idx, g_unit in enumerate(g_units):
         p_name = place_names[idx] if idx < len(place_names) else f"unit {g_unit}"
@@ -144,7 +146,7 @@ def ShowState_node(state: lg_State):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def ListThemesForSelection_node(state: lg_State):
-    g_units = state.get("selected_place_g_units", [])
+    g_units = get_selected_units(state)
     if not g_units:
         _append_ai(state, "No place selected yet.")
         return state
@@ -200,6 +202,10 @@ def Reset_node(state: lg_State):
     reset_state = _initial_state()
     reset_state["selection_idx"] = None
     logger.info("Reset_node: Cleared all state including selection_idx")
+    
+    # Note: Streamed message IDs are cleared on the frontend when reset is received
+    # Backend clearing would require thread_id context which is not easily accessible here
+    
     return Command(goto="START", update=reset_state)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -243,7 +249,7 @@ def AddPlace_node(state: lg_State):
         _append_ai(state, "AddPlace: please specify at least one place name.")
         return state
 
-    # ── Check for duplicates using simplified state ─────────────────────────────────
+    # ── Check for duplicates using simplified state BEFORE creating message ─────────
     existing_units = get_selected_units(state)
 
     # Check if this polygon is already selected (duplicate detection)
@@ -426,7 +432,7 @@ def RemovePlace_node(state: lg_State):
     # EXTRA DEBUG: Log detailed state at entry
     logger.info(f"DEBUG RemovePlace_node: Entry - payload: {payload}")
     logger.info(f"DEBUG RemovePlace_node: Entry - place to remove: {place}")
-    logger.info(f"DEBUG RemovePlace_node: Entry - current selected_place_g_units: {state.get('selected_place_g_units', [])}")
+    logger.info(f"DEBUG RemovePlace_node: Entry - current selected_units_from_places: {get_selected_units(state)}")
     logger.info(f"DEBUG RemovePlace_node: Entry - current selected_polygons: {state.get('selected_polygons', [])}")
     logger.info(f"DEBUG RemovePlace_node: Entry - current places array: {places}")
 
@@ -463,9 +469,12 @@ def RemovePlace_node(state: lg_State):
             "current_node": None,
             "options": [],
             "selection_idx": None,
-            "map_update_request": None
+            "map_update_request": {
+                "action": "update_map_selection",
+                "places": state.get("places", [])  # Maintain current places array
+            }
         }
-        return Command(goto="agent_node", update=update_dict)
+        return Command(goto="END", update=update_dict)
 
     logger.info(f"RemovePlace_node: Successfully removed '{place}'")
 
@@ -544,13 +553,16 @@ def RemovePlace_node(state: lg_State):
         "current_node": None,
         "options": [],
         "selection_idx": None,
-        "map_update_request": None,
+        "map_update_request": {
+            "action": "update_map_selection",
+            "places": state.get("places", [])  # Send updated places array to ensure map sync
+        },
         "selected_cubes": state.get("selected_cubes"),  # Include the filtered cube data
         "show_visualization": show_viz,  # CRITICAL: Include show_viz flag to control visualization visibility
         "places": state.get("places", []),  # CRITICAL: Include updated places array for frontend
     }
 
-    return Command(goto="agent_node", update=update_dict)
+    return Command(goto="END", update=update_dict)
 
 # ────────────────────────────────────────────────────────────────────────────
 # Node: fetch & show theme description on demand

@@ -11,6 +11,7 @@ from dash import no_update
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 from vobchat.tools import get_all_cube_data
+from vobchat.state_schema import get_selected_units, get_selected_unit_types
 import logging
 
 logger = logging.getLogger(__name__)
@@ -50,15 +51,15 @@ def register_visualization_callbacks(app, compiled_workflow):
 
         logger.info(f"Visualization callback triggered - app_state: {app_state is not None}, show_visualization: {app_state.get('show_visualization') if app_state else 'None'}")
         logger.info(f"Place state cubes: {bool(place_state.get('cubes') if place_state else False)}")
-        
+
         # CRITICAL DEBUG: Log the exact content of place_state to understand what's missing
         if place_state:
             logger.info(f"FULL PLACE STATE: {place_state}")
-            logger.info(f"selected_place_g_units in place_state: {place_state.get('selected_place_g_units', 'NOT_FOUND')}")
+            logger.info(f"places array in place_state: {place_state.get('places', 'NOT_FOUND')}")
             logger.info(f"selected_theme in place_state: {place_state.get('selected_theme', 'NOT_FOUND')}")
         else:
             logger.info("PLACE STATE IS NONE OR EMPTY")
-            
+
         # Also log app_state for debugging
         if app_state:
             logger.info(f"APP STATE show_visualization: {app_state.get('show_visualization', 'NOT_FOUND')}")
@@ -68,12 +69,12 @@ def register_visualization_callbacks(app, compiled_workflow):
         # Check if we have cube data OR if we should show visualization based on app_state
         has_cubes = place_state and place_state.get('cubes')
         # Also consider if we have selected units and theme (so we can fetch cube data)
-        has_units_and_theme = (place_state and 
-                              place_state.get('selected_place_g_units') and 
+        has_units_and_theme = (place_state and
+                              place_state.get('places') and
                               place_state.get('selected_theme'))
-        should_show = ((app_state and app_state.get("show_visualization")) or 
+        should_show = ((app_state and app_state.get("show_visualization")) or
                       has_cubes or has_units_and_theme)
-        
+
         logger.debug(f" Visualization decision - has_cubes: {bool(has_cubes)}, should_show: {should_show}")
         logger.debug(f" app_state.show_visualization: {app_state.get('show_visualization') if app_state else 'None'}")
         logger.info(f"Visualization decision - has_cubes: {bool(has_cubes)}, should_show: {should_show}")
@@ -92,13 +93,13 @@ def register_visualization_callbacks(app, compiled_workflow):
             cubes = place_state.get("cubes", [])
             logger.debug(f" Retrieved cubes: {type(cubes)} - {len(cubes) if isinstance(cubes, (list, str)) else 'N/A'}")
             logger.info(f"Retrieved cubes from place_state: {type(cubes)} - {len(cubes) if isinstance(cubes, (list, str)) else 'N/A'}")
-            
+
             # CRITICAL: If we have no cubes but we have units and theme, try to generate cube data
             if not cubes and has_units_and_theme:
                 logger.debug(f" No cubes but have units+theme - trying to generate cube data")
                 selected_theme = place_state.get('selected_theme')
-                g_units = place_state.get('selected_place_g_units', [])
-                
+                g_units = get_selected_units(place_state)
+
                 if selected_theme and g_units:
                     try:
                         # Parse theme to get available cubes
@@ -107,12 +108,12 @@ def register_visualization_callbacks(app, compiled_workflow):
                             theme_data = json.loads(selected_theme)
                         else:
                             theme_data = selected_theme
-                        
+
                         # Get theme cubes using find_themes_for_unit (reuse existing logic)
                         from vobchat.tools import find_themes_for_unit
                         theme_cubes_json = find_themes_for_unit(str(g_units[0]))
                         theme_cubes_df = pd.read_json(io.StringIO(theme_cubes_json), orient='records')
-                        
+
                         # Filter to current theme
                         if 'ent_id' in theme_data:
                             current_theme_cubes = theme_cubes_df[theme_cubes_df['ent_id'] == theme_data['ent_id']]
@@ -123,7 +124,7 @@ def register_visualization_callbacks(app, compiled_workflow):
                     except Exception as e:
                         logger.debug(f" Error generating cube data from theme: {e}")
                         logger.warning(f"Error generating cube data from theme: {e}")
-            
+
             # CRITICAL: Don't hide visualization if app_state says show_visualization=True
             # This handles the case where polygon removal sends empty cubes but wants to keep viz visible
             force_show_viz = app_state and app_state.get("show_visualization")
@@ -145,7 +146,20 @@ def register_visualization_callbacks(app, compiled_workflow):
             else:
                 cubes_df = pd.DataFrame(cubes)
             logger.debug(f" Parsed cubes_df successfully: {len(cubes_df)} rows")
-            cube_ids = cubes_df['Cube_ID'].tolist()
+            logger.debug(f" Available columns in cubes_df: {list(cubes_df.columns)}")
+
+            # Check for cube ID column (might be 'Cube_ID' or 'cube_id')
+            cube_id_col = None
+            for col in ['Cube_ID', 'cube_id', 'CubeID', 'cubeid']:
+                if col in cubes_df.columns:
+                    cube_id_col = col
+                    break
+
+            if cube_id_col:
+                cube_ids = cubes_df[cube_id_col].tolist()
+            else:
+                logger.warning(f"No cube ID column found in cubes_df. Columns: {list(cubes_df.columns)}")
+                cube_ids = []
             logger.debug(f" Extracted cube_ids: {cube_ids}")
             logger.info(f"Processed cubes_df: {len(cubes_df)} rows, cube_ids: {cube_ids}")
 
@@ -157,8 +171,8 @@ def register_visualization_callbacks(app, compiled_workflow):
             else:
                 cube_selector_value = cube_ids[:1]
             logger.debug(f" Selected cube_selector_value: {cube_selector_value}")
-            
-            g_units = place_state.get('selected_place_g_units', [])
+
+            g_units = get_selected_units(place_state)
             logger.debug(f" g_units: {g_units}")
             if not g_units:
                  logger.debug(f" No g_units - hiding visualization")
@@ -199,15 +213,22 @@ def register_visualization_callbacks(app, compiled_workflow):
                 return any(pattern in col for col in non_empty_cols)
 
             cube_ids = [cid for cid in cube_ids if cube_has_data(cid)]
-            cubes_df  = cubes_df[cubes_df['Cube_ID'].isin(cube_ids)]
+            if cube_id_col:
+                cubes_df  = cubes_df[cubes_df[cube_id_col].isin(cube_ids)]
+                # Remove duplicates from cubes_df to prevent duplicate options
+                cubes_df = cubes_df.drop_duplicates(subset=[cube_id_col])
 
-            # Remove duplicates from cubes_df to prevent duplicate options
-            cubes_df = cubes_df.drop_duplicates(subset=['Cube_ID'])
+            # Create options using the correct column names
+            cube_col = 'Cube' if 'Cube' in cubes_df.columns else 'cube' if 'cube' in cubes_df.columns else None
 
-            options = [
-                 {"label": row['Cube'], "value": row['Cube_ID']}
-                 for idx, row in cubes_df.iterrows()
-            ]
+            if cube_id_col and cube_col:
+                options = [
+                    {"label": row[cube_col], "value": row[cube_id_col]}
+                    for idx, row in cubes_df.iterrows()
+                ]
+            else:
+                logger.warning(f"Missing required columns. cube_id_col: {cube_id_col}, cube_col: {cube_col}")
+                options = []
             # Return styles to SHOW BOTH container and inner area
             logger.debug(f" SUCCESS! Showing visualization with {len(options)} cube options")
             logger.info(f"Successfully showing visualization with {len(options)} cube options")
@@ -228,7 +249,7 @@ def register_visualization_callbacks(app, compiled_workflow):
     def update_visualization(selected_cubes, place_state):
         logger.debug(f" update_visualization called with selected_cubes: {selected_cubes}")
         logger.debug(f" place_state keys: {list(place_state.keys()) if place_state else 'None'}")
-        
+
         # Check for cube data in the cubes field (from SSE) instead of cube_data field
         if not place_state.get("cubes") and not place_state.get("cube_data"):
              logger.debug(f" No cube data found in place_state, returning empty chart")
@@ -241,7 +262,7 @@ def register_visualization_callbacks(app, compiled_workflow):
                  annotations=[{
                      'text': "No areas selected or data has been removed",
                      'xref': "paper",
-                     'yref': "paper", 
+                     'yref': "paper",
                      'x': 0.5,
                      'y': 0.5,
                      'xanchor': 'center',
@@ -272,18 +293,23 @@ def register_visualization_callbacks(app, compiled_workflow):
 
         try:
             logger.debug(f" About to process cube data for chart")
-            
-            # Get the selected units from place_state
-            selected_units = place_state.get("selected_place_g_units", [])
+
+            # Get the selected units from place_state using helper function
+            # Debug: log the actual place_state content
+            logger.debug(f" place_state content: {place_state}")
+            logger.debug(f" place_state has 'places': {'places' in place_state}")
+            logger.debug(f" place_state['places']: {place_state.get('places', 'NOT FOUND')}")
+
+            selected_units = get_selected_units(place_state)
             logger.debug(f" Selected units from place_state: {selected_units}")
-            
+
             if not selected_units:
                 logger.debug(f" No selected units found in place_state")
                 return go.Figure().update_layout(title="No areas selected")
 
             if not isinstance(selected_cubes, list):
                 selected_cubes = [selected_cubes]
-            
+
             logger.debug(f" Selected cubes for chart: {selected_cubes}")
             logger.debug(f" Selected units: {selected_units}")
 
@@ -312,25 +338,25 @@ def register_visualization_callbacks(app, compiled_workflow):
 
             # The data is already pivoted - each cube measurement is a separate column
             # We need to melt it back to get a normalized format for plotting
-            
+
             # Identify value columns (everything except g_name and year)
             id_vars = ['g_name', 'year']
             value_vars = [col for col in all_data_df.columns if col not in id_vars]
-            
+
             logger.debug(f" Value columns for chart: {value_vars}")
-            
+
             if not value_vars:
                 return go.Figure().update_layout(title="No data columns found")
 
             # Convert to long format for plotting
-            chart_data = pd.melt(all_data_df, id_vars=id_vars, value_vars=value_vars, 
+            chart_data = pd.melt(all_data_df, id_vars=id_vars, value_vars=value_vars,
                                var_name='measurement', value_name='value')
-            
+
             logger.debug(f" Melted data: {len(chart_data)} rows")
 
             # CRITICAL: Filter out rows with NaN values to prevent empty series in the plot
             chart_data = chart_data.dropna(subset=['value'])
-            
+
             # Convert year to numeric for proper sorting
             chart_data['year'] = pd.to_numeric(chart_data['year'], errors='coerce')
             chart_data = chart_data.dropna(subset=['year'])
@@ -340,10 +366,10 @@ def register_visualization_callbacks(app, compiled_workflow):
 
             # Create display names for the legend
             chart_data['display_name'] = chart_data['g_name'] + ' - ' + chart_data['measurement']
-            
+
             # Sort data for better visualization
             chart_data = chart_data.sort_values(['g_name', 'measurement', 'year'])
-            
+
             logger.debug(f" Final chart data: {len(chart_data)} rows")
             logger.debug(f" Sample data: {chart_data.head()}")
 

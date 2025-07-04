@@ -235,7 +235,7 @@ def postcode_tool_call(state: lg_State) -> lg_State:
     """
     If a postcode was previously extracted (`extracted_postcode` is set), this node calls
     the `find_units_by_postcode` tool to search the database for matching geographical units.
-    Updates the state with the search results (`selected_place`, `selected_place_g_units`, etc.).
+    Updates the state with the search results in the `places` array (single source of truth).
     """
     logger.info("Starting postcode tool call...")
     state["current_node"] = "postcode_tool_call"
@@ -267,18 +267,13 @@ def postcode_tool_call(state: lg_State) -> lg_State:
             # Converts the first row of the DataFrame to JSON for storage.
             state["selected_place"] = response_df.iloc[0:1].to_json(orient="records") # Store first result row as JSON
             # Initialize lists if they don't exist and append the g_unit and g_place IDs.
-            existing_units = state.get("selected_place_g_units", [])
-            existing_places = state.get("selected_place_g_places", [])
+            existing_units = get_selected_units(state)
+            existing_places = get_selected_place_names(state)
             new_unit = int(response_df["g_unit"].values[0])
             new_place = int(response_df["g_place"].values[0])
 
-            # Avoid duplicates by checking if already exists
-            if new_unit not in existing_units:
-                state["selected_place_g_units"] = existing_units + [new_unit]
-            if new_place not in existing_places:
-                state["selected_place_g_places"] = existing_places + [new_place]
-            # Potentially add unit type as well if available in response_df
-            # state.setdefault("selected_place_g_unit_types", []).append(response_df["g_unit_type"].values[0])
+            # This data should be added through add_place_to_state helper function instead
+            # The places array is the single source of truth
         else:
             # If no units were found, inform the user.
             logger.warning(
@@ -424,9 +419,9 @@ def update_polygon_selection(state: lg_State) -> lg_State:
     # Get the current state
     current_place_index = state.get("current_place_index")
     extracted_place_names = state.get("extracted_place_names", [])
-    selected_workflow_units = state.get("selected_place_g_units", [])
+    selected_workflow_units = get_selected_units(state)
 
-    print(f"URGENT DEBUG: update_polygon_selection state - current_place_index={current_place_index}, extracted_places={extracted_place_names}, selected_units={selected_workflow_units}")
+    logger.info(f"URGENT DEBUG: update_polygon_selection state - current_place_index={current_place_index}, extracted_places={extracted_place_names}, selected_units={selected_workflow_units}")
 
     if selected_workflow_units:
         # Get the list of units selected *by the user on the map* (from frontend state).
@@ -438,9 +433,9 @@ def update_polygon_selection(state: lg_State) -> lg_State:
         for i, unit_id in enumerate(selected_workflow_units):
             if str(unit_id) not in selected_map_polygons_str:
                 missing_units.append((i, unit_id))
-                print(f"URGENT DEBUG: Missing unit {unit_id} at index {i}")
+                logger.info(f"URGENT DEBUG: Missing unit {unit_id} at index {i}")
 
-        print(f"URGENT DEBUG: Total missing units: {len(missing_units)}")
+        logger.info(f"URGENT DEBUG: Total missing units: {len(missing_units)}")
 
         if missing_units:
             # Update workflow selected_polygons to include missing units
@@ -448,7 +443,7 @@ def update_polygon_selection(state: lg_State) -> lg_State:
             for _, missing_unit in missing_units:
                 if missing_unit not in current_polygons:
                     current_polygons.append(missing_unit)
-                    print(f"URGENT DEBUG: Added unit {missing_unit} to selected_polygons")
+                    logger.info(f"URGENT DEBUG: Added unit {missing_unit} to selected_polygons")
 
             # Update state with new polygon selections
             state["selected_polygons"] = current_polygons
@@ -456,32 +451,30 @@ def update_polygon_selection(state: lg_State) -> lg_State:
             # CRITICAL: Trigger immediate map update via map_update_request
             state["map_update_request"] = {
                 "action": "update_map_selection",
-                "selected_place_g_units": selected_workflow_units,
-                "selected_place_g_unit_types": state.get("selected_place_g_unit_types", [])
+                "places": state.get("places", [])  # Send the single source of truth
             }
-            print(f"URGENT DEBUG: Set map_update_request: {state['map_update_request']}")
+            logger.info(f"URGENT DEBUG: Set map_update_request: {state['map_update_request']}")
             logger.info(f"update_polygon_selection: Set map_update_request for units {selected_workflow_units}")
 
             # Store which units need map highlighting for the next node
             units_list = [unit for _, unit in missing_units]
             state.setdefault("units_needing_map_selection", [])
             state["units_needing_map_selection"] = units_list
-            print(f"URGENT DEBUG: Units needing map selection: {units_list}")
+            logger.info(f"URGENT DEBUG: Units needing map selection: {units_list}")
         else:
             # No missing units, but still need to ensure map is updated
             state.setdefault("units_needing_map_selection", [])
             state["units_needing_map_selection"] = []
-            print(f"URGENT DEBUG: No units need map selection")
+            logger.info(f"URGENT DEBUG: No units need map selection")
 
             # CRITICAL: Even if no missing units, still send map update request to ensure map reflects current state
             # This is important when polygons are added through other means (e.g., resolve_place_and_unit)
             if selected_workflow_units:
                 state["map_update_request"] = {
                     "action": "update_map_selection",
-                    "selected_place_g_units": selected_workflow_units,
-                    "selected_place_g_unit_types": state.get("selected_place_g_unit_types", [])
+                    "places": state.get("places", [])  # Send the single source of truth
                 }
-                print(f"URGENT DEBUG: Set map_update_request for existing units: {state['map_update_request']}")
+                logger.info(f"URGENT DEBUG: Set map_update_request for existing units: {state['map_update_request']}")
                 logger.info(f"update_polygon_selection: Set map_update_request for existing units {selected_workflow_units}")
     else:
         state.setdefault("units_needing_map_selection", [])
@@ -504,10 +497,10 @@ def check_map_selection_needed_router(state: lg_State) -> str:
     current_place_index = state.get("current_place_index")
     extracted_place_names = state.get("extracted_place_names", [])
 
-    print(
+    logger.info(
         f"URGENT DEBUG: check_map_selection_needed_router - units_needing_map_selection={units_needing_map_selection}"
     )
-    print(
+    logger.info(
         f"URGENT DEBUG: check_map_selection_needed_router - current_place_index={current_place_index}, extracted_places={extracted_place_names}"
     )
 
@@ -528,11 +521,11 @@ def check_map_selection_needed_router(state: lg_State) -> str:
         current_place_index is not None and current_place_index < len(extracted_place_names)
     )
 
-    print(f"URGENT DEBUG: ROUTER LOGIC - current_place_index={current_place_index}, len(extracted_place_names)={len(extracted_place_names)}")
-    print(f"URGENT DEBUG: ROUTER LOGIC - has_more_places check: {current_place_index} < {len(extracted_place_names)} = {has_more_places}")
+    logger.info(f"URGENT DEBUG: ROUTER LOGIC - current_place_index={current_place_index}, len(extracted_place_names)={len(extracted_place_names)}")
+    logger.info(f"URGENT DEBUG: ROUTER LOGIC - has_more_places check: {current_place_index} < {len(extracted_place_names)} = {has_more_places}")
 
     if has_more_places:
-        print(
+        logger.info(
             f"URGENT DEBUG: No map selection needed and more places remain – continuing to resolve_place_and_unit (will process place {current_place_index})"
         )
         return "resolve_place_and_unit"
@@ -568,19 +561,18 @@ def request_map_selection(state: lg_State) -> lg_State | Command:
     target_index = current_place_index - 1 if current_place_index is not None and current_place_index > 0 else 0
     place_name = extracted_place_names[target_index] if target_index < len(extracted_place_names) else "the area"
 
-    print(f"URGENT DEBUG: Requesting map selection for unit {target_unit} ({place_name})")
-    print(f"URGENT DEBUG: Multi-place workflow: {is_multi_place}, continue_to_next_place: {continue_to_next_place}")
+    logger.info(f"URGENT DEBUG: Requesting map selection for unit {target_unit} ({place_name})")
+    logger.info(f"URGENT DEBUG: Multi-place workflow: {is_multi_place}, continue_to_next_place: {continue_to_next_place}")
 
     # CRITICAL: For multi-place workflows, trigger SSE update and continue without interrupting
     if is_multi_place and continue_to_next_place:
-        print(f"URGENT DEBUG: Multi-place workflow - triggering SSE update and continuing to next place")
+        logger.info(f"URGENT DEBUG: Multi-place workflow - triggering SSE update and continuing to next place")
 
         # Set map_update_request to trigger SSE update for ALL selected units, not just the target
-        all_selected_units = state.get("selected_place_g_units", [])
+        all_selected_units = get_selected_units(state)
         state["map_update_request"] = {
             "action": "update_map_selection",
-            "selected_place_g_units": all_selected_units,
-            "selected_place_g_unit_types": state.get("selected_place_g_unit_types", [])
+            "places": state.get("places", [])  # Send the single source of truth
         }
 
         # Add AI message for user feedback
@@ -589,11 +581,11 @@ def request_map_selection(state: lg_State) -> lg_State | Command:
             state["messages"] = []
         state["messages"].append(AIMessage(content=message))
 
-        print(f"URGENT DEBUG: Multi-place - continuing to resolve_place_and_unit via Command")
+        logger.info(f"URGENT DEBUG: Multi-place - continuing to resolve_place_and_unit via Command")
         # Clear the processed unit from units_needing_map_selection
         remaining_units = [
             unit for unit in units_needing_map_selection if unit != target_unit]
-        print(f"URGENT DEBUG: Removing processed unit {target_unit}, remaining units: {remaining_units}")
+        logger.info(f"URGENT DEBUG: Removing processed unit {target_unit}, remaining units: {remaining_units}")
 
         # Continue to next place processing via Command
         return Command(
@@ -605,13 +597,11 @@ def request_map_selection(state: lg_State) -> lg_State | Command:
             }
         )
     else:
-        print(f"URGENT DEBUG: Single place or last place - creating standard map selection interrupt")
+        logger.info(f"URGENT DEBUG: Single place or last place - creating standard map selection interrupt")
         return Command(
             goto="resolve_theme",
             update={
-                "selected_place_g_places": state.get("selected_place_g_places", []),
-                "selected_place_g_units": state.get("selected_place_g_units", []),  # Send all units, not just current
-                "selected_place_g_unit_types": state.get("selected_place_g_unit_types", []),
+                "places": state.get("places", []),  # Pass the single source of truth
                 "current_place_index": current_place_index,
                 "extracted_place_names": extracted_place_names,
                 "current_node": "request_map_selection",
@@ -649,21 +639,21 @@ def select_unit_on_map(state: lg_State) -> lg_State | Command:
     # DEBUG: Log key state variables
     current_place_index = state.get("current_place_index")
     extracted_place_names = state.get("extracted_place_names", [])
-    selected_workflow_units = state.get("selected_place_g_units", [])
-    print(f"URGENT DEBUG: select_unit_on_map state - current_place_index={current_place_index}, extracted_places={extracted_place_names}, selected_units={selected_workflow_units}")
+    selected_workflow_units = get_selected_units(state)
+    logger.info(f"URGENT DEBUG: select_unit_on_map state - current_place_index={current_place_index}, extracted_places={extracted_place_names}, selected_units={selected_workflow_units}")
 
     last_intent = state.get("last_intent_payload")
     if last_intent:
-        print(f"URGENT DEBUG: select_unit_on_map has last_intent: {last_intent}")
+        logger.info(f"URGENT DEBUG: select_unit_on_map has last_intent: {last_intent}")
         if last_intent.get("intent") == "AddPlace" or last_intent.get("intent") == "RemovePlace":
             # Hand control back to the normal router so e.g. AddPlace_node runs
-            print(f"URGENT DEBUG: select_unit_on_map returning to agent_node for intent: {last_intent}")
+            logger.info(f"URGENT DEBUG: select_unit_on_map returning to agent_node for intent: {last_intent}")
             logging.info(f"resolve_theme: last_intent_payload set to {last_intent}, returning to agent_node.")
             return Command(goto="agent_node")
     else:
         logger.debug("URGENT DEBUG: select_unit_on_map no last_intent")
     # Get the list of units selected so far by the workflow (place/unit selection nodes).
-    selected_workflow_units = state.get("selected_place_g_units", [])
+    selected_workflow_units = get_selected_units(state)
     # Get the list of units selected *by the user on the map* (from frontend state).
     selected_map_polygons_str = [str(p) for p in state.get("selected_polygons", [])] # Ensure string comparison
 
@@ -693,48 +683,50 @@ def select_unit_on_map(state: lg_State) -> lg_State | Command:
 
 
             if current_place_index is None:
-                print(f"URGENT DEBUG: select_unit_on_map unit type selection - current_place_index={current_place_index}, extracted_places={state.get('extracted_place_names', [])}")
+                logger.info(f"URGENT DEBUG: select_unit_on_map unit type selection - current_place_index={current_place_index}, extracted_places={state.get('extracted_place_names', [])}")
                 logger.info("select_unit_on_map: Unit type selection detected, issuing interrupt to update map state immediately")
 
                 # CRITICAL FIX: Only send the current place's unit for map update, not all units
                 # This prevents fetching multiple polygons simultaneously during multi-place workflows
-                selected_units = state.get("selected_place_g_units", [])
-                selected_unit_types = state.get("selected_place_g_unit_types", [])
+                selected_units = get_selected_units(state)
+                selected_unit_types = get_selected_unit_types(state)
 
                 # Calculate which unit corresponds to the current place being processed
                 if current_place_index is not None and current_place_index > 0 and current_place_index <= len(selected_units):
                     # Send only the current place's unit (most recently added)
                     current_unit = [selected_units[current_place_index - 1]]
                     current_unit_type = [selected_unit_types[current_place_index - 1]] if current_place_index - 1 < len(selected_unit_types) else []
-                    print(f"URGENT DEBUG: select_unit_on_map sending only current place unit: {current_unit} (index {current_place_index - 1})")
+                    logger.info(f"URGENT DEBUG: select_unit_on_map sending only current place unit: {current_unit} (index {current_place_index - 1})")
                 else:
                     # Fallback: send all units (existing behavior)
                     current_unit = selected_units
                     current_unit_type = selected_unit_types
-                    print(f"URGENT DEBUG: select_unit_on_map fallback - sending all units: {current_unit}")
+                    logger.info(f"URGENT DEBUG: select_unit_on_map fallback - sending all units: {current_unit}")
 
                 interrupt(value={
-                    "selected_place_g_places": state.get("selected_place_g_places", []),
-                    "selected_place_g_units": current_unit,
-                    "selected_place_g_unit_types": current_unit_type,
+                    # Only send the single source of truth - places array
+                    "places": state.get("places", []),
                     "current_place_index": current_place_index,
-                    "extracted_place_names": state.get("extracted_place_names", []),
                     "current_node": "select_unit_on_map",
                     "selection_idx": None,
-                    # CRITICAL: Include places array - the single source of truth
-                    "places": state.get("places", []),
+                    # Map update info for frontend
+                    "map_update_request": {
+                        "action": "update_map_selection",
+                        "units": current_unit,
+                        "unit_types": current_unit_type
+                    }
                 })
                 # WORKFLOW PAUSES HERE - interrupt() returns from the function
 
             # Find all units that are in the workflow but not yet on the map
-            print(f"URGENT DEBUG: select_unit_on_map checking missing units - workflow_units={selected_workflow_units}, map_polygons={selected_map_polygons_str}")
+            logger.info(f"URGENT DEBUG: select_unit_on_map checking missing units - workflow_units={selected_workflow_units}, map_polygons={selected_map_polygons_str}")
             missing_units = []
             for i, unit_id in enumerate(selected_workflow_units):
                 if str(unit_id) not in selected_map_polygons_str:
                     missing_units.append((i, unit_id))
-                    print(f"URGENT DEBUG: Missing unit {unit_id} at index {i}")
+                    logger.info(f"URGENT DEBUG: Missing unit {unit_id} at index {i}")
 
-            print(f"URGENT DEBUG: Total missing units: {len(missing_units)}")
+            logger.info(f"URGENT DEBUG: Total missing units: {len(missing_units)}")
 
             # CRITICAL FIX: Handle missing units first, then check for more places
             # This ensures each place gets proper map selection before moving to the next
@@ -764,7 +756,7 @@ def select_unit_on_map(state: lg_State) -> lg_State | Command:
                     target_missing_index, target_missing_unit = missing_units[0]
 
                 if target_missing_unit is not None:
-                    print(f"URGENT DEBUG: Processing map selection for unit {target_missing_unit} (index {target_missing_index})")
+                    logger.info(f"URGENT DEBUG: Processing map selection for unit {target_missing_unit} (index {target_missing_index})")
                     logger.info(f"Unit {target_missing_unit} (index {target_missing_index}) not found in map selections. Updating map and continuing workflow.")
 
                     # CRITICAL FIX: Update workflow's selected_polygons to match the unit being selected
@@ -776,26 +768,26 @@ def select_unit_on_map(state: lg_State) -> lg_State | Command:
                     if target_missing_str not in current_polygons_str:
                         updated_polygons = current_selected_polygons + [target_missing_unit]
                         state["selected_polygons"] = updated_polygons
-                        print(f"URGENT DEBUG: Updated workflow selected_polygons from {current_selected_polygons} to {updated_polygons}")
+                        logger.info(f"URGENT DEBUG: Updated workflow selected_polygons from {current_selected_polygons} to {updated_polygons}")
                     else:
-                        print(f"URGENT DEBUG: Unit {target_missing_unit} already in selected_polygons: {current_selected_polygons}")
+                        logger.info(f"URGENT DEBUG: Unit {target_missing_unit} already in selected_polygons: {current_selected_polygons}")
 
                     # CRITICAL FIX: Use interrupt to ensure proper sequencing
                     # Portsmouth must be fully processed (including map selection) before Southampton starts
-                    selected_unit_types = state.get("selected_place_g_unit_types", [])
+                    selected_unit_types = get_selected_unit_types(state)
                     missing_unit_type = [selected_unit_types[target_missing_index]] if target_missing_index is not None and target_missing_index < len(selected_unit_types) else []
 
-                    print(f"URGENT DEBUG: Using interrupt to ensure Portsmouth is selected before Southampton processing")
+                    logger.info(f"URGENT DEBUG: Using interrupt to ensure Portsmouth is selected before Southampton processing")
 
                     # CRITICAL FIX: Check if there are more places to process
                     extracted_place_names = state.get("extracted_place_names", [])
                     continue_to_next_place = current_place_index is not None and current_place_index < len(extracted_place_names)
                     if continue_to_next_place:
-                        print(f"URGENT DEBUG: More places to process ({current_place_index} of {len(extracted_place_names)}), will continue to next place after this interrupt")
+                        logger.info(f"URGENT DEBUG: More places to process ({current_place_index} of {len(extracted_place_names)}), will continue to next place after this interrupt")
 
                     # CRITICAL FIX: For multi-place workflows, don't interrupt - just continue processing
                     if continue_to_next_place:
-                        print(f"URGENT DEBUG: Skipping interrupt for multi-place workflow - continuing directly to next place")
+                        logger.info(f"URGENT DEBUG: Skipping interrupt for multi-place workflow - continuing directly to next place")
                         # Update the state to ensure the polygon is marked as selected
                         # This ensures the frontend shows the polygon as selected even without user interaction
                         # Update the workflow state directly and trigger map update
@@ -810,15 +802,14 @@ def select_unit_on_map(state: lg_State) -> lg_State | Command:
 
                         # CRITICAL: Use the map_update_request mechanism to trigger map highlighting
                         # Send ALL selected units, not just the current one being processed
-                        all_selected_units = state.get("selected_place_g_units", [])
+                        all_selected_units = get_selected_units(state)
                         state["map_update_request"] = {
                             "action": "update_map_selection",
-                            "selected_place_g_units": all_selected_units,
-                            "selected_place_g_unit_types": state.get("selected_place_g_unit_types", [])
+                            "places": state.get("places", [])  # Send the single source of truth
                         }
 
-                        print(f"URGENT DEBUG: Updating selected_polygons to include {target_missing_unit} and setting map_update_request")
-                        print(f"URGENT DEBUG: map_update_request = {state['map_update_request']}")
+                        logger.info(f"URGENT DEBUG: Updating selected_polygons to include {target_missing_unit} and setting map_update_request")
+                        logger.info(f"URGENT DEBUG: map_update_request = {state['map_update_request']}")
 
                         # Use Command with update to ensure map_update_request is persisted and triggers SSE
                         return Command(
@@ -829,18 +820,19 @@ def select_unit_on_map(state: lg_State) -> lg_State | Command:
                             }
                         )
                     else:
-                        print(f"URGENT DEBUG: Single place or last place - creating interrupt for map selection")
+                        logger.info(f"URGENT DEBUG: Single place or last place - creating interrupt for map selection")
                         interrupt(value={
-                            "selected_place_g_places": state.get("selected_place_g_places", []),
-                            "selected_place_g_units": [target_missing_unit],  # Only the target missing unit
-                            "selected_place_g_unit_types": missing_unit_type,
+                            # Only send the single source of truth - places array
+                            "places": state.get("places", []),
                             "current_place_index": current_place_index,
-                            "extracted_place_names": state.get("extracted_place_names", []),
                             "current_node": "select_unit_on_map",
                             "selection_idx": None,
                             "message": f"Please select {extracted_place_names[target_missing_index] if target_missing_index is not None and target_missing_index < len(extracted_place_names) else 'the area'} on the map to continue.",
-                            # CRITICAL: Include places array - the single source of truth
-                            "places": state.get("places", []),
+                            # Map update info for frontend to highlight the missing unit
+                            "map_update_request": {
+                                "action": "highlight_missing",
+                                "missing_unit": target_missing_unit
+                            }
                         })
 
                     # Return to pause workflow and wait for map selection to complete
@@ -848,13 +840,13 @@ def select_unit_on_map(state: lg_State) -> lg_State | Command:
 
             # CRITICAL FIX: Only after handling missing units, check if there are more places to process
             if current_place_index is not None and current_place_index < len(extracted_place_names):
-                print(f"URGENT DEBUG: More places to process ({current_place_index} of {len(extracted_place_names)}), continuing to next place")
+                logger.info(f"URGENT DEBUG: More places to process ({current_place_index} of {len(extracted_place_names)}), continuing to next place")
                 logger.info(f"select_unit_on_map: More places to process ({current_place_index} of {len(extracted_place_names)}), continuing to next place")
                 return Command(goto="resolve_place_and_unit", update=state)
 
             # CRITICAL FIX: If all places are processed and no missing units, exit cleanly
             if current_place_index is not None and current_place_index >= len(extracted_place_names):
-                print(f"URGENT DEBUG: All places processed ({current_place_index} >= {len(extracted_place_names)}), exiting select_unit_on_map cleanly")
+                logger.info(f"URGENT DEBUG: All places processed ({current_place_index} >= {len(extracted_place_names)}), exiting select_unit_on_map cleanly")
                 logger.info(f"select_unit_on_map: All places processed ({current_place_index} >= {len(extracted_place_names)}), proceeding to conditional routing")
                 return state
 
@@ -870,7 +862,7 @@ def find_cubes_node(state: lg_State) -> lg_State | Command:
     """
     Retrieves the data‑cubes (statistical datasets) for the **currently selected theme**
     (``state["selected_theme"]``) and every selected geographical unit
-    (``selected_place_g_units`` ∪ ``selected_polygons``).
+    (from the `places` array - single source of truth).
 
     Key steps
     ----------
@@ -1125,8 +1117,7 @@ def find_cubes_node(state: lg_State) -> lg_State | Command:
     all_selected_unit_types = get_selected_unit_types(state)
     state["map_update_request"] = {
         "action": "update_map_selection",
-        "selected_place_g_units": all_selected_units,
-        "selected_place_g_unit_types": all_selected_unit_types
+        "places": state.get("places", [])  # Send the single source of truth
     }
 
     # CRITICAL: Clear last_intent_payload in the actual state to prevent duplicate operations
@@ -1142,13 +1133,10 @@ def find_cubes_node(state: lg_State) -> lg_State | Command:
             "last_intent_payload": {},
             # CRITICAL: Clear selection_idx through interrupt to prevent stale values
             "selection_idx": None,
-            # Include selected units so SSE client can update place-state correctly
-            "selected_place_g_units": all_selected_units,
-            "selected_place_g_unit_types": all_selected_unit_types,
-            # CRITICAL: Include map_update_request to ensure frontend updates map selection
-            "map_update_request": state["map_update_request"],
             # CRITICAL: Include places array - the single source of truth
             "places": state.get("places", []),
+            # CRITICAL: Include map_update_request to ensure frontend updates map selection
+            "map_update_request": state["map_update_request"],
         }
     )
 
@@ -1165,9 +1153,9 @@ def resolve_place_and_unit(state: lg_State) -> lg_State | Command:
     It never mutates state *before* raising an interrupt.
     """
     logger.debug("=== WORKFLOW TRACE: resolve_place_and_unit function called! ===")
-    print(f"URGENT DEBUG: FUNCTION ENTRY - current_place_index={state.get('current_place_index')}, selection_idx={state.get('selection_idx')}")
-    print(f"URGENT DEBUG: FUNCTION ENTRY - extracted_place_names={state.get('extracted_place_names', [])}")
-    print(f"URGENT DEBUG: FUNCTION ENTRY - selected_place_g_units={state.get('selected_place_g_units', [])}")
+    logger.info(f"URGENT DEBUG: FUNCTION ENTRY - current_place_index={state.get('current_place_index')}, selection_idx={state.get('selection_idx')}")
+    logger.info(f"URGENT DEBUG: FUNCTION ENTRY - extracted_place_names={state.get('extracted_place_names', [])}")
+    logger.info(f"URGENT DEBUG: FUNCTION ENTRY - selected_units_from_places={get_selected_units(state)}")
     logger.info("Node: resolve_place_and_unit entered.")
     i       = state.get("current_place_index", 0) or 0
     places  = state.get("places", []) or []
@@ -1197,7 +1185,7 @@ def resolve_place_and_unit(state: lg_State) -> lg_State | Command:
     place   = places[i].copy()         # work on a private copy
 
     # CRITICAL DEBUG: Log the current place resolution status
-    print(f"URGENT DEBUG: place {i} '{place['name']}': g_place={place.get('g_place')}, g_unit={place.get('g_unit')}, selection_idx={current_selection_idx}")
+    logger.info(f"URGENT DEBUG: place {i} '{place['name']}': g_place={place.get('g_place')}, g_unit={place.get('g_unit')}, selection_idx={current_selection_idx}")
     logger.info(f"resolve_place_and_unit: Processing place {i} '{place['name']}': g_place={place.get('g_place')}, g_unit={place.get('g_unit')}, selection_idx={current_selection_idx}")
 
     # If this place is already fully resolved, advance to next place
@@ -1218,29 +1206,14 @@ def resolve_place_and_unit(state: lg_State) -> lg_State | Command:
         # This ensures map clicks take priority over database search results
         if place.get("g_unit") is not None:
             logger.info(f"Place '{place['name']}' has g_unit {place['g_unit']} from map click, using it directly")
-            # This place already has unit info from map click, add to global lists and mark as resolved
-            selected_units = state.get("selected_place_g_units", [])
-
-            # Check if this unit is already selected to prevent duplicates
-            if place["g_unit"] not in selected_units:
-                selected_units.append(place["g_unit"])
-                state["selected_place_g_units"] = selected_units
+            # This place already has unit info from map click
+            # No need to update derived fields - the data is already in the places array
+            # The places array is the single source of truth
+            selected_units = get_selected_units(state)
+            if place["g_unit"] in selected_units:
+                logger.info(f"Unit {place['g_unit']} already exists in places array")
             else:
-                logger.info(f"Skipping duplicate g_unit {place['g_unit']} - already in selected_place_g_units")
-
-            # Only add unit type and places if we added the unit (to keep arrays in sync)
-            if place["g_unit"] not in selected_units or len(selected_units) == 1:
-                selected_unit_types = state.get("selected_place_g_unit_types", [])
-                new_unit_type = place.get("g_unit_type")
-                logger.info(f"resolve_place_and_unit: Adding unit_type '{new_unit_type}' to existing types {selected_unit_types}")
-                selected_unit_types.append(new_unit_type)
-                state["selected_place_g_unit_types"] = selected_unit_types
-                logger.info(f"resolve_place_and_unit: Updated selected_place_g_unit_types to {state['selected_place_g_unit_types']}")
-
-                # Also add to selected_place_g_places (using g_unit as placeholder since we don't have g_place)
-                selected_places = state.get("selected_place_g_places", [])
-                selected_places.append(place["g_unit"])  # Use g_unit as g_place placeholder for map clicks
-                state["selected_place_g_places"] = selected_places
+                logger.info(f"Place '{place['name']}' with g_unit {place['g_unit']} from map click ready to use")
 
             # CRITICAL: Also add to selected_polygons to keep lists in sync and prevent duplicates
             selected_polygons = state.get("selected_polygons", [])
@@ -1251,7 +1224,7 @@ def resolve_place_and_unit(state: lg_State) -> lg_State | Command:
 
             places[i] = place
             state["current_place_index"] = i + 1
-            logger.info(f"Added map-clicked g_unit {place['g_unit']} to selected_place_g_units")
+            logger.info(f"Added map-clicked g_unit {place['g_unit']} to places array")
             return state
 
         # If no map click polygon, proceed with normal place disambiguation
@@ -1414,28 +1387,28 @@ def resolve_place_and_unit(state: lg_State) -> lg_State | Command:
 
             if not has_unit_options:
                 # This place hasn't been prompted yet, clear inherited selection so it gets its own prompt
-                print(
+                logger.info(
                     f"URGENT DEBUG: Clearing inherited unit-type selection {current_selection} for place {i} ({place['name']}) to ensure independent choice"
                 )
                 state["selection_idx"] = None
                 current_selection = None
             else:
                 # This place has been prompted and user made a selection - preserve it
-                print(
+                logger.info(
                     f"URGENT DEBUG: Preserving user selection {current_selection} for place {i} ({place['name']}) (place was prompted)"
                 )
 
         elif current_selection is not None and str(current_selection) in ["LG_DIST", "MOD_DIST", "CONSTITUENCY", "WARD", "PARL_CONST", "MOD_REG", "COUNTY"]:
             # Single place or first place in multi-place: preserve unit type selection
-            print(f"URGENT DEBUG: Preserving unit type selection: {current_selection}")
+            logger.info(f"URGENT DEBUG: Preserving unit type selection: {current_selection}")
         else:
             # This was a place selection (numeric) or stale value, clear it
-            print(f"URGENT DEBUG: Clearing place selection: {current_selection}")
+            logger.info(f"URGENT DEBUG: Clearing place selection: {current_selection}")
             state["selection_idx"] = None   # consume the click or stale selection
 
     # ───────────────────────────────────────── unit disambiguation
 
-    print(f"URGENT DEBUG: About to enter unit disambiguation - selection_idx={state.get('selection_idx')}")
+    logger.info(f"URGENT DEBUG: About to enter unit disambiguation - selection_idx={state.get('selection_idx')}")
     if place["g_unit"] is None:
         logger.info(f"resolve_place_and_unit: ENTERING unit disambiguation for '{place['name']}'")
         urows = place["unit_rows"]
@@ -1450,10 +1423,10 @@ def resolve_place_and_unit(state: lg_State) -> lg_State | Command:
         is_multi_place = len(extracted_place_names) > 1
 
         # Check if this place already has a resolved unit (indicating this is a re-run after selection)
-        selected_units = state.get("selected_place_g_units", [])
+        selected_units = get_selected_units(state)
         current_place_has_unit = len(selected_units) > i and selected_units[i] is not None
         current_place_index = state.get("current_place_index")
-        print(f"URGENT DEBUG: Unit disambiguation debug - place {i} ({place['name']}), selected_units={selected_units}, current_place_has_unit={current_place_has_unit}, sel_idx={sel_idx}, current_place_index={current_place_index}")
+        logger.info(f"URGENT DEBUG: Unit disambiguation debug - place {i} ({place['name']}), selected_units={selected_units}, current_place_has_unit={current_place_has_unit}, sel_idx={sel_idx}, current_place_index={current_place_index}")
 
         # For multi-place workflows, apply the same logic as above - ensure each place gets prompted.
         # Only preserve selections if this place has already been prompted (has unit options).
@@ -1465,14 +1438,14 @@ def resolve_place_and_unit(state: lg_State) -> lg_State | Command:
 
             if not has_unit_options:
                 # This place hasn't been prompted yet, clear inherited selection
-                print(
+                logger.info(
                     f"URGENT DEBUG: Multi-place unit disambiguation – clearing inherited selection {sel_idx} for place {i} ({place['name']}) (not yet prompted)"
                 )
                 sel_idx = None
                 state["selection_idx"] = None
             else:
                 # This place has been prompted and user responded - preserve selection
-                print(
+                logger.info(
                     f"URGENT DEBUG: Multi-place unit disambiguation – preserving user selection {sel_idx} for place {i} ({place['name']}) (place was prompted)"
                 )
 
@@ -1536,18 +1509,8 @@ def resolve_place_and_unit(state: lg_State) -> lg_State | Command:
     # CRITICAL: Clear selection state for next place and ensure it's persisted via Command
     logger.info(f"resolve_place_and_unit: About to clear selection_idx for next place. Current state: selection_idx={state.get('selection_idx')}, current_place_index={state.get('current_place_index')}")
 
-    # keep legacy flat lists for downstream code (can be removed later)
-    existing_units = state.get("selected_place_g_units", [])
-    existing_unit_types = state.get("selected_place_g_unit_types", [])
-    existing_places = state.get("selected_place_g_places", [])
-
-    # Avoid duplicates by checking if already exists
-    if place["g_unit"] not in existing_units:
-        state["selected_place_g_units"] = existing_units + [place["g_unit"]]
-    if place["g_unit_type"] not in existing_unit_types:
-        state["selected_place_g_unit_types"] = existing_unit_types + [place["g_unit_type"]]
-    if place["g_place"] not in existing_places:
-        state["selected_place_g_places"] = existing_places + [place["g_place"]]
+    # Data is already stored in the places array - no need for derived fields
+    # The places array is the single source of truth
 
     # CRITICAL: Use Command to ensure selection_idx clearing is persisted to checkpointer
     # But preserve the selection type for select_unit_on_map to detect button clicks
@@ -1559,20 +1522,17 @@ def resolve_place_and_unit(state: lg_State) -> lg_State | Command:
         "current_place_index": i + 1,
         "selection_idx": None,  # CRITICAL: Clear for next place
         "options": [],  # Clear consumed options
-        "selected_place_g_units": state["selected_place_g_units"],
-        "selected_place_g_unit_types": state["selected_place_g_unit_types"],
-        "selected_place_g_places": state["selected_place_g_places"],
     }
 
-    print(f"=== WORKFLOW TRACE: resolve_place_and_unit returning Command - place {i} completed! ===")
+    logger.info(f"=== WORKFLOW TRACE: resolve_place_and_unit returning Command - place {i} completed! ===")
     logger.info(f"resolve_place_and_unit: Completed place {i} ({place['name']}), advancing to place {i + 1}, CLEARED selection_idx via Command update")
 
     # Use Command with update to ensure state changes are persisted properly
     # Let the conditional router handle the routing to update_polygon_selection
-    print(f"=== WORKFLOW TRACE: resolve_place_and_unit returning Command with update (router will decide next node) ===")
-    print(f"URGENT DEBUG: COMMAND UPDATE STATE - current_place_index advancing from {i} to {i + 1}")
-    print(f"URGENT DEBUG: COMMAND UPDATE STATE - selection_idx being cleared: {state_update.get('selection_idx')}")
-    print(f"URGENT DEBUG: COMMAND UPDATE STATE - places completed so far: {len(state_update.get('selected_place_g_units', []))}")
+    logger.info(f"=== WORKFLOW TRACE: resolve_place_and_unit returning Command with update (router will decide next node) ===")
+    logger.info(f"URGENT DEBUG: COMMAND UPDATE STATE - current_place_index advancing from {i} to {i + 1}")
+    logger.info(f"URGENT DEBUG: COMMAND UPDATE STATE - selection_idx being cleared: {state_update.get('selection_idx')}")
+    logger.info(f"URGENT DEBUG: COMMAND UPDATE STATE - places completed so far: {len(get_selected_units(state))}")
     return state_update
 
 
@@ -1610,28 +1570,28 @@ def resolve_theme(state: lg_State) -> lg_State | Command:
     # Step 0 · CRITICAL: Ensure all places are processed before theme processing
     # ------------------------------------------------------------------
     logging.info("Node: resolve_theme entered.")
-    print(f"=== URGENT DEBUG: resolve_theme - about to check place processing ===")
+    logger.info(f"=== URGENT DEBUG: resolve_theme - about to check place processing ===")
 
     # Check if there are still places being processed
     current_place_index = state.get("current_place_index", 0) or 0
     extracted_place_names = state.get("extracted_place_names", [])
     num_places = len(extracted_place_names)
 
-    print(f"=== URGENT DEBUG: resolve_theme - current_place_index={current_place_index}, num_places={num_places} ===")
+    logger.info(f"=== URGENT DEBUG: resolve_theme - current_place_index={current_place_index}, num_places={num_places} ===")
 
     if current_place_index < num_places:
-        print(f"=== URGENT DEBUG: resolve_theme - EARLY RETURN - places still processing ===")
+        logger.info(f"=== URGENT DEBUG: resolve_theme - EARLY RETURN - places still processing ===")
         logging.info(f"resolve_theme: Places still being processed ({current_place_index} of {num_places}), returning state to use conditional routing")
         return state
 
-    print(f"=== URGENT DEBUG: resolve_theme - continuing past place check ===")
-    logging.info(f"resolve_theme: Call details - selected_theme={bool(state.get('selected_theme'))}, extracted_theme='{state.get('extracted_theme')}', units={len(state.get('selected_place_g_units', []))}")
+    logger.info(f"=== URGENT DEBUG: resolve_theme - continuing past place check ===")
+    logging.info(f"resolve_theme: Call details - selected_theme={bool(state.get('selected_theme'))}, extracted_theme='{state.get('extracted_theme')}', units={len(get_selected_units(state))}")
     # Don't set current_node here - only set it when we actually interrupt for theme selection
 
-    print(f"=== URGENT DEBUG: resolve_theme - about to check intent queue ===")
+    logger.info(f"=== URGENT DEBUG: resolve_theme - about to check intent queue ===")
     # Check intent queue for AddTheme intents and process them
     intent_queue = state.get("intent_queue", [])
-    print(f"=== URGENT DEBUG: resolve_theme - intent_queue length: {len(intent_queue) if intent_queue else 'None'} ===")
+    logger.info(f"=== URGENT DEBUG: resolve_theme - intent_queue length: {len(intent_queue) if intent_queue else 'None'} ===")
     if intent_queue:
         theme_intents = [intent for intent in intent_queue if intent.get("intent") == "AddTheme"]
         if theme_intents:
@@ -1647,77 +1607,77 @@ def resolve_theme(state: lg_State) -> lg_State | Command:
                 state["intent_queue"] = remaining_queue
                 logging.info(f"resolve_theme: Removed AddTheme intent from queue, {len(remaining_queue)} intents remaining")
 
-    print(f"=== URGENT DEBUG: resolve_theme - about to get units ===")
+    logger.info(f"=== URGENT DEBUG: resolve_theme - about to get units ===")
     selected_polygons = state.get("selected_polygons", []) or []
-    print(f"=== URGENT DEBUG: resolve_theme - selected_polygons: {selected_polygons} ===")
-    # Use only selected_place_g_units since both lists should be synchronized
+    logger.info(f"=== URGENT DEBUG: resolve_theme - selected_polygons: {selected_polygons} ===")
+    # Use only places array as the single source of truth
     # Adding selected_polygons creates duplicates since they contain the same data
-    units = list(state.get("selected_place_g_units", []))
-    print(f"=== URGENT DEBUG: resolve_theme - units: {units} ===")
+    units = get_selected_units(state)
+    logger.info(f"=== URGENT DEBUG: resolve_theme - units: {units} ===")
 
     # ------------------------------------------------------------------
     # Step 1 · Build the ‹available› theme list
     #          → if *no* units yet, fall back to the catalogue
     # ------------------------------------------------------------------
-    print(f"=== URGENT DEBUG: resolve_theme - about to build theme list for units: {units} ===")
+    logger.info(f"=== URGENT DEBUG: resolve_theme - about to build theme list for units: {units} ===")
     if units:
-        print(f"=== URGENT DEBUG: resolve_theme - calling find_themes_for_unit for {len(set(units))} unique units ===")
+        logger.info(f"=== URGENT DEBUG: resolve_theme - calling find_themes_for_unit for {len(set(units))} unique units ===")
         dfs = []
         for u in set(units):
-            print(f"=== URGENT DEBUG: resolve_theme - querying themes for unit {u} ===")
+            logger.info(f"=== URGENT DEBUG: resolve_theme - querying themes for unit {u} ===")
             try:
                 df = pd.read_json(io.StringIO(find_themes_for_unit(str(u))), orient="records")
                 dfs.append(df)
-                print(f"=== URGENT DEBUG: resolve_theme - got {len(df)} themes for unit {u} ===")
+                logger.info(f"=== URGENT DEBUG: resolve_theme - got {len(df)} themes for unit {u} ===")
             except Exception as e:
-                print(f"=== URGENT DEBUG: resolve_theme - ERROR querying unit {u}: {e} ===")
+                logger.info(f"=== URGENT DEBUG: resolve_theme - ERROR querying unit {u}: {e} ===")
         available_df = pd.concat(dfs).drop_duplicates("ent_id") if dfs else pd.DataFrame()
-        print(f"=== URGENT DEBUG: resolve_theme - combined themes: {len(available_df)} ===")
+        logger.info(f"=== URGENT DEBUG: resolve_theme - combined themes: {len(available_df)} ===")
     else:
-        print(f"=== URGENT DEBUG: resolve_theme - no units, getting all themes ===")
+        logger.info(f"=== URGENT DEBUG: resolve_theme - no units, getting all themes ===")
         available_df = pd.read_json(io.StringIO(get_all_themes("")), orient="records")
 
     if available_df.empty:
-        print(f"=== URGENT DEBUG: resolve_theme - NO THEMES FOUND - returning ===")
+        logger.info(f"=== URGENT DEBUG: resolve_theme - NO THEMES FOUND - returning ===")
         state.setdefault("messages", []).append(
             AIMessage(content="I couldn't find any statistical themes.")
         )
         return state
 
     available = available_df[["ent_id", "labl"]].to_dict("records")
-    print(f"=== URGENT DEBUG: resolve_theme - available themes: {len(available)} ===")
+    logger.info(f"=== URGENT DEBUG: resolve_theme - available themes: {len(available)} ===")
 
     # ------------------------------------------------------------------
     # Step 2 · Has a theme been fixed already? (or is a new theme being requested?)
     # ------------------------------------------------------------------
-    print(f"=== URGENT DEBUG: resolve_theme - about to check theme processing ===")
+    logger.info(f"=== URGENT DEBUG: resolve_theme - about to check theme processing ===")
     logger.info(f"resolve_theme: selected_theme={state.get('selected_theme')}, extracted_theme={state.get('extracted_theme')}")
 
     # ------------------------------------------------------------------
     # Step 2 · Has a theme been fixed already? (or is a new theme being requested?)
     # ------------------------------------------------------------------
-    print(f"=== URGENT DEBUG: resolve_theme - Step 2 started ===")
+    logger.info(f"=== URGENT DEBUG: resolve_theme - Step 2 started ===")
     logger.info(f"resolve_theme: selected_theme={state.get('selected_theme')}, extracted_theme={state.get('extracted_theme')}")
 
     # Check if we need to process a theme change
     current_theme = state.get("selected_theme")
     extracted_theme_query = state.get("extracted_theme")
-    print(f"=== URGENT DEBUG: resolve_theme - current_theme={bool(current_theme)}, extracted_theme_query={extracted_theme_query} ===")
+    logger.info(f"=== URGENT DEBUG: resolve_theme - current_theme={bool(current_theme)}, extracted_theme_query={extracted_theme_query} ===")
 
     # Early return if theme is already resolved and no new theme query
     # BUT: Don't early return if we have a button click to process
     has_button_click = state.get("selection_idx") is not None and state.get("current_node") == "resolve_theme"
-    print(f"=== URGENT DEBUG: resolve_theme - has_button_click={has_button_click} (selection_idx={state.get('selection_idx')}, current_node={state.get('current_node')}) ===")
+    logger.info(f"=== URGENT DEBUG: resolve_theme - has_button_click={has_button_click} (selection_idx={state.get('selection_idx')}, current_node={state.get('current_node')}) ===")
 
     if current_theme and not extracted_theme_query and not has_button_click:
-        print(f"=== URGENT DEBUG: resolve_theme - EARLY RETURN - theme already resolved ===")
+        logger.info(f"=== URGENT DEBUG: resolve_theme - EARLY RETURN - theme already resolved ===")
         logging.info("resolve_theme: Theme already resolved, no new theme query, no button click. Returning early.")
         return state
     elif has_button_click:
-        print(f"=== URGENT DEBUG: resolve_theme - NOT EARLY RETURN - processing button click ===")
+        logger.info(f"=== URGENT DEBUG: resolve_theme - NOT EARLY RETURN - processing button click ===")
         logging.info(f"resolve_theme: NOT returning early - processing button click selection_idx={state.get('selection_idx')}")
 
-    print(f"=== URGENT DEBUG: resolve_theme - past early return check ===")
+    logger.info(f"=== URGENT DEBUG: resolve_theme - past early return check ===")
 
     # Only process theme change if:
     # 1. No theme is selected yet, OR
@@ -1727,7 +1687,7 @@ def resolve_theme(state: lg_State) -> lg_State | Command:
         (extracted_theme_query and not _theme_already_matches(current_theme, extracted_theme_query))
     )
 
-    print(f"=== URGENT DEBUG: resolve_theme - should_process_theme_change={should_process_theme_change} ===")
+    logger.info(f"=== URGENT DEBUG: resolve_theme - should_process_theme_change={should_process_theme_change} ===")
 
     logging.info(f"resolve_theme: should_process_theme_change={should_process_theme_change}, current_theme={bool(current_theme)}, extracted_theme_query='{extracted_theme_query}'")
     if current_theme and extracted_theme_query:
@@ -1739,16 +1699,16 @@ def resolve_theme(state: lg_State) -> lg_State | Command:
     current_node = state.get("current_node")
     has_theme_options = bool(state.get("options")) and current_node == "resolve_theme"
 
-    print(f"=== URGENT DEBUG: resolve_theme - BUTTON CLICK CHECK - selection_idx={selection_idx}, has_theme_options={has_theme_options} ===")
+    logger.info(f"=== URGENT DEBUG: resolve_theme - BUTTON CLICK CHECK - selection_idx={selection_idx}, has_theme_options={has_theme_options} ===")
     logger.info(f"resolve_theme: DEBUGGING BUTTON CLICK - selection_idx={selection_idx}, current_node={current_node}, has_theme_options={has_theme_options}")
     logger.info(f"resolve_theme: DEBUGGING BUTTON CLICK - options={state.get('options')}, available_themes_count={len(available)}")
     logger.info(f"resolve_theme: DEBUGGING BUTTON CLICK - current_theme={bool(current_theme)}, extracted_theme_query={extracted_theme_query}")
 
     # 2 b · Button click (prioritize this over theme query)
     # CRITICAL: Only process selection_idx if we're actually in a theme selection context
-    print(f"=== URGENT DEBUG: resolve_theme - about to check button click condition ===")
+    logger.info(f"=== URGENT DEBUG: resolve_theme - about to check button click condition ===")
     if selection_idx is not None and has_theme_options:
-        print(f"=== URGENT DEBUG: resolve_theme - PROCESSING BUTTON CLICK ===")
+        logger.info(f"=== URGENT DEBUG: resolve_theme - PROCESSING BUTTON CLICK ===")
         # Validate that this is a numeric theme selection, not a unit type string
         try:
             theme_index = int(selection_idx)
@@ -1760,7 +1720,7 @@ def resolve_theme(state: lg_State) -> lg_State | Command:
                 state.pop("options", None)
                 state.pop("current_node", None)
                 state.pop("extracted_theme", None)  # Clear the extracted theme to prevent re-matching
-                print(f"=== URGENT DEBUG: resolve_theme - THEME SET, CLEARED OPTIONS, RETURNING STATE ===")
+                logger.info(f"=== URGENT DEBUG: resolve_theme - THEME SET, CLEARED OPTIONS, RETURNING STATE ===")
                 logger.info(f"resolve_theme: Button click processed, theme set to: {available[theme_index]['labl']}")
                 return state
             else:
@@ -1770,7 +1730,7 @@ def resolve_theme(state: lg_State) -> lg_State | Command:
             logger.info(f"resolve_theme: selection_idx '{selection_idx}' is not a valid theme index, clearing it")
             state["selection_idx"] = None  # Clear invalid selection
     else:
-        print(f"=== URGENT DEBUG: resolve_theme - NOT PROCESSING BUTTON CLICK - selection_idx={selection_idx}, has_theme_options={has_theme_options} ===")
+        logger.info(f"=== URGENT DEBUG: resolve_theme - NOT PROCESSING BUTTON CLICK - selection_idx={selection_idx}, has_theme_options={has_theme_options} ===")
     if selection_idx is not None and not has_theme_options:
         logger.info(f"resolve_theme: Ignoring stale selection_idx={selection_idx} - not in theme selection context (current_node={current_node}, has_options={bool(state.get('options'))})")
         # CRITICAL: Clear stale selection_idx to prevent it from interfering with future operations
@@ -1990,7 +1950,7 @@ def should_continue_to_themes(state: lg_State) -> str:
     logging.info("Routing: should_continue_to_themes()")
     num_places   = len(state.get("extracted_place_names", []))
     current_index = state.get("current_place_index", 0)
-    selected_units = state.get("selected_place_g_units", [])
+    selected_units = get_selected_units(state)
     units_ready  = len(selected_units) >= num_places > 0
     have_theme   = bool(state.get("selected_theme"))
 
@@ -2110,7 +2070,7 @@ def create_workflow(lg_state: TypedDict):
         last_intent_payload = state.get("last_intent_payload", {})
         intent = last_intent_payload.get("intent")
 
-        print(f"=== URGENT DEBUG: start_router CALLED - current_node={current_node}, selection_idx={selection_idx}, intent={intent} ===")
+        logger.info(f"=== URGENT DEBUG: start_router CALLED - current_node={current_node}, selection_idx={selection_idx}, intent={intent} ===")
 
         # PRIORITY 1: Check if there's a new user message that needs intent processing
         # This MUST come before checking old intent payloads to avoid stale intent loops
@@ -2124,33 +2084,33 @@ def create_workflow(lg_state: TypedDict):
             elif isinstance(last_message, tuple) and len(last_message) >= 2 and last_message[0] == "user":
                 has_new_user_message = True
 
-        print(f"=== URGENT DEBUG: start_router message detection - messages_count={len(messages) if messages else 0}, has_new_user_message={has_new_user_message} ===")
+        logger.info(f"=== URGENT DEBUG: start_router message detection - messages_count={len(messages) if messages else 0}, has_new_user_message={has_new_user_message} ===")
 
         # If there's a new user message, always route to agent_node for intent extraction
         # This takes priority over any stale intent payloads from Redis checkpoints
         if has_new_user_message:
-            print(f"=== URGENT DEBUG: start_router ROUTING to agent_node (new user message detected) ===")
+            logger.info(f"=== URGENT DEBUG: start_router ROUTING to agent_node (new user message detected) ===")
             logging.info(f"start_router: New user message detected, routing to agent_node for intent extraction")
             return "agent_node"
 
-        # PRIORITY 2: If we have a current_node and selection_idx (button click), but no new user message, resume from that node
+        # PRIORITY 2: Check for new intent payload (map clicks, etc.) before resuming from stale nodes
+        # This prevents resuming from stale resolve_theme when user reselects a polygon
+        if intent in ["AddPlace", "RemovePlace"]:
+            logger.info(f"=== URGENT DEBUG: start_router PROCESSING {intent} INTENT - routing to agent_node ===")
+            logging.info(f"start_router: Processing {intent} intent, routing to agent_node")
+            return "agent_node"
+
+        # PRIORITY 3: If we have a current_node and selection_idx (button click), but no new intent, resume from that node
         if current_node and selection_idx is not None:
-            print(f"=== URGENT DEBUG: start_router RESUMING from {current_node} (no new user message) ===")
+            logger.info(f"=== URGENT DEBUG: start_router RESUMING from {current_node} (no new intent) ===")
             logging.info(f"start_router: Resuming from current_node={current_node} with selection_idx={selection_idx}")
             return current_node
 
-        # PRIORITY 3: If we have a current_node but no selection_idx, we're waiting for user input - don't restart
+        # PRIORITY 4: If we have a current_node but no selection_idx, we're waiting for user input - don't restart
         if current_node:
-            print(f"=== URGENT DEBUG: start_router WAITING for user input at {current_node} ===")
+            logger.info(f"=== URGENT DEBUG: start_router WAITING for user input at {current_node} ===")
             logging.info(f"start_router: Waiting for user input at current_node={current_node}, not restarting workflow")
             return current_node
-
-        # # PRIORITY 4: Check for old intent payloads (only if no new user message and no current_node)
-        # # This prevents stale intents from blocking new user input
-        # if intent in ["AddPlace", "RemovePlace"]:
-        #     print(f"=== URGENT DEBUG: start_router PROCESSING OLD {intent} INTENT - routing to agent_node ===")
-        #     logging.info(f"start_router: Processing old {intent} intent from checkpoint, routing to agent_node")
-        #     return "agent_node"
 
         # Otherwise start fresh with agent_node
         logger.debug("=== URGENT DEBUG: start_router STARTING FRESH with agent_node ===")
@@ -2179,14 +2139,14 @@ def create_workflow(lg_state: TypedDict):
         current_place_index = state.get("current_place_index", 0)
         extracted_place_names = state.get("extracted_place_names", [])
         num_places = len(extracted_place_names)
-        selected_units = state.get("selected_place_g_units", [])
+        selected_units = get_selected_units(state)
 
-        print(f"=== WORKFLOW TRACE: resolve_place_and_unit_router - current_place_index={current_place_index}, num_places={num_places}, selected_units={len(selected_units)} ===")
+        logger.info(f"=== WORKFLOW TRACE: resolve_place_and_unit_router - current_place_index={current_place_index}, num_places={num_places}, selected_units={len(selected_units)} ===")
         logging.info(f"resolve_place_and_unit_router: current_place_index={current_place_index}, num_places={num_places}, selected_units={len(selected_units)}")
 
         # Always go to update_polygon_selection first to ensure polygon selection
         # The new pattern will handle the routing to themes when all places are done
-        print(f"=== WORKFLOW TRACE: resolve_place_and_unit_router - routing to update_polygon_selection ===")
+        logger.info(f"=== WORKFLOW TRACE: resolve_place_and_unit_router - routing to update_polygon_selection ===")
         logging.info("resolve_place_and_unit_router: Going to update_polygon_selection for polygon selection")
         return "update_polygon_selection"
 
@@ -2205,14 +2165,14 @@ def create_workflow(lg_state: TypedDict):
         logger.debug("=== WORKFLOW TRACE: select_unit_on_map_router CALLED (LEGACY) ===")
         logging.info("==================== select_unit_on_map_router CALLED ====================")
         # Check if there are no units selected - this means we should go to agent_node
-        selected_workflow_units = state.get("selected_place_g_units", [])
+        selected_workflow_units = get_selected_units(state)
         current_place_index = state.get("current_place_index", 0)
         extracted_place_names = state.get("extracted_place_names", [])
         continue_to_next_place = state.get("continue_to_next_place", False)
 
-        print(f"=== WORKFLOW TRACE: select_unit_on_map_router - selected_workflow_units={selected_workflow_units} ===")
-        print(f"=== WORKFLOW TRACE: select_unit_on_map_router - current_place_index={current_place_index}, extracted_place_names={extracted_place_names} ===")
-        print(f"=== WORKFLOW TRACE: select_unit_on_map_router - continue_to_next_place={continue_to_next_place} ===")
+        logger.info(f"=== WORKFLOW TRACE: select_unit_on_map_router - selected_workflow_units={selected_workflow_units} ===")
+        logger.info(f"=== WORKFLOW TRACE: select_unit_on_map_router - current_place_index={current_place_index}, extracted_place_names={extracted_place_names} ===")
+        logger.info(f"=== WORKFLOW TRACE: select_unit_on_map_router - continue_to_next_place={continue_to_next_place} ===")
         logging.info(f"select_unit_on_map_router: selected_workflow_units={selected_workflow_units}")
         logging.info(f"select_unit_on_map_router: current_place_index={current_place_index}, extracted_place_names={extracted_place_names}")
         logging.info(f"select_unit_on_map_router: continue_to_next_place={continue_to_next_place}")
@@ -2225,7 +2185,7 @@ def create_workflow(lg_state: TypedDict):
         # CRITICAL: Check if we have a flag to continue to next place after map selection
         # This ensures Portsmouth selection completion triggers Southampton processing
         if continue_to_next_place:
-            print(f"=== WORKFLOW TRACE: select_unit_on_map_router - continue_to_next_place=True, routing to resolve_place_and_unit ===")
+            logger.info(f"=== WORKFLOW TRACE: select_unit_on_map_router - continue_to_next_place=True, routing to resolve_place_and_unit ===")
             logging.info("select_unit_on_map_router: continue_to_next_place flag set, clearing it and continuing to resolve_place_and_unit")
             # Clear the flag since we're acting on it
             state["continue_to_next_place"] = False
@@ -2235,7 +2195,7 @@ def create_workflow(lg_state: TypedDict):
         # Check if there are still places to process first, regardless of intent queue
         num_places = len(extracted_place_names)
         if current_place_index is not None and current_place_index < num_places:
-            print(f"=== WORKFLOW TRACE: select_unit_on_map_router returning resolve_place_and_unit (place {current_place_index} of {num_places} still needs processing) ===")
+            logger.info(f"=== WORKFLOW TRACE: select_unit_on_map_router returning resolve_place_and_unit (place {current_place_index} of {num_places} still needs processing) ===")
             logging.info(f"select_unit_on_map_router: returning resolve_place_and_unit (place {current_place_index} of {num_places} still needs processing)")
             return "resolve_place_and_unit"
 
@@ -2286,7 +2246,8 @@ def create_workflow(lg_state: TypedDict):
         selected_theme = state.get("selected_theme")
         extracted_theme = state.get("extracted_theme")
         has_theme = bool(selected_theme)
-        has_units = bool(state.get("selected_place_g_units") or state.get("selected_polygons"))
+        has_units = bool(get_selected_units(
+            state) or state.get("selected_polygons"))
 
         logging.info(f"addtheme_router: has_theme={has_theme}, has_units={has_units}")
         logging.info(f"addtheme_router: selected_theme='{selected_theme}', extracted_theme='{extracted_theme}'")
@@ -2342,7 +2303,7 @@ def create_workflow(lg_state: TypedDict):
         places = state.get("places", []) or []
         num_places = len(places)
 
-        print(f"=== URGENT DEBUG: resolve_theme_router - has_theme={has_theme}, has_units={has_units}, has_options={has_options} ===")
+        logger.info(f"=== URGENT DEBUG: resolve_theme_router - has_theme={has_theme}, has_units={has_units}, has_options={has_options} ===")
         logging.info(f"resolve_theme_router: has_theme={has_theme}, has_units={has_units}, has_options={has_options}, current_node={current_node}, selection_idx={selection_idx}, extracted_theme={extracted_theme}")
         logging.info(f"resolve_theme_router: current_place_index={current_place_index}, num_places={num_places}")
 
@@ -2354,13 +2315,13 @@ def create_workflow(lg_state: TypedDict):
         # CRITICAL: If a theme button was clicked but not processed yet, stay in resolve_theme to process it
         # But if we already have a theme set, don't loop back - continue to cubes
         if selection_idx is not None and has_options and current_node == "resolve_theme" and not has_theme:
-            print(f"=== URGENT DEBUG: resolve_theme_router - ROUTING BACK TO RESOLVE_THEME - selection_idx={selection_idx}, has_options={has_options}, current_node={current_node} ===")
+            logger.info(f"=== URGENT DEBUG: resolve_theme_router - ROUTING BACK TO RESOLVE_THEME - selection_idx={selection_idx}, has_options={has_options}, current_node={current_node} ===")
             logging.info(f"resolve_theme_router: returning resolve_theme (theme button clicked, selection_idx={selection_idx}, has_theme={has_theme})")
             return "resolve_theme"
 
         # If we have both theme and units, go to cubes
         if has_theme and has_units:
-            print(f"=== URGENT DEBUG: resolve_theme_router - ROUTING TO CUBES ===")
+            logger.info(f"=== URGENT DEBUG: resolve_theme_router - ROUTING TO CUBES ===")
             logging.info("resolve_theme_router: returning find_cubes_node (have theme and units)")
             return "find_cubes_node"
         # If we have a theme but no units, go to agent to handle next steps
@@ -2422,7 +2383,7 @@ def create_workflow(lg_state: TypedDict):
     # These are useful for visualizing and debugging the workflow structure.
     logger.info("Generating ASCII diagram of the workflow:")
     try:
-        # Print a text-based representation of the graph to the console/logs.
+        # logger.info a text-based representation of the graph to the console/logs.
         logger.info("\n" + compiled_workflow.get_graph().draw_ascii())
     except Exception as e:
         logger.warning("Could not generate ASCII diagram", exc_info=True) # Non-critical error

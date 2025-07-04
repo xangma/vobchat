@@ -32,6 +32,7 @@ class WorkflowSSEAdapter:
     def __init__(self, compiled_workflow):
         self.compiled_workflow = compiled_workflow
         self.base_workflow = None
+        # Note: streamed_message_ids is now handled globally per thread
 
     def set_base_workflow(self, base_workflow):
         """Store reference to the base workflow graph for recompilation"""
@@ -50,16 +51,13 @@ class WorkflowSSEAdapter:
             start_time = time.time()
             logger.debug(f"Workflow execution started at {start_time:.3f}")
 
-            # Determine if this is a resumption or new execution
-            is_resumption = (
-                workflow_input is None or  # Direct resumption
-                (isinstance(workflow_input, dict) and workflow_input.get('button_type')) or  # Button clicks
-                (isinstance(workflow_input, dict) and workflow_input.get('selection_idx') is not None)  # Selections
-            )
+            # Determine if this is a fresh SSE connection (no new user action)
+            is_fresh_connection = workflow_input is None
 
             # Use the existing compiled workflow instance
             workflow_instance = self.compiled_workflow
             logger.debug(f"Using existing compiled workflow instance")
+            
 
             # Stream workflow messages and state updates
             stream_start = time.time()
@@ -67,20 +65,32 @@ class WorkflowSSEAdapter:
 
             message_count = 0
             last_streamed_message_index = -1  # Track the index of the last message we streamed
-
-            # For workflow resumption, we need to track which messages have already been sent
-            # Get the current state to see how many messages already exist
-            if is_resumption:
-                try:
-                    current_state = await workflow_instance.aget_state(config)
-                    if current_state and current_state.values and "messages" in current_state.values:
-                        existing_messages = current_state.values["messages"]
-                        # For resumption, we've already streamed all existing messages
-                        last_streamed_message_index = len(existing_messages) - 1
-                        logger.debug(f"Resumption - already streamed {last_streamed_message_index + 1} messages")
-                except Exception as e:
-                    logger.debug(f"Error getting existing messages for resumption: {e}")
-                    # Continue without pre-populating - will stream all messages
+            last_map_update_request = None  # Track last map_update_request to avoid duplicate early updates
+            
+            # Get or create the set of streamed message IDs for this thread from global registry
+            if thread_id not in _global_streamed_message_ids:
+                _global_streamed_message_ids[thread_id] = set()
+            streamed_message_ids = _global_streamed_message_ids[thread_id]
+            
+            # CRITICAL FIX: Pre-mark any existing messages from checkpoint state as already streamed
+            # to prevent re-streaming old messages when a new workflow execution starts
+            initial_state = None
+            try:
+                # Get the current state to check for existing messages
+                current_state = await workflow_instance.aget_state(config)
+                if current_state and current_state.values:
+                    initial_state = current_state.values
+                    existing_messages = initial_state.get("messages", [])
+                    for msg in existing_messages:
+                        if isinstance(msg, AIMessage) and hasattr(msg, 'response_metadata') and msg.response_metadata:
+                            existing_message_id = msg.response_metadata.get('message_id')
+                            if existing_message_id:
+                                streamed_message_ids.add(existing_message_id)
+                                logger.debug(f"Pre-marked existing message ID {existing_message_id} as streamed to prevent duplicates")
+            except Exception as e:
+                logger.debug(f"Could not pre-mark existing messages: {e}")
+                # Continue anyway - this is just an optimization
+            
             # CRITICAL: Use "values" streaming mode instead of "messages"
             # This prevents internal LLM operations (like intent extraction) from streaming
             # while still allowing us to get state updates and final results
@@ -114,23 +124,39 @@ class WorkflowSSEAdapter:
                         if isinstance(message, AIMessage) and message.content:
                             content = str(message.content)
 
-                            # Check message metadata for streaming preference
+                            # Check message metadata for streaming preference and ID
                             stream_mode = "stream"  # Default to streaming
+                            message_id = None
                             if hasattr(message, 'response_metadata') and message.response_metadata:
                                 stream_mode = message.response_metadata.get('stream_mode', 'stream')
+                                message_id = message.response_metadata.get('message_id')
 
                             # Only stream messages marked as "stream" mode
                             if stream_mode == "stream":
-                                logger.debug(f"Streaming user-facing message at index {i}: {content[:50]}...")
+                                # Check if we've already streamed this message ID
+                                if message_id and message_id in streamed_message_ids:
+                                    logger.debug(f"Skipping already-streamed message with ID {message_id}: {content[:50]}...")
+                                    last_streamed_message_index = i
+                                    continue
+                                
+                                logger.debug(f"Streaming user-facing message at index {i} (ID: {message_id}): {content[:50]}...")
                                 last_streamed_message_index = i  # Update our tracker
+                                
+                                # Track this message ID as streamed
+                                if message_id:
+                                    streamed_message_ids.add(message_id)
+                                
                                 sse_manager.broadcast_event(
                                     MessageEvent(
                                         content=content,
                                         thread_id=thread_id,
-                                        is_partial=False
+                                        is_partial=False,
+                                        message_id=message_id
                                     )
                                 )
                                 yield {"type": "message", "content": content}
+                                
+                                    
                             else:
                                 logger.debug(f"Skipping internal message at index {i} (mode={stream_mode}): {content[:50]}...")
                                 last_streamed_message_index = i  # Still update tracker for non-streamed messages
@@ -151,11 +177,15 @@ class WorkflowSSEAdapter:
                     try:
                         frontend_state_partial = self._extract_frontend_state(state_update)
 
-                        # Only broadcast if the map_update_request actually contains
-                        # something – avoid flooding the client with empty events.
-                        if frontend_state_partial.get("map_update_request"):
+                        current_map_update_request = state_update.get("map_update_request")
+                        
+                        # Only broadcast if the map_update_request actually contains something
+                        # AND it's different from the last one we sent
+                        if (current_map_update_request and 
+                            current_map_update_request != last_map_update_request):
+                            
                             logger.debug(
-                                "Early state update – map_update_request detected, "
+                                "Early state update – new map_update_request detected, "
                                 "broadcasting partial state to frontend"
                             )
 
@@ -172,6 +202,13 @@ class WorkflowSSEAdapter:
                                 "type": "state_update",
                                 "data": frontend_state_partial,
                             }
+                            
+                            # Update our tracker to prevent duplicate broadcasts
+                            last_map_update_request = current_map_update_request
+                        else:
+                            logger.debug(
+                                f"Skipping duplicate map_update_request: {current_map_update_request}"
+                            )
                     except Exception as e:
                         # Don’t fail the whole stream because of logging / SSE
                         # issues – just record the error and continue.
@@ -238,8 +275,8 @@ class WorkflowSSEAdapter:
                 logger.debug(f"Frontend state being sent: {frontend_state}")
                 if 'map_update_request' in frontend_state:
                     logger.debug(f"map_update_request in state: {frontend_state['map_update_request']}")
-                if 'selected_place_g_units' in frontend_state:
-                    logger.debug(f"selected_place_g_units in state: {frontend_state['selected_place_g_units']}")
+                if 'places' in frontend_state:
+                    logger.debug(f"places array in state: {frontend_state['places']}")
 
                 broadcast_start = time.time()
                 sse_manager.broadcast_event(
@@ -296,14 +333,13 @@ class WorkflowSSEAdapter:
                 "error": str(e)
             }
 
+
     def _extract_frontend_state(self, workflow_state: Dict[str, Any]) -> Dict[str, Any]:
         """Extract only the state data needed by the frontend"""
         frontend_keys = [
-            "selected_place_g_units",
-            "selected_place_g_unit_types",
-            "selected_place_g_places",
+            "places",  # CRITICAL: Single source of truth for place/unit data
             "selected_polygons",
-            "selected_polygons_unit_types",
+            "selected_polygons_unit_types", 
             "extracted_place_names",
             "current_place_index",
             "current_node",
@@ -311,6 +347,7 @@ class WorkflowSSEAdapter:
             "selection_idx",
             "options",
             "cubes",
+            "cube_data",  # CRITICAL: Include cube data for visualization
             "selected_cubes",
             "show_visualization",
             "map_update_request",  # CRITICAL: Include map update requests for frontend
@@ -324,27 +361,16 @@ class WorkflowSSEAdapter:
             if key in workflow_state
         }
         
-        # CRITICAL: Convert places array to frontend-expected format
-        # The workflow now uses 'places' as single source of truth, but frontend expects derived fields
+        # Debug logging
+        logger.debug(f"workflow_state has 'places': {'places' in workflow_state}")
+        logger.debug(f"workflow_state['places']: {workflow_state.get('places', 'NOT FOUND')}")
+        logger.debug(f"frontend_state has 'places': {'places' in frontend_state}")
+        logger.debug(f"frontend_state['places']: {frontend_state.get('places', 'NOT FOUND')}")
+        
+        # Frontend now computes derived values from places array using helper functions
+        # No need to compute them here anymore
         places = workflow_state.get("places", []) or []
-        if places:
-            from vobchat.state_schema import get_selected_units, get_selected_unit_types, get_selected_place_ids, get_selected_place_names
-            
-            # Derive frontend state from places array
-            frontend_state["selected_place_g_units"] = get_selected_units(workflow_state)
-            frontend_state["selected_place_g_unit_types"] = get_selected_unit_types(workflow_state)
-            frontend_state["selected_place_g_places"] = get_selected_place_ids(workflow_state)
-            frontend_state["extracted_place_names"] = get_selected_place_names(workflow_state)
-            
-            logger.debug(f"Derived frontend state from places array: selected_place_g_units={frontend_state['selected_place_g_units']}")
-        else:
-            # No places selected - clear the derived fields
-            frontend_state["selected_place_g_units"] = []
-            frontend_state["selected_place_g_unit_types"] = []
-            frontend_state["selected_place_g_places"] = []
-            frontend_state["extracted_place_names"] = []
-            
-            logger.debug("No places in state - cleared derived frontend fields")
+        logger.debug(f"Sending places array to frontend: {len(places)} places")
 
         return frontend_state
 
@@ -382,6 +408,9 @@ class WorkflowSSEAdapter:
                 # Create temporary adapter with fresh workflow
                 temp_adapter = WorkflowSSEAdapter(fresh_workflow)
                 temp_adapter.set_base_workflow(self.base_workflow)
+                
+                # Note: streamed_message_ids are now managed globally per thread, 
+                # so no need to share between adapter instances
 
                 logger.debug(f"Starting isolated workflow execution for user input")
 
@@ -456,6 +485,15 @@ def sse_interrupt(value: Dict[str, Any]):
     # This will be handled by modifying the workflow nodes
     logger.warning("SSE interrupt called without thread_id context - falling back to original interrupt")
     return original_interrupt(value)
+
+# Global registry of streamed message IDs per thread to prevent duplicates across executions
+_global_streamed_message_ids = {}
+
+def clear_streamed_message_ids(thread_id: str):
+    """Clear streamed message IDs for a thread (useful for reset operations)"""
+    if thread_id in _global_streamed_message_ids:
+        del _global_streamed_message_ids[thread_id]
+        logger.debug(f"Cleared streamed message IDs for thread {thread_id}")
 
 # Export the adapter for use in callbacks
 def create_workflow_sse_adapter(compiled_workflow, base_workflow=None):

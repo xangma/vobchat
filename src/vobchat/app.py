@@ -66,47 +66,14 @@ def register_sse_routes(server, compiled_workflow, base_workflow):
         # Add client to SSE manager
         sse_manager.add_client(client_id, thread_id)
 
-        # CRITICAL: If this is a new workflow (has workflow_input), start it automatically
+        # REMOVED: Automatic workflow start to prevent duplicate executions
+        # The workflow should only be started by the chat_sse callback, not by SSE connection
+        # This prevents duplicate workflow executions for the same user action
         if workflow_input_param:
             try:
                 import json
                 workflow_input = json.loads(workflow_input_param)
-                logger.debug(f"Starting workflow automatically for new SSE connection with input: {workflow_input}")
-
-                # Start workflow using async manager
-                def start_workflow():
-                    try:
-                        from vobchat.workflow_sse_adapter import create_workflow_sse_adapter
-
-                        workflow_adapter = create_workflow_sse_adapter(compiled_workflow, base_workflow)
-                        config = {
-                            "configurable": {
-                                "thread_id": thread_id,
-                                "checkpoint_ns": "",
-                                "checkpoint_id": None
-                            }
-                        }
-
-                        # Use async manager instead of creating new event loop
-                        async def run_workflow():
-                            async for result in workflow_adapter.stream_workflow_execution(
-                                workflow_input,
-                                config,
-                                thread_id
-                            ):
-                                logger.debug(f"Auto-started workflow result: {result}")
-
-                        # Run using the managed event loop
-                        async_manager.run_async(run_workflow(), timeout=300)  # 5 minute timeout
-
-                    except Exception as e:
-                        logger.error(f"Error auto-starting workflow: {e}", exc_info=True)
-
-                import threading
-                workflow_thread = threading.Thread(target=start_workflow, daemon=True)
-                workflow_thread.start()
-                logger.debug(f"Auto-started workflow thread for new connection")
-
+                logger.debug(f"SSE connection received workflow_input: {workflow_input} - workflow start handled by callback")
             except Exception as e:
                 logger.error(f"Error parsing workflow_input parameter: {e}")
 

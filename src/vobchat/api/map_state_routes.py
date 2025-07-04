@@ -58,18 +58,16 @@ def register_map_state_routes(server):
             else:
                 # Initialize empty state if none exists
                 state = {
-                    "selected_place_g_units": [],
-                    "selected_place_g_unit_types": [],
-                    "selected_place_g_places": [],
+                    "places": [],  # Single source of truth
                     "selected_polygons": [],
-                    "extracted_place_names": [],
-                    "places": []
+                    "extracted_place_names": []
                 }
             
-            # Get current selections
-            current_units = state.get("selected_place_g_units", [])
-            current_unit_types = state.get("selected_place_g_unit_types", [])
-            current_places = state.get("selected_place_g_places", [])
+            # Get current selections using helper functions
+            from vobchat.state_schema import get_selected_units, get_selected_unit_types
+            current_units = get_selected_units(state)
+            current_unit_types = get_selected_unit_types(state)
+            current_places = [place.get("g_place") for place in state.get("places", []) if place.get("g_place")]
             current_polygons = state.get("selected_polygons", [])
             current_names = state.get("extracted_place_names", [])
             current_place_objects = state.get("places", [])
@@ -139,14 +137,11 @@ def register_map_state_routes(server):
                 else:
                     logger.info(f"Polygon {polygon_id} not in selection for thread {thread_id}")
             
-            # Update state
+            # Update state - only store the single source of truth
             state.update({
-                "selected_place_g_units": current_units,
-                "selected_place_g_unit_types": current_unit_types,
-                "selected_place_g_places": current_places,
                 "selected_polygons": current_polygons,
                 "extracted_place_names": current_names,
-                "places": current_place_objects,
+                "places": current_place_objects,  # Single source of truth
                 "current_place_index": len(current_place_objects)
             })
             
@@ -189,9 +184,9 @@ def register_map_state_routes(server):
                 state = json.loads(state_data)
                 response_data = {
                     "selected_polygons": state.get("selected_polygons", []),
-                    "selected_unit_types": state.get("selected_place_g_unit_types", []),
+                    "selected_unit_types": get_selected_unit_types(state),
                     "selected_place_names": state.get("extracted_place_names", []),
-                    "total_selected": len(state.get("selected_place_g_units", []))
+                    "total_selected": len(get_selected_units(state))
                 }
             else:
                 response_data = {
@@ -226,12 +221,9 @@ def register_map_state_routes(server):
                 
                 # Clear all selection-related fields
                 state.update({
-                    "selected_place_g_units": [],
-                    "selected_place_g_unit_types": [],
-                    "selected_place_g_places": [],
                     "selected_polygons": [],
                     "extracted_place_names": [],
-                    "places": [],
+                    "places": [],  # Single source of truth
                     "current_place_index": 0,
                     "selected_theme": None,
                     "extracted_theme": None,
