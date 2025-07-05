@@ -27,6 +27,7 @@ class RedisPoolManager:
             self._initialized = True
             self._redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
             logger.info(f"RedisPoolManager initialized with URL: {self._redis_url}")
+            self._configure_redis_persistence_once()
     
     def get_sync_pool(self) -> SyncConnectionPool:
         """Get or create synchronous Redis connection pool"""
@@ -77,6 +78,17 @@ class RedisPoolManager:
             self._sync_pool.disconnect()
             self._sync_pool = None
             logger.info("Closed synchronous Redis connection pool")
+    
+    def _configure_redis_persistence_once(self):
+        """Configure Redis to disable RDB persistence once at startup"""
+        try:
+            temp_client = redis.Redis.from_url(self._redis_url)
+            temp_client.config_set('save', '')
+            temp_client.config_set('stop-writes-on-bgsave-error', 'no')
+            temp_client.close()
+            logger.info("Disabled Redis RDB persistence at startup")
+        except Exception as e:
+            logger.warning(f"Failed to disable Redis RDB persistence at startup: {e}")
     
     async def health_check_async(self) -> bool:
         """Check if async Redis connection is healthy"""
