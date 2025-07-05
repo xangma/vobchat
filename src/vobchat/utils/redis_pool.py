@@ -15,7 +15,7 @@ class RedisPoolManager:
     _instance = None
     _sync_pool: Optional[SyncConnectionPool] = None
     _async_pool: Optional[AsyncConnectionPool] = None
-    _redis_url: str = None
+    _redis_url: Optional[str] = None
     
     def __new__(cls):
         if cls._instance is None:

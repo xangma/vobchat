@@ -584,6 +584,8 @@ def DescribeTheme_node(state: lg_State):
     payload = state.get("last_intent_payload") or {}
     args    = payload.get("arguments", {})
     query   = (args.get("theme") or "").strip()
+    
+    logger.info(f"DescribeTheme_node: Processing query '{query}' from payload: {payload}")
 
     # 1️⃣ Determine the theme code
     theme_df = None
@@ -595,9 +597,33 @@ def DescribeTheme_node(state: lg_State):
     # b) otherwise, fuzzy-match the query against *all* themes
     if theme_df is None and query:
         all_df = pd.read_json(io.StringIO(get_all_themes("")), orient="records")
-        mask   = all_df["labl"].str.contains(query, case=False, regex=False)
+        logger.info(f"DescribeTheme_node: Loaded {len(all_df)} themes. Sample themes: {all_df.head(3)['labl'].tolist()}")
+        
+        # Try exact case-insensitive match first
+        mask = all_df["labl"].str.contains(query, case=False, regex=False)
+        matches = all_df[mask]
+        logger.info(f"DescribeTheme_node: Exact match for '{query}': found {len(matches)} matches")
         if mask.any():
             theme_df = all_df[mask].head(1)
+            logger.info(f"DescribeTheme_node: Using exact match: {theme_df['labl'].iloc[0]}")
+        else:
+            # Try partial word matching if exact match fails
+            query_words = query.lower().split()
+            logger.info(f"DescribeTheme_node: No exact match, trying word matching for: {query_words}")
+            if query_words:
+                # Look for themes that contain any of the query words
+                combined_mask = pd.Series([False] * len(all_df))
+                for word in query_words:
+                    word_mask = all_df["labl"].str.contains(word, case=False, regex=False)
+                    word_matches = all_df[word_mask]
+                    logger.info(f"DescribeTheme_node: Word '{word}' matched {len(word_matches)} themes: {word_matches['labl'].tolist()[:3]}")
+                    combined_mask |= word_mask
+                
+                if combined_mask.any():
+                    theme_df = all_df[combined_mask].head(1)
+                    logger.info(f"DescribeTheme_node: Using word match: {theme_df['labl'].iloc[0]}")
+                else:
+                    logger.info(f"DescribeTheme_node: No word matches found for '{query}'")
 
     # c) still nothing → ask a follow-up
     if theme_df is None or theme_df.empty:
@@ -615,9 +641,7 @@ def DescribeTheme_node(state: lg_State):
     desc_df = pd.read_json(io.StringIO(get_theme_text(code)), orient="records")
     text    = desc_df["text"].iat[0] if not desc_df.empty else "(no description available)"
 
-    state.setdefault("messages", []).append(
-        AIMessage(content=f"**{labl}** ({code})\n\n{text}")
-    )
+    _append_ai(state, f"**{labl}** ({code})\n\n{text}")
 
     # 3️⃣ house-keeping
     state["last_intent_payload"] = {}      # avoid re-routing

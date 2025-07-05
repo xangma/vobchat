@@ -41,11 +41,13 @@ def agent_node(state: lg_State):
             target_node = f"{final_intent.value}_node"
             logging.info(f"agent_node: Routing to target node: {target_node}")
             # Ensure the payload used for the update is the one we determined needed routing
-            # CRITICAL: Don't include last_intent_payload in Command update to prevent re-setting after target node clears it
+            # CRITICAL: Include last_intent_payload in Command update so target nodes can access it
             update_for_command = {
                 "intent_queue": state.get("intent_queue", []), # Pass cleaned queue (cleaning happened earlier)
                 # CRITICAL: Clear selection_idx when routing to prevent stale values
                 "selection_idx": None,
+                # CRITICAL: Preserve last_intent_payload for target nodes that need it (like DescribeTheme_node)
+                "last_intent_payload": payload_to_route,
             }
 
             # CRITICAL: For AddPlace/RemovePlace intents, only clear theme state when there's actual interference
@@ -341,11 +343,13 @@ def agent_node(state: lg_State):
         target_node = f"{final_intent.value}_node"
         logging.info(f"agent_node: Routing to target node: {target_node}")
         # Ensure the payload used for the update is the one we determined needed routing
-        # CRITICAL: Don't include last_intent_payload in Command update to prevent re-setting after target node clears it
+        # CRITICAL: Include last_intent_payload in Command update so target nodes can access it
         update_for_command = {
             "intent_queue": state.get("intent_queue", []), # Pass cleaned queue (cleaning happened earlier)
             # CRITICAL: Clear selection_idx when routing to prevent stale values
             "selection_idx": None,
+            # CRITICAL: Preserve last_intent_payload for target nodes that need it (like DescribeTheme_node)
+            "last_intent_payload": payload_to_route,
         }
 
         # CRITICAL: For AddPlace/RemovePlace intents, clear any pending theme state to prevent interference

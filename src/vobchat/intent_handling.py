@@ -184,6 +184,7 @@ def extract_intent(user_text: str, messages: list[AnyMessage]) -> AssistantInten
             # Ensure we got a proper AssistantIntentPayload object
             if isinstance(intent_payload, AssistantIntentPayload):
                 logger.info(f"Extracted intents: {[intent.intent.value for intent in intent_payload.intents]}")
+                logger.info(f"Full intent payload: {intent_payload.model_dump()}")
                 return intent_payload
             else:
                 logger.warning(f"Structured output returned unexpected type: {type(intent_payload)}")
