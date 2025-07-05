@@ -29,9 +29,15 @@ def agent_node(state: lg_State):
 
     # --- Determine Intent Source ---
 
+    # CRITICAL: Check if we have a new human message first
+    # If so, prioritize extracting intent from the new message over any stale payloads
+    last_msg = state.get("messages", [])[-1] if state.get("messages") else None
+    has_new_human_message = last_msg and isinstance(last_msg, HumanMessage)
+
     # Priority 1: Check for pre-set intent from Command update (e.g., map click)
+    # BUT only if there's no new human message to process
     pre_set_payload = state.get("last_intent_payload")
-    if pre_set_payload and pre_set_payload.get("intent"):
+    if pre_set_payload and pre_set_payload.get("intent") and not has_new_human_message:
         try:
             intent_val = pre_set_payload["intent"]
             final_intent = AssistantIntent(intent_val)
@@ -80,10 +86,9 @@ def agent_node(state: lg_State):
             state["last_intent_payload"] = None # Clear invalid payload
 
 
-    # Priority 2: Check for fresh Human input (only if no pre-set intent was used)
-    last_msg = state.get("messages", [])[-1] if state.get("messages") else None
-    if not final_intent and last_msg and isinstance(last_msg, HumanMessage):
-        user_text = cast(str, last_msg.content).strip()
+    # Priority 2: Check for fresh Human input (prioritized over stale payloads)
+    if not final_intent and has_new_human_message:
+        user_text = cast(str, last_msg.content).strip() if last_msg else ""
 
         # CRITICAL: Only extract intents if this message hasn't been processed yet
         # Check if we're currently in an interrupt state waiting for user selection
@@ -91,13 +96,9 @@ def agent_node(state: lg_State):
         current_node = state.get("current_node")
         has_options = bool(state.get("options"))
 
-        # Skip intent extraction only if we're actively waiting for a selection
-        # and the state suggests this is a re-trigger of the same workflow step
-        skip_extraction = (
-            current_node in ["resolve_place_and_unit", "resolve_theme"] and
-            has_options and
-            state.get("selection_idx") is not None  # User made a selection, likely retriggering
-        )
+        # CRITICAL: Always process new human messages, even if we're in a selection state
+        # The user typing a new message indicates they want to change direction
+        skip_extraction = False
 
         if skip_extraction:
             logging.info(f"agent_node: Skipping intent extraction - currently handling selection (node={current_node}, has_options={has_options})")
@@ -326,12 +327,9 @@ def agent_node(state: lg_State):
     if final_intent is AssistantIntent.CHAT:
         txt = final_args.get("text", "Okay.") # Default chat response
         logging.info(f"agent_node: Handling CHAT intent.")
-        # Mark chat responses as streamable
-        chat_message = AIMessage(
-            content=txt,
-            response_metadata={"stream_mode": "stream"}
-        )
-        state.setdefault("messages", []).append(chat_message)
+        # Use _append_ai for consistent message handling
+        from vobchat.state_nodes import _append_ai
+        _append_ai(state, txt)
         state["last_intent_payload"] = {} # Clear the payload after processing
         # CRITICAL: Clear selection_idx for CHAT intent to prevent stale values
         state["selection_idx"] = None

@@ -1493,9 +1493,8 @@ def resolve_place_and_unit(state: lg_State) -> lg_State | Command:
         # friendly confirmation
         long_name = UNIT_TYPES.get(place["g_unit_type"], {}) \
                             .get("long_name", place["g_unit_type"])
-        state.setdefault("messages", []).append(
-            AIMessage(content=f"Using {long_name} data for “{place['name']}”.")
-        )
+        from vobchat.state_nodes import _append_ai
+        _append_ai(state, f"Using {long_name} data for '{place['name']}'.")
 
     # ───────────────────────────────────────── commit + advance
     places[i] = place
@@ -1641,9 +1640,8 @@ def resolve_theme(state: lg_State) -> lg_State | Command:
 
     if available_df.empty:
         logger.info(f"=== URGENT DEBUG: resolve_theme - NO THEMES FOUND - returning ===")
-        state.setdefault("messages", []).append(
-            AIMessage(content="I couldn't find any statistical themes.")
-        )
+        from vobchat.state_nodes import _append_ai
+        _append_ai(state, "I couldn't find any statistical themes.")
         return state
 
     available = available_df[["ent_id", "labl"]].to_dict("records")
@@ -1850,9 +1848,8 @@ def resolve_theme(state: lg_State) -> lg_State | Command:
 
             if chosen:
                 state["selected_theme"] = json.dumps(chosen)
-                state.setdefault("messages", []).append(
-                    AIMessage(content=f"Changed theme to '{chosen['labl']}'")
-                )
+                from vobchat.state_nodes import _append_ai
+                _append_ai(state, f"Changed theme to '{chosen['labl']}'")
                 # Clear interrupt state and extracted theme
                 state.pop("options", None)
                 state.pop("current_node", None)
@@ -1861,9 +1858,8 @@ def resolve_theme(state: lg_State) -> lg_State | Command:
                 state["selection_idx"] = None
             else:
                 # Theme not found - show available themes and clear current selection
-                state.setdefault("messages", []).append(
-                    AIMessage(content=f"Sorry, I couldn't find a theme matching '{theme_query}'. Let me show you what's available:")
-                )
+                from vobchat.state_nodes import _append_ai
+                _append_ai(state, f"Sorry, I couldn't find a theme matching '{theme_query}'. Let me show you what's available:")
                 # Clear the current theme to force theme selection
                 state.pop("selected_theme", None)
                 # CRITICAL: Clear selection_idx when theme not found to prevent stale values
@@ -1911,9 +1907,8 @@ def resolve_theme(state: lg_State) -> lg_State | Command:
     # ------------------------------------------------------------------
     if state.get("selected_theme") and not units:
         chosen = pd.read_json(io.StringIO(state["selected_theme"]), typ='series')
-        state.setdefault("messages", []).append(
-            AIMessage(content=f"Got it – I'll use the **{chosen['labl']}** theme. ")
-            )
+        from vobchat.state_nodes import _append_ai
+        _append_ai(state, f"Got it – I'll use the **{chosen['labl']}** theme. ")
         # interrupt(
         #     value={
         #         "message": (

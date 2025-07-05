@@ -392,12 +392,21 @@ def AddTheme_node(state: lg_State):
                 logger.warning(f"AddTheme_node: Error parsing current theme, proceeding with theme change")
 
         logger.info(f"AddTheme_node: Setting extracted_theme to '{q}' and clearing selected_theme for theme resolution")
-        state["extracted_theme"] = q
-        # Use pop to completely remove selected_theme from state
-        state.pop("selected_theme", None)
-        state["selection_idx"] = None  # Clear any stale button selection
-        logger.info(f"AddTheme_node: State after update - extracted_theme: '{state.get('extracted_theme')}', selected_theme: {state.get('selected_theme')}")
-        # _append_ai(state, f"Looking for a theme matching “{q}”…")
+        # Clear the processed intent payload to prevent reprocessing
+        state["last_intent_payload"] = {}
+        
+        # CRITICAL: Use Command to route directly to resolve_theme with state updates
+        # This ensures the state changes are applied before resolve_theme runs
+        return Command(
+            goto="resolve_theme",
+            update={
+                "extracted_theme": q,
+                "selected_theme": None,  # Clear existing theme
+                "selection_idx": None,   # Clear any stale button selection
+                "options": [],           # Clear any stale options
+                "current_node": None,    # Clear current node state
+            }
+        )
 
     else:
         _append_ai(state, "AddTheme: no theme_code or theme_query provided.")
@@ -627,10 +636,7 @@ def DescribeTheme_node(state: lg_State):
 
     # c) still nothing → ask a follow-up
     if theme_df is None or theme_df.empty:
-        state.setdefault("messages", []).append(
-            AIMessage(content="I'm not sure which theme you mean. "
-                              "Try e.g. “describe Population” or “describe T_POP”.")
-        )
+        _append_ai(state, "I'm not sure which theme you mean. Try e.g. 'describe Population' or 'describe T_POP'.")
         state["last_intent_payload"] = {}
         return state
 
