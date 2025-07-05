@@ -12,6 +12,40 @@ js_default_min_year = 1800
 # js_current_year is handled by the first callback
 
 def register_clientside_callbacks(app: Dash):
+    # SSE Store Update Handler for app-state - Updates app-state store from SSE events
+    app.clientside_callback(
+        """
+        function(trigger_data, current_app_state) {
+            // Check if this is an SSE trigger with state data
+            if (trigger_data && trigger_data.hasUpdate && trigger_data.stateData) {
+                const stateData = trigger_data.stateData;
+                console.log('Clientside callback: Processing SSE state update for app-state:', stateData);
+
+                // Build app state updates only
+                const app_updates = Object.assign({}, current_app_state || {});
+                let hasAppUpdates = false;
+
+                // CRITICAL: show_visualization should only be in app-state
+                if (stateData.show_visualization !== undefined) {
+                    app_updates.show_visualization = stateData.show_visualization;
+                    hasAppUpdates = true;
+                }
+
+                console.log('Clientside callback: hasAppUpdates:', hasAppUpdates);
+                console.log('Clientside callback: app_updates:', app_updates);
+
+                return hasAppUpdates ? app_updates : window.dash_clientside.no_update;
+            }
+
+            return window.dash_clientside.no_update;
+        }
+        """,
+        Output('app-state', 'data', allow_duplicate=True),
+        Input('sse-event-processor', 'data'),
+        State('app-state', 'data'),
+        prevent_initial_call=True
+    )
+
     # SSE Store Update Handler - Updates place-state store from SSE events
     # IMPORTANT: Only updates place-state to avoid circular dependencies with app-state
     app.clientside_callback(
@@ -47,11 +81,8 @@ def register_clientside_callbacks(app: Dash):
                     hasPlaceUpdates = true;
                 }
 
-                // CRITICAL: Also include show_visualization in place-state to avoid app-state conflicts
-                if (stateData.show_visualization !== undefined) {
-                    place_updates.show_visualization = stateData.show_visualization;
-                    hasPlaceUpdates = true;
-                }
+                // REMOVED: show_visualization should only be in app-state, not place-state
+                // This prevents conflicts between the two stores
 
                 console.log('Clientside callback: hasPlaceUpdates:', hasPlaceUpdates);
                 console.log('Clientside callback: place_updates:', place_updates);

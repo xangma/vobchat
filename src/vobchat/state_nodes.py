@@ -256,7 +256,13 @@ def AddPlace_node(state: lg_State):
     if "polygon_id" in args and args["polygon_id"] in existing_units:
         logger.info(f"AddPlace_node: Polygon {args['polygon_id']} is already selected, preventing duplicate processing")
         # Clear last_intent_payload to prevent workflow looping
+        # Also clear any stale resolve_theme state that might cause recursion
         state["last_intent_payload"] = {}
+        state["current_node"] = None
+        state["options"] = []
+        state["selection_idx"] = None
+        state["extracted_theme"] = None  # Clear to prevent theme reprocessing
+        logger.info("AddPlace_node: Cleared stale state to prevent recursion loops")
         return state
 
     # ── Add places to the single source of truth ─────────────────────────────────

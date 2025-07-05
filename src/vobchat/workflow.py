@@ -1574,8 +1574,10 @@ def resolve_theme(state: lg_State) -> lg_State | Command:
 
     # Check if there are still places being processed
     current_place_index = state.get("current_place_index", 0) or 0
-    extracted_place_names = state.get("extracted_place_names", [])
-    num_places = len(extracted_place_names)
+    # CRITICAL FIX: Use places array (single source of truth) instead of extracted_place_names
+    # extracted_place_names only contains text-extracted places, not polygon-clicked places
+    places = state.get("places", []) or []
+    num_places = len(places)
 
     logger.info(f"=== URGENT DEBUG: resolve_theme - current_place_index={current_place_index}, num_places={num_places} ===")
 
@@ -2140,15 +2142,23 @@ def create_workflow(lg_state: TypedDict):
         extracted_place_names = state.get("extracted_place_names", [])
         num_places = len(extracted_place_names)
         selected_units = get_selected_units(state)
+        units_needing_map_selection = state.get("units_needing_map_selection", []) or []
 
         logger.info(f"=== WORKFLOW TRACE: resolve_place_and_unit_router - current_place_index={current_place_index}, num_places={num_places}, selected_units={len(selected_units)} ===")
         logging.info(f"resolve_place_and_unit_router: current_place_index={current_place_index}, num_places={num_places}, selected_units={len(selected_units)}")
+        logger.info(f"resolve_place_and_unit_router: units_needing_map_selection={units_needing_map_selection}")
 
-        # Always go to update_polygon_selection first to ensure polygon selection
-        # The new pattern will handle the routing to themes when all places are done
-        logger.info(f"=== WORKFLOW TRACE: resolve_place_and_unit_router - routing to update_polygon_selection ===")
-        logging.info("resolve_place_and_unit_router: Going to update_polygon_selection for polygon selection")
-        return "update_polygon_selection"
+        # CRITICAL: Check if polygon selection is actually needed to prevent infinite loops
+        # Only route to update_polygon_selection if there are units that actually need polygon selection
+        if units_needing_map_selection:
+            logger.info(f"=== WORKFLOW TRACE: resolve_place_and_unit_router - routing to update_polygon_selection (units need selection) ===")
+            logging.info("resolve_place_and_unit_router: Going to update_polygon_selection for polygon selection")
+            return "update_polygon_selection"
+        else:
+            # No polygon selection needed, go directly to theme resolution
+            logger.info(f"=== WORKFLOW TRACE: resolve_place_and_unit_router - routing to resolve_theme (no polygon selection needed) ===")
+            logging.info("resolve_place_and_unit_router: Going to resolve_theme (polygon selection complete)")
+            return "resolve_theme"
 
     workflow.add_conditional_edges(
         "resolve_place_and_unit",
@@ -2297,6 +2307,7 @@ def create_workflow(lg_state: TypedDict):
         current_node = state.get("current_node")
         selection_idx = state.get("selection_idx")
         extracted_theme = state.get("extracted_theme")
+        last_intent_payload = state.get("last_intent_payload", {})
 
         # Check if places still need processing
         current_place_index = state.get("current_place_index", 0) or 0
@@ -2306,11 +2317,19 @@ def create_workflow(lg_state: TypedDict):
         logger.info(f"=== URGENT DEBUG: resolve_theme_router - has_theme={has_theme}, has_units={has_units}, has_options={has_options} ===")
         logging.info(f"resolve_theme_router: has_theme={has_theme}, has_units={has_units}, has_options={has_options}, current_node={current_node}, selection_idx={selection_idx}, extracted_theme={extracted_theme}")
         logging.info(f"resolve_theme_router: current_place_index={current_place_index}, num_places={num_places}")
+        logging.info(f"resolve_theme_router: last_intent_payload={last_intent_payload}")
 
         # CRITICAL: If places still need processing, always go back to resolve_place_and_unit
         if current_place_index < num_places:
             logging.info(f"resolve_theme_router: returning resolve_place_and_unit (places still need processing: {current_place_index} of {num_places})")
             return "resolve_place_and_unit"
+
+        # CRITICAL: RECURSION PREVENTION - If we have a theme and units but no new theme work to do,
+        # NEVER route back to resolve_theme as it creates infinite loops
+        if has_theme and has_units and not extracted_theme and not (selection_idx is not None and has_options):
+            logger.info(f"=== RECURSION PREVENTION: resolve_theme_router - ROUTING TO CUBES (preventing loop) ===")
+            logging.info("resolve_theme_router: returning find_cubes_node (recursion prevention - have theme and units, no new theme work)")
+            return "find_cubes_node"
 
         # CRITICAL: If a theme button was clicked but not processed yet, stay in resolve_theme to process it
         # But if we already have a theme set, don't loop back - continue to cubes

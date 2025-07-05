@@ -2,6 +2,7 @@
 
 import json
 import logging
+import math
 import threading
 import time
 import queue
@@ -18,7 +19,15 @@ def make_json_safe(data: Any) -> Any:
         return {k: make_json_safe(v) for k, v in data.items()}
     elif isinstance(data, list):
         return [make_json_safe(item) for item in data]
-    elif isinstance(data, (str, int, float, bool, type(None))):
+    elif isinstance(data, float):
+        # Handle NaN and infinity values which aren't JSON serializable
+        if math.isnan(data):
+            return None  # Convert NaN to null
+        elif math.isinf(data):
+            return None  # Convert infinity to null
+        else:
+            return data
+    elif isinstance(data, (str, int, bool, type(None))):
         return data
     else:
         # Convert non-serializable objects to string

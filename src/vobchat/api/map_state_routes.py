@@ -8,6 +8,7 @@ from typing import Dict, List, Any
 # Import Redis for session state management
 from vobchat.utils.redis_pool import redis_pool_manager
 from vobchat.models import login_required
+from vobchat.sse_manager import make_json_safe
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +147,7 @@ def register_map_state_routes(server):
             })
             
             # Save updated state back to Redis
-            r.set(state_key, json.dumps(state), ex=3600)  # 1 hour expiry
+            r.set(state_key, json.dumps(make_json_safe(state)), ex=3600)  # 1 hour expiry
             
             # Return the updated selection state
             response_data = {
@@ -231,7 +232,7 @@ def register_map_state_routes(server):
                 })
                 
                 # Save updated state
-                r.set(state_key, json.dumps(state), ex=3600)
+                r.set(state_key, json.dumps(make_json_safe(state)), ex=3600)
                 
                 logger.info(f"Cleared all map selections for thread {thread_id}")
                 

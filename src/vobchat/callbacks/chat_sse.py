@@ -46,7 +46,7 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
         Input("reset-button", "n_clicks"),
         Input("map-click-add-trigger", "data"),
         Input("map-click-remove-trigger", "data"),
-        Input("app-state", "data"),  # Watch for AI messages
+        # REMOVED: Input("app-state", "data") - causes recursion loop with app-state SSE callback
 
         # States
         State("thread-id", "data"),
@@ -58,7 +58,7 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
     )
     def update_chat_sse(
         n_clicks, n_submit, button_clicks, reset_n_clicks,
-        map_add_payload, map_remove_payload, app_state_input,
+        map_add_payload, map_remove_payload,
         thread_id, app_state, user_input, chat_history
     ):
         """SSE-based chat callback - no more background processing or retriggering"""
@@ -96,32 +96,7 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
         chat_history = chat_history or []
         app_state = app_state or app_state_data.copy()
         
-        # Check if this callback was triggered by an AI message
-        if "app-state.data" in ctx_trigger and app_state_input:
-            pending_ai_message = app_state_input.get("pending_ai_message")
-            if pending_ai_message:
-                # Add AI message to chat history
-                ai_message_div = html.Div(
-                    pending_ai_message["props"]["children"],
-                    className=pending_ai_message["props"]["className"]
-                )
-                chat_history.insert(0, ai_message_div)
-                
-                # Clear the pending message from app state
-                app_state_input_copy = app_state_input.copy()
-                app_state_input_copy.pop("pending_ai_message", None)
-                app_state_input_copy.pop("ai_message_timestamp", None)
-                
-                return (
-                    chat_history,
-                    "",  # Clear input
-                    app_state_input_copy,
-                    thread_id,
-                    {"status": "ai_message_added", "thread_id": thread_id},
-                    False,  # Re-enable send button
-                    None,  # Clear map add trigger
-                    None   # Clear map remove trigger
-                )
+        # REMOVED: app-state.data handling since we removed that input to prevent recursion loop
 
         # Handle reset
         if "reset-button" in ctx_trigger:
