@@ -46,6 +46,7 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
         Input("reset-button", "n_clicks"),
         Input("map-click-add-trigger", "data"),
         Input("map-click-remove-trigger", "data"),
+        Input("sse-event-processor", "data"),  # Handle AI messages from SSE
         # REMOVED: Input("app-state", "data") - causes recursion loop with app-state SSE callback
 
         # States
@@ -58,7 +59,7 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
     )
     def update_chat_sse(
         n_clicks, n_submit, button_clicks, reset_n_clicks,
-        map_add_payload, map_remove_payload,
+        map_add_payload, map_remove_payload, sse_event_data,
         thread_id, app_state, user_input, chat_history
     ):
         """SSE-based chat callback - no more background processing or retriggering"""
@@ -83,7 +84,7 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
             # This prevents thread ID mismatches when polygon clicks happen
             # The SSE client might already be connected with a thread ID
             logger.debug(f" No thread ID in store, checking for existing SSE connection")
-            
+
             # For now, create a new thread ID but log a warning
             # In production, we should get this from the SSE client's current connection
             thread_id = str(uuid4())
@@ -95,7 +96,7 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
         # Initialize states
         chat_history = chat_history or []
         app_state = app_state or app_state_data.copy()
-        
+
         # REMOVED: app-state.data handling since we removed that input to prevent recursion loop
 
         # Handle reset
@@ -116,8 +117,34 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
         workflow_input = None
         intent_payload = None
 
+        # Handle SSE AI messages
+        if "sse-event-processor" in ctx_trigger and sse_event_data and sse_event_data.get('type') == 'ai_message':
+            content = sse_event_data.get('content')
+            if content:
+                logger.info(f"Adding AI message to chat: {content}")
+
+                # Create AI message div with error styling if needed
+                className = "speech-bubble ai-bubble"
+                style = {}
+                if sse_event_data.get('isError'):
+                    style = {"color": "red"}
+
+                ai_message_div = html.Div(content, className=className, style=style)
+                chat_history.insert(0, ai_message_div)
+
+                return (
+                    chat_history,
+                    "",  # Clear input
+                    app_state,
+                    thread_id,
+                    {"status": "ai_message_added", "thread_id": thread_id},
+                    False,  # Re-enable send button
+                    None,  # Clear map add trigger
+                    None   # Clear map remove trigger
+                )
+
         # Handle text input (both Send button and Enter key)
-        if user_input and user_input.strip() and ("send-button" in ctx_trigger or "chat-input" in ctx_trigger):
+        elif user_input and user_input.strip() and ("send-button" in ctx_trigger or "chat-input" in ctx_trigger):
             # Add user message to chat immediately
             user_message_div = html.Div(user_input, className="speech-bubble user-bubble")
             chat_history.insert(0, user_message_div)
@@ -155,7 +182,7 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
         elif ctx_trigger == 'map-click-add-trigger.data' and map_add_payload:
             logger.debug(f" Processing map click ADD with payload: {map_add_payload}")
             logger.info(f"Map click (Add): {map_add_payload}")
-            
+
             # Always trigger workflow for polygon selection - let the workflow decide what to do
             logger.info("Polygon selection - triggering workflow")
             intent_payload = {
@@ -170,7 +197,7 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
         elif ctx_trigger == 'map-click-remove-trigger.data' and map_remove_payload:
             logger.debug(f" Processing map click REMOVE with payload: {map_remove_payload}")
             logger.info(f"Map click (Remove): {map_remove_payload}")
-            
+
             # For remove, we need to trigger the workflow to handle any state cleanup
             intent_payload = {
                 "intent": AssistantIntent.REMOVE_PLACE.value,
@@ -195,7 +222,7 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
 
             # SIMPLIFIED ARCHITECTURE: All workflow execution goes through SSE trigger path
             # This eliminates race conditions and provides consistent execution flow
-            
+
             callback_end_time = time.time()
             logger.debug(f" Callback completed at {callback_end_time:.3f} (took {callback_end_time - callback_start_time:.3f}s)")
 
@@ -243,19 +270,19 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
 
             # CRITICAL FIX: Use centralized workflow lock manager to prevent concurrent executions
             from vobchat.utils.workflow_lock_manager import workflow_lock_manager
-            
+
             # CRITICAL FIX: Use the thread ID from SSE status which should match the SSE connection
             # The thread_id parameter might be stale or None
             workflow_thread_id = sse_status.get("thread_id")
             if not workflow_thread_id:
                 logger.debug(f" ERROR - No thread ID in SSE status, cannot execute workflow")
                 raise PreventUpdate
-                
+
             logger.debug(f" Using thread ID from SSE status for workflow execution: {workflow_thread_id}")
-            
+
             # Replace the local thread_id variable to use the correct one
             thread_id = workflow_thread_id
-            
+
             if workflow_lock_manager.is_workflow_running(thread_id):
                 logger.debug(f" Workflow already running for thread {thread_id}, skipping duplicate execution")
                 raise PreventUpdate
@@ -283,7 +310,7 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
 
                     # Execute workflow using the async manager
                     from vobchat.utils.async_manager import async_manager
-                    
+
                     async def execute_workflow():
                         try:
                             logger.debug(f" Starting workflow execution for thread {thread_id}")
@@ -299,7 +326,7 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
                         except Exception as e:
                             logger.debug(f" ERROR in workflow execution: {e}")
                             logger.error(f"Workflow execution failed for thread {thread_id}: {e}", exc_info=True)
-                    
+
                     # Run the workflow execution in the background
                     async_manager.submit_task(execute_workflow())
                     logger.debug(f" Workflow triggered successfully")

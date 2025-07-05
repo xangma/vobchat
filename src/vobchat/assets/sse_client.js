@@ -358,7 +358,7 @@ window.workflowSSE.onMessage = function(content, isPartial, messageId) {
             // Create new AI bubble for partial message
             messageDiv = document.createElement('div');
             messageDiv.className = 'speech-bubble ai-bubble streaming';
-            chatDisplay.insertBefore(messageDiv, chatDisplay.firstChild);
+            chatDisplay.appendChild(messageDiv);
         }
         messageDiv.textContent = content;
     } else {
@@ -374,18 +374,23 @@ window.workflowSSE.onMessage = function(content, isPartial, messageId) {
             }
         }
 
-        // Use direct DOM manipulation instead of trying to update app-state
-        // This avoids the issue where we can't read current app-state values
-        console.log('SSE: Adding AI message directly to DOM to avoid app-state conflicts');
+        // Update chat history through Dash callback system instead of direct DOM manipulation
+        console.log('SSE: Adding AI message to chat history via callback trigger');
 
-        if (chatDisplay) {
-            const messageDiv = document.createElement('div');
-            messageDiv.className = 'speech-bubble ai-bubble';
-            messageDiv.textContent = content;
-            chatDisplay.insertBefore(messageDiv, chatDisplay.firstChild);
-            console.log('SSE: AI message added to chat display via DOM');
+        if (typeof dash_clientside !== 'undefined' && dash_clientside.set_props) {
+            // Trigger the chat callback to add the AI message to chat history
+            // We can use the existing sse-event-processor to trigger a chat update
+            dash_clientside.set_props('sse-event-processor', {
+                data: {
+                    type: 'ai_message',
+                    content: content,
+                    timestamp: Date.now(),
+                    hasUpdate: true
+                }
+            });
+            console.log('SSE: AI message added via chat callback trigger');
         } else {
-            console.error('SSE: Chat display element not found');
+            console.error('SSE: dash_clientside not available for callback trigger');
         }
     }
 };
@@ -509,17 +514,19 @@ window.workflowSSE.onInterrupt = function(interruptData) {
     console.log('SSE: About to add message to chat:', message);
     if (message) {
 
-        // UNIFIED FIX: Use direct DOM manipulation for all messages to ensure consistent ordering
-        // This ensures all messages follow the same insertion order and timing
-        const chatDisplay = document.getElementById('chat-display');
-        if (chatDisplay) {
-            const messageDiv = document.createElement('div');
-            messageDiv.className = 'speech-bubble ai-bubble';
-            messageDiv.textContent = message;
-            chatDisplay.insertBefore(messageDiv, chatDisplay.firstChild);  // Add to top in correct order
-            console.log('SSE: Added interrupt message via direct DOM (unified with regular messages)');
+        // Use the same Dash callback system for interrupt messages
+        if (typeof dash_clientside !== 'undefined' && dash_clientside.set_props) {
+            dash_clientside.set_props('sse-event-processor', {
+                data: {
+                    type: 'ai_message',
+                    content: message,
+                    timestamp: Date.now(),
+                    hasUpdate: true
+                }
+            });
+            console.log('SSE: Added interrupt message via chat callback trigger');
         } else {
-            console.error('SSE: Chat display element not found for interrupt message');
+            console.error('SSE: dash_clientside not available for interrupt message');
         }
     } else {
         console.log('SSE: No message to add to chat');
@@ -605,14 +612,18 @@ window.workflowSSE.onStateUpdate = function(stateData) {
 window.workflowSSE.onError = function(error) {
     console.error('SSE: Workflow error', error);
 
-    // Show error in chat using direct DOM manipulation
-    const chatDisplay = document.getElementById('chat-display');
-    if (chatDisplay) {
-        const errorDiv = document.createElement('div');
-        errorDiv.className = 'speech-bubble ai-bubble';
-        errorDiv.style.color = 'red';
-        errorDiv.textContent = `Error: ${error}`;
-        chatDisplay.insertBefore(errorDiv, chatDisplay.firstChild);
+    // Show error in chat using Dash callback system
+    if (typeof dash_clientside !== 'undefined' && dash_clientside.set_props) {
+        dash_clientside.set_props('sse-event-processor', {
+            data: {
+                type: 'ai_message',
+                content: `Error: ${error}`,
+                timestamp: Date.now(),
+                hasUpdate: true,
+                isError: true
+            }
+        });
+        console.log('SSE: Added error message via chat callback trigger');
     }
 };
 
