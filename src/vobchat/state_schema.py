@@ -12,7 +12,7 @@ from langchain_core.messages import AnyMessage
 
 
 
-def merge_lists(existing: Optional[List], new: Optional[List]) -> Optional[List]:
+def merge_lists(existing: Optional[List[dict]], new: Optional[List[dict]]) -> Optional[List[dict]]:
     """Helper function to merge lists, preferring new value if provided."""
     if new is not None:
         return new
@@ -34,10 +34,11 @@ def merge_string(existing: Optional[str], new: Optional[str]) -> Optional[str]:
 
 
 def merge_int(existing: Optional[int], new: Optional[int]) -> Optional[int]:
-    """Helper function to merge integers, preferring new value if provided."""
-    if new is not None:
-        return new
-    return existing
+    """Helper function to merge integers, always preferring new value.
+    This function supports explicit clearing to None."""
+    # In LangGraph, when a field is explicitly included in the return dict,
+    # we should use that value even if it's None (to support clearing)
+    return new
 
 
 def merge_dict(existing: Optional[dict], new: Optional[dict]) -> Optional[dict]:
@@ -124,22 +125,25 @@ class lg_State(TypedDict):
     intent_queue: Annotated[Optional[List[dict]], merge_lists]
 
     # user-choice plumbing
-    selection_idx: Annotated[Optional[int], merge_int]
+    selection_idx: Optional[int]
 
     # place + unit selections - SINGLE SOURCE OF TRUTH
     # places array contains: {"name": str, "g_unit": int, "g_unit_type": str, "g_place": int, ...}
-    places: Annotated[Optional[List[dict]], merge_places]
+    places: Optional[List[dict]]
+    
+    # map state synchronization
+    selected_polygons: Optional[List[int]]
 
     # theme selection
-    selected_theme: Annotated[Optional[str], merge_string]
-    extracted_theme: Annotated[Optional[str], merge_string]
+    selected_theme: Optional[str]
+    extracted_theme: Optional[str]
 
     # cube selection
-    cubes : Annotated[Optional[List[str]], merge_lists]
-    selected_cubes: Annotated[Optional[List[str]], merge_lists]
+    cubes : Optional[List[str]]
+    selected_cubes: Optional[List[str]]
 
     # processing state
-    current_place_index: Annotated[Optional[int], merge_int]
+    current_place_index: Optional[int]
     is_postcode: Optional[bool]
     extracted_postcode: Optional[str]
 
@@ -148,12 +152,12 @@ class lg_State(TypedDict):
     max_year: Optional[int]
 
     # misc / meta
-    current_node: Annotated[Optional[str], merge_string]
-    last_intent_payload: Annotated[Optional[dict], merge_dict]
-    options: Annotated[Optional[List[dict]], merge_lists]
-    message: Annotated[Optional[str], merge_string]
-    continue_to_next_place: Annotated[Optional[bool], merge_bool]
-    units_needing_map_selection: Annotated[Optional[List[int]], merge_lists]
-    map_update_request: Annotated[Optional[dict], merge_dict]
+    current_node: Optional[str]
+    last_intent_payload: Optional[dict]
+    options: Optional[List[dict]]
+    message: Optional[str]
+    continue_to_next_place: Optional[bool]
+    units_needing_map_selection: Optional[List[int]]
+    map_update_request: Optional[dict]
     _prompted_for_place: Optional[bool]
-    show_visualization: Annotated[Optional[bool], merge_bool]
+    show_visualization: Optional[bool]

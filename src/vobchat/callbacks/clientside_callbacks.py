@@ -1100,54 +1100,5 @@ def register_clientside_callbacks(app: Dash):
         prevent_initial_call=False
     )
 
-    # SSE Button Click Handler
-    app.clientside_callback(
-        """
-        function(buttonClicks, threadId) {
-            const context = dash_clientside.callback_context;
-            if (!context.triggered || context.triggered.length === 0 || !threadId) {
-                return window.dash_clientside.no_update;
-            }
-
-            const triggeredId = context.triggered[0].prop_id;
-            if (!triggeredId.includes('dynamic-button-user-choice')) {
-                return window.dash_clientside.no_update;
-            }
-
-            try {
-                // Parse the button ID to get selection index
-                const buttonIdStr = triggeredId.split('.')[0];
-                const buttonId = JSON.parse(buttonIdStr);
-                const selectionIdx = buttonId.index;
-
-                console.log("SSE: Sending button selection via SSE:", selectionIdx);
-
-                // Send selection via SSE
-                if (window.workflowSSE && window.workflowSSE.isConnected) {
-                    window.workflowSSE.sendUserInput({
-                        selection_idx: selectionIdx,
-                        button_type: buttonId.option_type
-                    }).then(response => {
-                        console.log("SSE: Button selection sent successfully");
-                    }).catch(error => {
-                        console.error("SSE: Error sending button selection:", error);
-                    });
-                }
-
-                return {
-                    action: "button_click",
-                    selection: selectionIdx,
-                    timestamp: Date.now()
-                };
-
-            } catch (e) {
-                console.error("SSE: Error processing button click:", e);
-                return window.dash_clientside.no_update;
-            }
-        }
-        """,
-        Output('sse-event-processor', 'data', allow_duplicate=True),
-        Input({'type': 'dynamic-button-user-choice', 'option_type': ALL, 'index': ALL}, 'n_clicks'),
-        State('thread-id', 'data'),
-        prevent_initial_call=True
-    )
+    # Note: SSE Button Click Handler removed - button clicks are handled server-side in chat_sse.py
+    # to avoid duplicate handling and race conditions

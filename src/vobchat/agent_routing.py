@@ -12,16 +12,12 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 #   agent_node - single entry point for routing
 # ---------------------------------------------------------------------------
-
-
 def agent_node(state: lg_State):
     # logging.debug(f"agent_node entered. State snapshot: {state}")
     logging.info("agent_node: Starting intent routing process.")
     # For brevity, log only keys or specific interesting values
     intent_queue = state.get('intent_queue', []) or []
     logging.debug(f"agent_node state details: last_intent_payload={state.get('last_intent_payload')}, queue_len={len(intent_queue)}")
-
-
     # Determine the source of the intent for this step
     final_intent: Optional[AssistantIntent] = None
     final_args: dict = {}
@@ -33,6 +29,18 @@ def agent_node(state: lg_State):
     # If so, prioritize extracting intent from the new message over any stale payloads
     last_msg = state.get("messages", [])[-1] if state.get("messages") else None
     has_new_human_message = last_msg and isinstance(last_msg, HumanMessage)
+
+    # CRITICAL: Check if there are more places to process before any intent processing
+    # This ensures multi-place workflows continue properly
+    num_places = len(state.get("places", []) or [])
+    current_index = state.get("current_place_index", 0) or 0
+    if num_places > 0 and current_index < num_places:
+        # Check if we're waiting for user input in resolve_place_and_unit
+        current_node = state.get("current_node")
+        has_pending_options = bool(state.get("options"))
+        if not (current_node == "resolve_place_and_unit" and has_pending_options):
+            logging.info(f"agent_node: Found {num_places - current_index} more places to process, routing to resolve_place_and_unit")
+            return Command(goto="resolve_place_and_unit", update=state)
 
     # Priority 1: Check for pre-set intent from Command update (e.g., map click)
     # BUT only if there's no new human message to process
@@ -50,8 +58,6 @@ def agent_node(state: lg_State):
             # CRITICAL: Include last_intent_payload in Command update so target nodes can access it
             update_for_command = {
                 "intent_queue": state.get("intent_queue", []), # Pass cleaned queue (cleaning happened earlier)
-                # CRITICAL: Clear selection_idx when routing to prevent stale values
-                "selection_idx": None,
                 # CRITICAL: Preserve last_intent_payload for target nodes that need it (like DescribeTheme_node)
                 "last_intent_payload": payload_to_route,
             }
@@ -84,8 +90,6 @@ def agent_node(state: lg_State):
         except ValueError:
             logging.warning(f"agent_node: Invalid intent '{pre_set_payload.get('intent')}' in last_intent_payload.")
             state["last_intent_payload"] = None # Clear invalid payload
-
-
     # Priority 2: Check for fresh Human input (prioritized over stale payloads)
     if not final_intent and has_new_human_message:
         user_text = cast(str, last_msg.content).strip() if last_msg else ""
@@ -258,8 +262,6 @@ def agent_node(state: lg_State):
                 # Fallback: Treat as CHAT or route to clarification? Let's route to ask_followup.
                 final_intent = None # Signal to route to followup/end
                 payload_to_route = {}
-
-
     # Priority 3: Check queue (only if no pre-set intent and not human message)
     elif not final_intent and last_msg: # Implies not HumanMessage
         logging.info("agent_node: Not human message & no pre-set payload, checking queue.")
@@ -292,47 +294,21 @@ def agent_node(state: lg_State):
                  logging.info(f"agent_node: Processing intent '{final_intent.value}' from queue.")
             except ValueError:
                  logging.warning(f"agent_node: Invalid intent '{payload_from_queue.get('intent')}' found in queue. Skipping.")
-                 # CRITICAL: Clear selection_idx on error to prevent stale values
-                 state["selection_idx"] = None
                  # If queue item is bad, just return state and let next cycle handle it?
                  # Or try next queue item? For now, return state to avoid complexity.
                  return state
         else:
-            logging.info("agent_node: No human message, no pre-set payload, queue empty. Checking for unfinished place processing.")
-            # Check if there are more places to process, but avoid reprocessing places that are actively being handled
-            current_node = state.get("current_node")
-            num_places = len(state.get("extracted_place_names", []))
-            current_index = state.get("current_place_index", 0) or 0
-            has_pending_options = bool(state.get("options"))
-
-            # Only block if we're specifically in resolve_place_and_unit with pending options (waiting for user input)
-            # Don't block other cases where we need to continue the workflow
-            if current_node == "resolve_place_and_unit" and has_pending_options:
-                logging.info(f"agent_node: resolve_place_and_unit has pending user input. Ending turn.")
-                # Don't clear selection_idx here as user input may be pending
-                return state
-
-            if num_places > 0 and current_index < num_places:
-                logging.info(f"agent_node: Found {num_places - current_index} more places to process, routing to resolve_place_and_unit")
-                # Don't clear selection_idx here as resolve_place_and_unit may need it
-                return Command(goto="resolve_place_and_unit", update=state)
-            else:
-                logging.info("agent_node: No places to process. Ending turn.")
-                # CRITICAL: Clear selection_idx when no work to do to prevent stale values
-                state["selection_idx"] = None
-                return state # Nothing to process
-
+            logging.info("agent_node: No human message, no pre-set payload, queue empty. Ending turn.")
+            return state # Nothing to process
 
     # --- Routing Logic ---
     if final_intent is AssistantIntent.CHAT:
         txt = final_args.get("text", "Okay.") # Default chat response
         logging.info(f"agent_node: Handling CHAT intent.")
         # Use _append_ai for consistent message handling
-        from vobchat.state_nodes import _append_ai
+        from vobchat.nodes.utils import _append_ai
         _append_ai(state, txt)
         state["last_intent_payload"] = {} # Clear the payload after processing
-        # CRITICAL: Clear selection_idx for CHAT intent to prevent stale values
-        state["selection_idx"] = None
         # CHAT usually ends the turn for the AI.
         return state # Return state after adding message
 
@@ -344,8 +320,6 @@ def agent_node(state: lg_State):
         # CRITICAL: Include last_intent_payload in Command update so target nodes can access it
         update_for_command = {
             "intent_queue": state.get("intent_queue", []), # Pass cleaned queue (cleaning happened earlier)
-            # CRITICAL: Clear selection_idx when routing to prevent stale values
-            "selection_idx": None,
             # CRITICAL: Preserve last_intent_payload for target nodes that need it (like DescribeTheme_node)
             "last_intent_payload": payload_to_route,
         }
@@ -375,6 +349,4 @@ def agent_node(state: lg_State):
         return Command(goto=END, update={
              "last_intent_payload": None, # Clear any potentially invalid payload
              "intent_queue": state.get("intent_queue", []),
-             # CRITICAL: Clear selection_idx when ending to prevent stale values
-             "selection_idx": None,
         })

@@ -153,24 +153,36 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
             logger.info(f"User text input: {user_input}")
 
         # Handle dynamic-button (unit/place/theme) clicks
-        # NOTE: The actual workflow resumption is handled by JavaScript via /api/workflow/input
-        # This callback just needs to acknowledge the button click without triggering duplicate workflow
+        # SIMPLIFIED: Button clicks start fresh workflows with selection data
         elif "dynamic-button-user-choice" in ctx_trigger:
             try:
                 selection_data = json.loads(ctx_trigger.split(".")[0])
                 selection_idx = selection_data.get("index")
                 btn_type = selection_data.get("option_type")
 
-                logger.info(f"Button selection: {selection_idx} (type={btn_type}) - will be handled by JavaScript/API")
+                logger.info(f"Button selection: {selection_idx} (type={btn_type}) - starting fresh workflow")
 
-                # Just return current state - JavaScript will handle the workflow input via API
+                # Create workflow input with button selection
+                workflow_input = {
+                    "selection_idx": selection_idx,
+                    "button_type": btn_type
+                }
+                
+                # This will trigger a fresh workflow execution via SSE
+                # No more complex interrupt resumption
                 return (
                     chat_history,
                     "",
                     app_state,
                     thread_id,
-                    {"status": "button_acknowledged", "thread_id": thread_id},
-                    False,  # Keep send button enabled for button clicks
+                    {
+                        "status": "connect_and_start_workflow",
+                        "thread_id": thread_id,
+                        "workflow_input": workflow_input,
+                        "connect_sse": True,
+                        "clear_existing": True  # Signal to clear any existing execution
+                    },
+                    True,  # Disable send button while workflow is processing
                     None,  # Clear map add trigger
                     None   # Clear map remove trigger
                 )
@@ -256,16 +268,22 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
         import time
         trigger_start_time = time.time()
 
+        logger.info(f"trigger_sse_workflow called with sse_status: {sse_status}, thread_id: {thread_id}")
+
         if not sse_status or not thread_id:
+            logger.debug(f"trigger_sse_workflow: Missing sse_status or thread_id, preventing update")
             raise PreventUpdate
 
         status = sse_status.get("status")
+        logger.info(f"trigger_sse_workflow: Processing status = {status}")
 
-        # if status == "button_acknowledged":
-        #     # Button was acknowledged - no workflow execution needed
-        #     logger.debug(f" Button click acknowledged for thread {thread_id}, no workflow execution needed")
-        #     raise PreventUpdate
-        if status == "connect_and_start_workflow":
+        if status == "button_acknowledged":
+            # Button was acknowledged - no workflow execution needed
+            logger.debug(f"Button click acknowledged for thread {thread_id}, no workflow execution needed")
+            raise PreventUpdate
+        # REMOVED: Complex button selection resumption logic
+        # All button clicks now go through the standard workflow execution path
+        elif status == "connect_and_start_workflow":
             workflow_input = sse_status.get("workflow_input", {})
 
             # CRITICAL FIX: Use centralized workflow lock manager to prevent concurrent executions
@@ -286,6 +304,16 @@ def register_sse_chat_callbacks(app, compiled_workflow, base_workflow=None):
             if workflow_lock_manager.is_workflow_running(thread_id):
                 logger.debug(f" Workflow already running for thread {thread_id}, skipping duplicate execution")
                 raise PreventUpdate
+
+            # Check if we need to clear existing execution first
+            clear_existing = sse_status.get("clear_existing", False)
+            if clear_existing:
+                logger.info(f"Clearing any existing workflow execution for thread {thread_id}")
+                workflow_lock_manager.force_release_lock(thread_id)
+                
+                # Add small delay to ensure cleanup
+                import time
+                time.sleep(0.1)
 
             # Use centralized workflow lock manager for proper concurrency control
             try:

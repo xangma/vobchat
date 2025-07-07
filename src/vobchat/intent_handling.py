@@ -95,42 +95,59 @@ _INTENT_EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
         • Anything else: Chat.  Set arguments.text to the assistant's normal reply.
 
         EXAMPLES:
-        • "Where's newport?" →
-          AddPlace {{"place": "newport"}}
-        • "Show me Bristol" →
-          AddPlace {{"place": "Bristol"}}
-        • "Find Oxford" →
-          AddPlace {{"place": "Oxford"}}
-        • "What about Birmingham?" →
-          AddPlace {{"place": "Birmingham"}}
-        • "The place, newport" →
-          AddPlace {{"place": "newport"}}
-        • "Please show Life & Death stats for Southampton and Portsmouth" →
-          AddPlace {{"place": "Southampton"}}, AddPlace {{"place": "Portsmouth"}}, AddTheme {{"theme_query": "Life & Death"}}
-        • "Population data for London" →
-          AddPlace {{"place": "London"}}, AddTheme {{"theme_query": "Population"}}
-        • "Add Manchester and Leeds" →
-          AddPlace {{"place": "Manchester"}}, AddPlace {{"place": "Leeds"}}
-        • "Change the theme to population" →
-          AddTheme {{"theme_query": "population"}}
-        • "Can you switch to life & death theme?" →
-          AddTheme {{"theme_query": "life & death"}}
-        • "Back to population data" →
-          AddTheme {{"theme_query": "population"}}
-        • "What is the Population theme?" →
-          DescribeTheme {{"theme": "Population"}}
-        • "Explain Housing statistics" →
-          DescribeTheme {{"theme": "Housing"}}
+        • "Where's [TownX]?" →
+        AddPlace {{"place": "TownX"}}
+
+        • "Show me [CityAlpha]" →
+        AddPlace {{"place": "CityAlpha"}}
+
+        • "Find [VillageDelta]" →
+        AddPlace {{"place": "VillageDelta"}}
+
+        • "What about [RegionOmega]?" →
+        AddPlace {{"place": "RegionOmega"}}
+
+        • "The place, [TownX]" →
+        AddPlace {{"place": "TownX"}}
+
+        • "Please show [ThemeOne] stats for [CityBeta] and [CityGamma]" →
+        AddPlace {{"place": "CityBeta"}}, AddPlace {{"place": "CityGamma"}}, AddTheme {{"theme_query": "ThemeOne"}}
+
+        • "[ThemeTwo] data for [MetroOne]" →
+        AddPlace {{"place": "MetroOne"}}, AddTheme {{"theme_query": "ThemeTwo"}}
+
+        • "Add [MunicipalityAlpha] and [MunicipalityBeta]" →
+        AddPlace {{"place": "MunicipalityAlpha"}}, AddPlace {{"place": "MunicipalityBeta"}}
+
+        • "Change the theme to [ThemeThree]" →
+        AddTheme {{"theme_query": "ThemeThree"}}
+
+        • "Can you switch to [ThemeFour] theme?" →
+        AddTheme {{"theme_query": "ThemeFour"}}
+
+        • "Back to [ThemeTwo] data" →
+        AddTheme {{"theme_query": "ThemeTwo"}}
+
+        • "What is the [ThemeFive] theme?" →
+        DescribeTheme {{"theme": "ThemeFive"}}
+
+        • "Explain [ThemeSix] statistics" →
+        DescribeTheme {{"theme": "ThemeSix"}}
+
         • "What other statistics do you have?" →
-          ListAllThemes {{}}
+        ListAllThemes {{}}
+
         • "What themes are available?" →
-          ListAllThemes {{}}
+        ListAllThemes {{}}
+
         • "Show me all available data" →
-          ListAllThemes {{}}
+        ListAllThemes {{}}
+
         • "List all themes" →
-          ListAllThemes {{}}
+        ListAllThemes {{}}
+
         • "Remove the current theme" →
-          RemoveTheme {{}}
+        RemoveTheme {{}}
 
         You MUST reply with valid JSON in this exact format:
         {{ "intents": [ {{ "intent": "<intent_name>", "arguments": {{ }} }} ] }} }}

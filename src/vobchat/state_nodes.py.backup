@@ -38,8 +38,6 @@ def _append_ai(state: lg_State, text: str):
         }
     )
     state.setdefault("messages", []).append(message)
-
-
 def _has_message_content(state: lg_State, search_content: str) -> bool:
     """Check if any existing message contains the specified content."""
     messages = state.get("messages", [])
@@ -52,16 +50,12 @@ def _has_message_content(state: lg_State, search_content: str) -> bool:
             if search_lower in msg_content:
                 return True
     return False
-
-
 def _maybe_route_to_cubes(state: lg_State):
     """Jump to cube retrieval when both slots (theme + ≥1 unit) are filled."""
     selected_units = get_selected_units(state)
     if state.get("selected_theme") and selected_units:
         return Command(goto="find_cubes_node")
     return state
-
-
 def _initial_state() -> Dict:
     """Return a fresh lg_State dict that clears ALL state fields."""
     return {
@@ -84,7 +78,7 @@ def _initial_state() -> Dict:
         "selected_cubes": [],
 
         # extraction results
-        "extracted_place_names": [],
+        # extracted_place_names removed - using places array as single source of truth
         "extracted_counties": [],
         "extracted_unit_types": [],
         "extracted_polygon_ids": [],
@@ -120,7 +114,8 @@ def ShowState_node(state: lg_State):
     summary: List[str] = []
 
     g_units = get_selected_units(state)
-    place_names = state.get("extracted_place_names", [])
+    places = state.get("places", []) or []
+    place_names = [p.get("name", f"Place {i}") for i, p in enumerate(places)]
     for idx, g_unit in enumerate(g_units):
         p_name = place_names[idx] if idx < len(place_names) else f"unit {g_unit}"
         summary.append(f"• {p_name} (g_unit {g_unit})")
@@ -202,10 +197,10 @@ def Reset_node(state: lg_State):
     reset_state = _initial_state()
     reset_state["selection_idx"] = None
     logger.info("Reset_node: Cleared all state including selection_idx")
-    
+
     # Note: Streamed message IDs are cleared on the frontend when reset is received
     # Backend clearing would require thread_id context which is not easily accessible here
-    
+
     return Command(goto="START", update=reset_state)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -237,8 +232,6 @@ def AddPlace_node(state: lg_State):
     # Extract polygon_id if provided (from map clicks)
     if "polygon_id" in args:
         polygon_ids_to_add = [args["polygon_id"]]
-
-
     # If no names but we have polygon_id (from map click), use polygon_id as the name
     if not names_to_add and polygon_ids_to_add:
         logger.info(f"AddPlace_node: No place name provided, using polygon_id {polygon_ids_to_add[0]} as place name")
@@ -259,8 +252,8 @@ def AddPlace_node(state: lg_State):
         # Also clear any stale resolve_theme state that might cause recursion
         state["last_intent_payload"] = {}
         state["current_node"] = None
-        state["options"] = []
-        state["selection_idx"] = None
+        # state["options"] = []
+
         state["extracted_theme"] = None  # Clear to prevent theme reprocessing
         logger.info("AddPlace_node: Cleared stale state to prevent recursion loops")
         return state
@@ -321,9 +314,7 @@ def _clean_duplicate_intents_from_queue(state: lg_State):
     original_length = len(intent_queue)
     if len(cleaned_queue) < original_length:
         logger.info(f"_clean_duplicate_intents_from_queue: Removed {original_length - len(cleaned_queue)} duplicate intents from queue")
-        state["intent_queue"] = cleaned_queue
-
-
+        # Note: Removed intent_queue updates to prevent concurrent modification conflicts
 def AddTheme_node(state: lg_State):
     logger.info("AddTheme_node: adding a theme to the selection")
 
@@ -331,9 +322,9 @@ def AddTheme_node(state: lg_State):
     intent_queue = state.get("intent_queue", [])
     original_queue_size = len(intent_queue)
 
-    # Remove ALL AddTheme intents from the queue aggressively
+    # Note: Removed intent_queue updates to prevent concurrent modification conflicts
+    # Theme intent processing now relies on workflow routing instead of queue management
     cleaned_queue = [intent for intent in intent_queue if intent.get("intent") != "AddTheme"]
-    state["intent_queue"] = cleaned_queue
 
     removed_count = original_queue_size - len(cleaned_queue)
     if removed_count > 0:
@@ -376,14 +367,15 @@ def AddTheme_node(state: lg_State):
                     # CRITICAL: Clear ALL AddTheme intents from the queue to prevent infinite processing
                     intent_queue = state.get("intent_queue", [])
                     original_queue_length = len(intent_queue)
+                    # Note: Removed intent_queue updates to prevent concurrent modification conflicts
+                    # Theme intent processing now relies on workflow routing instead of queue management
                     filtered_queue = [
                         intent for intent in intent_queue
                         if intent.get("intent") != "AddTheme"  # Remove ALL AddTheme intents, not just matching ones
                     ]
-                    state["intent_queue"] = filtered_queue
                     removed_count = original_queue_length - len(filtered_queue)
                     if removed_count > 0:
-                        logger.info(f"AddTheme_node: Removed {removed_count} ALL AddTheme intents from queue")
+                        logger.info(f"AddTheme_node: Would remove {removed_count} ALL AddTheme intents from queue")
 
                     # Clear the processed intent payload to prevent reprocessing
                     state["last_intent_payload"] = {}
@@ -394,7 +386,7 @@ def AddTheme_node(state: lg_State):
         logger.info(f"AddTheme_node: Setting extracted_theme to '{q}' and clearing selected_theme for theme resolution")
         # Clear the processed intent payload to prevent reprocessing
         state["last_intent_payload"] = {}
-        
+
         # CRITICAL: Use Command to route directly to resolve_theme with state updates
         # This ensures the state changes are applied before resolve_theme runs
         return Command(
@@ -402,9 +394,6 @@ def AddTheme_node(state: lg_State):
             update={
                 "extracted_theme": q,
                 "selected_theme": None,  # Clear existing theme
-                "selection_idx": None,   # Clear any stale button selection
-                "options": [],           # Clear any stale options
-                "current_node": None,    # Clear current node state
             }
         )
 
@@ -425,9 +414,6 @@ def RemoveTheme_node(state: lg_State):
         return state
     state["selected_theme"] = None
     state["extracted_theme"] = None
-    # CRITICAL: Clear selection_idx when removing theme to prevent stale values
-    state["selection_idx"] = None
-    logger.info("RemoveTheme_node: Cleared selection_idx to prevent stale values")
     _append_ai(state, "Theme selection cleared.")
     return state
 
@@ -451,9 +437,6 @@ def RemovePlace_node(state: lg_State):
     logger.info(f"DEBUG RemovePlace_node: Entry - current selected_polygons: {state.get('selected_polygons', [])}")
     logger.info(f"DEBUG RemovePlace_node: Entry - current places array: {places}")
 
-    # CRITICAL: Clear selection_idx when removing places to prevent stale values
-    state["selection_idx"] = None
-    logger.info("RemovePlace_node: Cleared selection_idx to prevent stale values")
 
     if not place:
         _append_ai(state, "Tell me which place to remove, e.g. ‘remove Oxford'.")
@@ -481,9 +464,8 @@ def RemovePlace_node(state: lg_State):
         # Pass only the fields that need to be updated
         update_dict = {
             "last_intent_payload": {},
-            "current_node": None,
-            "options": [],
-            "selection_idx": None,
+            # "current_node": None,
+            # "options": [],
             "map_update_request": {
                 "action": "update_map_selection",
                 "places": state.get("places", [])  # Maintain current places array
@@ -565,9 +547,8 @@ def RemovePlace_node(state: lg_State):
     # CRITICAL: Include all state changes made in this function
     update_dict = {
         "last_intent_payload": {},
-        "current_node": None,
-        "options": [],
-        "selection_idx": None,
+        # "current_node": None,
+        # "options": [],
         "map_update_request": {
             "action": "update_map_selection",
             "places": state.get("places", [])  # Send updated places array to ensure map sync
@@ -593,7 +574,7 @@ def DescribeTheme_node(state: lg_State):
     payload = state.get("last_intent_payload") or {}
     args    = payload.get("arguments", {})
     query   = (args.get("theme") or "").strip()
-    
+
     logger.info(f"DescribeTheme_node: Processing query '{query}' from payload: {payload}")
 
     # 1️⃣ Determine the theme code
@@ -607,7 +588,7 @@ def DescribeTheme_node(state: lg_State):
     if theme_df is None and query:
         all_df = pd.read_json(io.StringIO(get_all_themes("")), orient="records")
         logger.info(f"DescribeTheme_node: Loaded {len(all_df)} themes. Sample themes: {all_df.head(3)['labl'].tolist()}")
-        
+
         # Try exact case-insensitive match first
         mask = all_df["labl"].str.contains(query, case=False, regex=False)
         matches = all_df[mask]
@@ -627,7 +608,7 @@ def DescribeTheme_node(state: lg_State):
                     word_matches = all_df[word_mask]
                     logger.info(f"DescribeTheme_node: Word '{word}' matched {len(word_matches)} themes: {word_matches['labl'].tolist()[:3]}")
                     combined_mask |= word_mask
-                
+
                 if combined_mask.any():
                     theme_df = all_df[combined_mask].head(1)
                     logger.info(f"DescribeTheme_node: Using word match: {theme_df['labl'].iloc[0]}")
@@ -693,7 +674,6 @@ def ask_followup_node(state: lg_State):
             "options": state["options"],          # keep the same buttons alive
             "current_node": "ask_followup_node",
             # CRITICAL: Clear selection_idx through interrupt to prevent stale values
-            "selection_idx": None,
         })
         return state
 
@@ -716,14 +696,14 @@ def ask_followup_node(state: lg_State):
             chosen_intent = intents[idx]
         except (ValueError, IndexError):
             # bad index - start over cleanly
-            state["selection_idx"] = None
-            state["options"] = []
+
+            # state["options"] = []
             logger.warning("ask_followup_node: invalid selection_idx - reprompting")
         else:
             logger.info(f"ask_followup_node: user picked quick action → {chosen_intent}")
             # clear one-shot fields before continuing
-            state["selection_idx"] = None
-            state["options"] = []
+
+            # state["options"] = []
             # fake a minimal last_intent_payload so the usual router can do its job
             state["last_intent_payload"] = {"intent": chosen_intent, "arguments": {}}
             # jump right back to agent_node which will re-enter its routing cycle
@@ -767,7 +747,6 @@ def ask_followup_node(state: lg_State):
             "options": quick_buttons,
             "current_node": "ask_followup_node",
             # CRITICAL: Clear selection_idx through interrupt to prevent stale values
-            "selection_idx": None,
         }
     )
 

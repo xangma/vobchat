@@ -8,7 +8,15 @@ function getSelectedUnits(state) {
 
 function getSelectedUnitTypes(state) {
     const places = state.places || [];
-    return places.map(place => place.g_unit_type).filter(type => type !== null && type !== undefined);
+    // CRITICAL: Must maintain array alignment with getSelectedUnits()
+    // Only include unit types for places that have valid g_unit values
+    const result = [];
+    places.forEach(place => {
+        if (place.g_unit !== null && place.g_unit !== undefined) {
+            result.push(place.g_unit_type);
+        }
+    });
+    return result;
 }
 
 function getSelectedPlaceNames(state) {
@@ -17,10 +25,6 @@ function getSelectedPlaceNames(state) {
 }
 
 class WorkflowSSEClient {
-    // Store the latest interrupt so we know the current options/node for user input
-    setLatestInterrupt(interruptData) {
-        this.latestInterruptData = interruptData;
-    }
     constructor() {
         this.eventSource = null;
         this.threadId = null;
@@ -258,48 +262,7 @@ class WorkflowSSEClient {
         this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000); // Max 30 seconds
     }
 
-    sendUserInput(inputData) {
-        // Send user input via regular HTTP request since SSE is one-way
-        // Merge in the latest interrupt context for selection_idx/button clicks
-        let payload = { ...inputData };
-        if (this.latestInterruptData && (inputData.selection_idx !== undefined)) {
-            // Always add current_node and options from latest interrupt for button clicks
-            if (this.latestInterruptData.current_node) {
-                payload.current_node = this.latestInterruptData.current_node;
-            }
-            if (Array.isArray(this.latestInterruptData.options)) {
-                payload.options = this.latestInterruptData.options;
-            }
-            // Add current_place_index to track which place this selection belongs to
-            if (this.latestInterruptData.current_place_index !== undefined) {
-                payload.current_place_index = this.latestInterruptData.current_place_index;
-            }
-        }
-        return fetch('/api/workflow/input', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                thread_id: this.threadId,
-                input_data: payload
-            })
-        });
-    }
 
-    startWorkflow(workflowInput) {
-        // Start new workflow execution
-        return fetch('/api/workflow/start', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                thread_id: this.threadId,
-                workflow_input: workflowInput
-            })
-        });
-    }
 }
 
 // Create global SSE client instance
@@ -398,33 +361,37 @@ window.workflowSSE.onMessage = function(content, isPartial, messageId) {
 window.workflowSSE.onInterrupt = function(interruptData) {
     console.log('SSE: Processing interrupt', interruptData);
 
-    // Track interrupt and persist so button clicks can send full context
+    // Track interrupt time for debugging
     window.workflowSSE._lastInterruptTime = Date.now();
-    window.workflowSSE.setLatestInterrupt(interruptData);
+
+    // CRITICAL: Always clear existing buttons first to prevent stale buttons
+    console.log('SSE: Clearing any existing buttons before processing interrupt');
+    try {
+        if (typeof dash_clientside !== 'undefined' && dash_clientside.set_props) {
+            dash_clientside.set_props('options-container', {children: []});
+            console.log('SSE: Cleared existing buttons');
+        }
+    } catch (e) {
+        console.error('Could not clear existing buttons', e);
+    }
 
     // Handle different types of interrupts
     if (interruptData.options) {
-        // Multi-choice interrupt - render buttons
-        console.log('SSE: Rendering buttons for interrupt with', interruptData.options.length, 'options');
+        // Multi-choice interrupt - render new buttons after clearing
+        console.log('SSE: Rendering new buttons for interrupt with', interruptData.options.length, 'options');
         renderInterruptButtons(interruptData);
     } else {
-        // No options - clear any existing buttons
-        console.log('SSE: No options in interrupt - clearing buttons');
-        try {
-            if (typeof dash_clientside !== 'undefined' && dash_clientside.set_props) {
-                dash_clientside.set_props('options-container', {children: []});
-                console.log('SSE: Cleared options container');
-            }
-        } catch (e) {
-            console.error('Could not clear options container', e);
-        }
+        // No options - buttons already cleared above
+        console.log('SSE: No options in interrupt - buttons already cleared');
     }
 
     // CRITICAL: Handle PureMapState synchronization for interrupts with polygon data
     // This ensures interrupts properly clear or set polygon selections just like state updates
     // Use helper function to get units from places array
     const selectedUnits = getSelectedUnits(interruptData) || [];
+    const selectedUnitTypes = getSelectedUnitTypes(interruptData) || [];
     console.log('SSE: Interrupt selectedUnits extracted:', selectedUnits);
+    console.log('SSE: Interrupt selectedUnitTypes extracted:', selectedUnitTypes);
     console.log('SSE: Interrupt places array:', interruptData.places);
     
     // Handle map_update_request if present
@@ -433,23 +400,58 @@ window.workflowSSE.onInterrupt = function(interruptData) {
         const request = interruptData.map_update_request;
         
         if (window.pureMapState && request.places) {
-            // Extract units from places array
+            // Extract units and unit types from places array
             const units = getSelectedUnits({places: request.places});
-            console.log('SSE: Extracted units from map update request:', units);
+            const unitTypes = getSelectedUnitTypes({places: request.places});
+            console.log('SSE: Extracted units from map update request:', units, 'unit types:', unitTypes);
+            
+            // First, sync the selected polygons (without changing unit types yet)
             window.pureMapState.executeWorkflowCommand({
                 type: 'sync_state',
-                state: { selectedPolygons: units }
+                state: { 
+                    selectedPolygons: units,
+                    selectedPolygonTypes: unitTypes
+                }
             });
+            
+            // Then zoom to the selected polygons
+            if (units.length > 0) {
+                console.log('SSE: Zooming to selected polygons');
+                window.pureMapState.executeWorkflowCommand({
+                    type: 'zoom_to_selection'
+                });
+                
+                // Finally, change unit types AFTER zooming
+                const uniqueUnitTypes = [...new Set(unitTypes.filter(type => type !== null && type !== undefined))];
+                if (uniqueUnitTypes.length > 0) {
+                    console.log('SSE: Changing unit types after zoom:', uniqueUnitTypes);
+                    // Delay unit type change to ensure zoom completes first
+                    setTimeout(() => {
+                        window.pureMapState.userSetUnitTypes(uniqueUnitTypes);
+                    }, 500);
+                }
+            } else {
+                // No polygons to zoom to, just change unit types
+                const uniqueUnitTypes = [...new Set(unitTypes.filter(type => type !== null && type !== undefined))];
+                if (uniqueUnitTypes.length > 0) {
+                    console.log('SSE: Setting map to show unit types:', uniqueUnitTypes);
+                    window.pureMapState.userSetUnitTypes(uniqueUnitTypes);
+                }
+            }
             console.log('SSE: Synced map state via map_update_request');
         }
     } else if (selectedUnits.length > 0) {
         // Fallback to direct sync if no map_update_request
         const polygons = selectedUnits;
+        const polygonTypes = selectedUnitTypes;
         if (window.pureMapState) {
-            console.log('SSE: Syncing workflow polygons to pure map state (fallback):', polygons);
+            console.log('SSE: Syncing workflow polygons to pure map state (fallback):', polygons, 'types:', polygonTypes);
             window.pureMapState.executeWorkflowCommand({
                 type: 'sync_state',
-                state: { selectedPolygons: polygons }
+                state: { 
+                    selectedPolygons: polygons,
+                    selectedPolygonTypes: polygonTypes
+                }
             });
             console.log('SSE: Sent map sync command to pure map state (fallback)');
         }
@@ -536,6 +538,32 @@ window.workflowSSE.onInterrupt = function(interruptData) {
 window.workflowSSE.onStateUpdate = function(stateData) {
     console.log('SSE: Processing state update', stateData);
 
+    // CRITICAL: Handle button clearing from state updates
+    // This fixes the issue where buttons don't disappear when options=None is set via state update
+    if (stateData.options !== undefined) {
+        if (stateData.options === null || stateData.options === undefined || 
+            (Array.isArray(stateData.options) && stateData.options.length === 0)) {
+            // Clear buttons when options is explicitly set to null/empty
+            console.log('SSE: Clearing buttons from state update (options set to null/empty)');
+            try {
+                if (typeof dash_clientside !== 'undefined' && dash_clientside.set_props) {
+                    dash_clientside.set_props('options-container', {children: []});
+                    console.log('SSE: Cleared options container from state update');
+                }
+            } catch (e) {
+                console.error('SSE: Could not clear options container from state update', e);
+            }
+        } else if (Array.isArray(stateData.options) && stateData.options.length > 0) {
+            // Render buttons from state update if options are provided
+            console.log('SSE: Rendering buttons from state update');
+            renderInterruptButtons({
+                options: stateData.options, 
+                message: stateData.message,
+                current_node: stateData.current_node
+            });
+        }
+    }
+
     // CRITICAL: Update Dash stores using proper clientside callback mechanism
     // Trigger store updates by updating the sse-event-processor store that clientside callback monitors
     if (typeof dash_clientside !== 'undefined' && dash_clientside.set_props) {
@@ -554,13 +582,17 @@ window.workflowSSE.onStateUpdate = function(stateData) {
 
     // Handle workflow commands for map state - extract polygons from places array
     const polygons = getSelectedUnits(stateData) || stateData.selected_polygons || [];
+    const polygonTypes = getSelectedUnitTypes(stateData) || stateData.selected_polygons_unit_types || [];
     if (polygons.length >= 0) {
         if (window.pureMapState) {
             if (polygons.length > 0) {
-                console.log('SSE: Syncing workflow polygons to pure map state:', polygons);
+                console.log('SSE: Syncing workflow polygons to pure map state:', polygons, 'types:', polygonTypes);
                 window.pureMapState.executeWorkflowCommand({
                     type: 'sync_state',
-                    state: { selectedPolygons: polygons }
+                    state: { 
+                        selectedPolygons: polygons,
+                        selectedPolygonTypes: polygonTypes
+                    }
                 });
 
                 // Trigger zoom if requested
@@ -596,12 +628,75 @@ window.workflowSSE.onStateUpdate = function(stateData) {
         const request = stateData.map_update_request;
 
         if (window.pureMapState && request.places) {
-            // Extract units from places array
+            // Extract units and unit types from places array
             const units = getSelectedUnits({places: request.places});
+            const unitTypes = getSelectedUnitTypes({places: request.places});
+            console.log('SSE: Extracted units:', units, 'unit types:', unitTypes);
+            
+            // First, sync the selected polygons (without changing unit types yet)
             window.pureMapState.executeWorkflowCommand({
                 type: 'sync_state',
-                state: { selectedPolygons: units }
+                state: { 
+                    selectedPolygons: units,
+                    selectedPolygonTypes: unitTypes
+                }
             });
+            
+            // If we have polygons to display, fetch them first, then zoom, then change unit type
+            if (units.length > 0 && unitTypes.length > 0) {
+                const mapElement = document.getElementById('leaflet-map');
+                const map = mapElement?._leaflet_map;
+                const pm = window.polygon_management;
+                
+                if (map && pm && pm.fetchPolygonsByIds) {
+                    console.log('SSE: Fetching specific polygons before zoom:', units, 'with types:', unitTypes);
+                    
+                    // Fetch the specific polygons we need
+                    const fetchPromises = unitTypes.map((unitType, index) => {
+                        if (unitType && units[index]) {
+                            return pm.fetchPolygonsByIds(map, {}, unitType, [String(units[index])], null, units);
+                        }
+                        return Promise.resolve();
+                    }).filter(p => p);
+                    
+                    Promise.all(fetchPromises).then(() => {
+                        console.log('SSE: Polygons fetched, now zooming');
+                        window.pureMapState.executeWorkflowCommand({
+                            type: 'zoom_to_selection'
+                        });
+                        
+                        // Finally, change unit types AFTER zooming
+                        const uniqueUnitTypes = [...new Set(unitTypes.filter(type => type !== null && type !== undefined))];
+                        if (uniqueUnitTypes.length > 0) {
+                            console.log('SSE: Changing unit types after zoom:', uniqueUnitTypes);
+                            setTimeout(() => {
+                                window.pureMapState.userSetUnitTypes(uniqueUnitTypes);
+                            }, 500);
+                        }
+                    }).catch(err => {
+                        console.error('SSE: Failed to fetch polygons:', err);
+                        // Try to zoom anyway
+                        window.pureMapState.executeWorkflowCommand({
+                            type: 'zoom_to_selection'
+                        });
+                    });
+                } else {
+                    console.log('SSE: Map not ready, scheduling delayed zoom');
+                    // Fallback if map isn't ready
+                    setTimeout(() => {
+                        window.pureMapState.executeWorkflowCommand({
+                            type: 'zoom_to_selection'
+                        });
+                    }, 1000);
+                }
+            } else {
+                // No polygons to zoom to, just change unit types if needed
+                const uniqueUnitTypes = [...new Set(unitTypes.filter(type => type !== null && type !== undefined))];
+                if (uniqueUnitTypes.length > 0) {
+                    console.log('SSE: Setting map to show unit types:', uniqueUnitTypes);
+                    window.pureMapState.userSetUnitTypes(uniqueUnitTypes);
+                }
+            }
         }
     } else if (stateData.map_update_request === null) {
         // CRITICAL: Handle explicit clearing of map_update_request (e.g., from RemovePlace)
@@ -861,7 +956,6 @@ function updateMapState(stateData) {
         // Extract data from places array using helper functions
         const selectedUnits = getSelectedUnits(stateData) || [];
         const selectedUnitTypes = getSelectedUnitTypes(stateData) || [];
-        
         if (selectedUnits.length > 0) {
             updates.selected_polygons = selectedUnits.map(String);
         }

@@ -3,7 +3,8 @@ import logging, os
 from dash_extensions.enrich import DashProxy, CycleBreakerTransform, ServersideOutputTransform
 import dash_bootstrap_components as dbc
 from dash import html
-from vobchat.workflow import create_workflow, lg_State
+from vobchat.workflow import create_workflow
+from vobchat.state_schema import lg_State
 from vobchat.tools import get_date_ranges_by_type
 from vobchat.stores import create_stores
 from vobchat.utils.polygon_cache import polygon_cache
@@ -94,146 +95,7 @@ def register_sse_routes(server, compiled_workflow, base_workflow):
                 'threads': list(set(sse_manager.client_threads.values()))
             }
 
-    @server.route('/api/workflow/input', methods=['POST'])
-    def workflow_input():
-        """Handle user input for workflow via SSE"""
-        logger.debug(f"/api/workflow/input called")
-        try:
-            data = request.get_json()
-            logger.debug(f"Request data: {data}")
-            if not data:
-                logger.debug(f"No JSON data provided")
-                return {'error': 'No JSON data provided'}, 400
 
-            thread_id = data.get('thread_id')
-            input_data = data.get('input_data', {})
-            logger.debug(f"Parsed thread_id: {thread_id}, input_data: {input_data}")
-            logger.debug(f"VOBCHAT API RAW INPUT: {data}")
-
-            if not thread_id:
-                logger.debug(f"No thread_id provided")
-                return {'error': 'thread_id is required'}, 400
-
-            logger.debug(f"SSE workflow input for thread {thread_id}: {input_data}")
-            logging.info(f"SSE workflow input for thread {thread_id}: {input_data}")
-
-            # Import here to avoid circular imports
-            from vobchat.workflow_sse_adapter import create_workflow_sse_adapter
-            import asyncio
-
-            # Create workflow adapter and handle input asynchronously
-            workflow_adapter = create_workflow_sse_adapter(compiled_workflow, base_workflow)
-
-            # Create config for this thread
-            config = {
-                "configurable": {
-                    "thread_id": thread_id,
-                    "checkpoint_ns": "",
-                    "checkpoint_id": None
-                }
-            }
-
-            # Run the async workflow processing using async manager
-            def process_workflow_in_thread():
-                try:
-                    async def async_process():
-                        result = await workflow_adapter.handle_user_input(
-                            thread_id=thread_id,
-                            input_data=input_data,
-                            config=config
-                        )
-                        logging.info(f"Workflow processing completed for thread {thread_id}: {result.get('status')}")
-                        return result
-
-                    # Use async manager instead of creating new event loop
-                    async_manager.run_async(async_process(), timeout=300)  # 5 minute timeout
-                    
-                except Exception as e:
-                    logging.error(f"Error in workflow processing thread: {e}", exc_info=True)
-
-            # Start background processing in a separate thread
-            import threading
-            workflow_thread = threading.Thread(target=process_workflow_in_thread, daemon=True)
-            workflow_thread.start()
-
-            return {
-                'status': 'success',
-                'thread_id': thread_id,
-                'message': 'Input received and workflow processing started via SSE'
-            }
-
-        except Exception as e:
-            logging.error(f"Error processing workflow input: {e}", exc_info=True)
-            return {'error': str(e)}, 500
-
-    @server.route('/api/workflow/start', methods=['POST'])
-    def workflow_start():
-        """Start new workflow execution via SSE"""
-        try:
-            data = request.get_json()
-            if not data:
-                return {'error': 'No JSON data provided'}, 400
-
-            thread_id = data.get('thread_id')
-            workflow_input = data.get('workflow_input', {})
-
-            if not thread_id:
-                return {'error': 'thread_id is required'}, 400
-
-            logging.info(f"SSE workflow start for thread {thread_id}: {list(workflow_input.keys())}")
-
-            # Import here to avoid circular imports
-            from vobchat.workflow_sse_adapter import create_workflow_sse_adapter
-            import asyncio
-
-            # Create workflow adapter
-            workflow_adapter = create_workflow_sse_adapter(compiled_workflow, base_workflow)
-
-            # Create config for this thread
-            config = {
-                "configurable": {
-                    "thread_id": thread_id,
-                    "checkpoint_ns": "",
-                    "checkpoint_id": None
-                }
-            }
-
-            # Run the async workflow processing using async manager
-            def process_workflow_in_thread():
-                try:
-                    async def async_process():
-                        # Stream workflow execution
-                        results = []
-                        async for result in workflow_adapter.stream_workflow_execution(
-                            workflow_input=workflow_input,
-                            config=config,
-                            thread_id=thread_id
-                        ):
-                            results.append(result)
-
-                        logging.info(f"Workflow execution completed for thread {thread_id}, {len(results)} events")
-                        return results
-
-                    # Use async manager instead of creating new event loop
-                    async_manager.run_async(async_process(), timeout=300)  # 5 minute timeout
-                    
-                except Exception as e:
-                    logging.error(f"Error in workflow execution thread: {e}", exc_info=True)
-
-            # Start background processing in a separate thread
-            import threading
-            workflow_thread = threading.Thread(target=process_workflow_in_thread, daemon=True)
-            workflow_thread.start()
-
-            return {
-                'status': 'success',
-                'thread_id': thread_id,
-                'message': 'Workflow execution started via SSE'
-            }
-
-        except Exception as e:
-            logging.error(f"Error starting workflow execution: {e}", exc_info=True)
-            return {'error': str(e)}, 500
 
     @server.route('/api/save-frontend-logs', methods=['POST'])
     def save_frontend_logs():
@@ -242,15 +104,15 @@ def register_sse_routes(server, compiled_workflow, base_workflow):
             data = request.get_json()
             if not data or 'logs' not in data:
                 return {'error': 'No logs provided'}, 400
-            
+
             frontend_log_path = "/Users/xangma/Library/CloudStorage/OneDrive-Personal/repos/vobchat/frontend.log"
-            
+
             # Write logs to file (overwrite mode)
             with open(frontend_log_path, 'w') as f:
                 f.write(data['logs'])
-            
+
             return {'status': 'success', 'message': 'Frontend logs saved'}
-            
+
         except Exception as e:
             logging.error(f"Error saving frontend logs: {e}", exc_info=True)
             return {'error': str(e)}, 500

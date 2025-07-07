@@ -189,23 +189,42 @@ class PureMapState {
     _workflowSyncState(state) {
         // Merge workflow state with user state, preserving user selections
         const newPolygons = (state.selectedPolygons || []).map(String);
+        const newPolygonTypes = state.selectedPolygonTypes || [];
         
         // Add any new workflow polygons to user state
         const toAdd = newPolygons.filter(id => !this.userState.selectedPolygons.includes(id));
         if (toAdd.length > 0) {
             this.userState.selectedPolygons.push(...toAdd);
             this.userState.highlightedPolygons.push(...toAdd);
+            
+            // Add corresponding unit types
+            toAdd.forEach((polygonId, index) => {
+                const polygonIndex = newPolygons.indexOf(polygonId);
+                if (polygonIndex !== -1 && polygonIndex < newPolygonTypes.length) {
+                    this.userState.selectedPolygonTypes.push(newPolygonTypes[polygonIndex]);
+                } else {
+                    this.userState.selectedPolygonTypes.push(null); // Default if no type provided
+                }
+            });
         }
         
         // Remove polygons not in workflow state (if they weren't user-selected recently)
-        this.userState.selectedPolygons = this.userState.selectedPolygons.filter(id => 
-            newPolygons.includes(id) || this._isRecentUserSelection(id)
-        );
+        const polygonsToKeep = [];
+        const typesToKeep = [];
+        this.userState.selectedPolygons.forEach((id, index) => {
+            if (newPolygons.includes(id) || this._isRecentUserSelection(id)) {
+                polygonsToKeep.push(id);
+                typesToKeep.push(this.userState.selectedPolygonTypes[index] || null);
+            }
+        });
+        this.userState.selectedPolygons = polygonsToKeep;
+        this.userState.selectedPolygonTypes = typesToKeep;
         this.userState.highlightedPolygons = this.userState.highlightedPolygons.filter(id => 
             this.userState.selectedPolygons.includes(id)
         );
         
         console.log('PureMapState: Workflow synced state:', state);
+        console.log('PureMapState: Updated polygon types:', this.userState.selectedPolygonTypes);
         this._updateMapDisplay();
     }
     

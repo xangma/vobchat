@@ -48,18 +48,22 @@ class WorkflowLockManager:
             return True
     
     @contextmanager
-    def acquire_workflow_lock(self, thread_id: str, execution_id: Optional[str] = None):
+    def acquire_workflow_lock(self, thread_id: str, execution_id: Optional[str] = None, force_acquire: bool = False):
         """Acquire exclusive workflow execution lock for a thread"""
         if execution_id is None:
             execution_id = f"{thread_id}_{int(time.time() * 1000)}"
             
         logger.info(f"Attempting to acquire workflow lock for thread {thread_id} (execution: {execution_id})")
         
-        # Check if workflow is already running
-        if self.is_workflow_running(thread_id):
+        # Check if workflow is already running (unless force_acquire is True)
+        if not force_acquire and self.is_workflow_running(thread_id):
             existing_execution = self._thread_locks[thread_id]
             logger.warning(f"Workflow already running for thread {thread_id} (execution: {existing_execution.execution_id})")
             raise RuntimeError(f"Workflow already running for thread {thread_id}")
+        
+        # If force_acquire is True, clear any existing state first
+        if force_acquire:
+            self.force_release_lock(thread_id)
         
         # Create new execution lock
         execution_lock = threading.Lock()
@@ -103,7 +107,7 @@ class WorkflowLockManager:
                 del self._thread_locks[thread_id]
     
     def force_release_lock(self, thread_id: str) -> bool:
-        """Force release a workflow lock (use with caution)"""
+        """Force release a workflow lock and clear all state (use with caution)"""
         logger.warning(f"Force releasing workflow lock for thread {thread_id}")
         
         with self._manager_lock:
@@ -112,13 +116,28 @@ class WorkflowLockManager:
                 try:
                     if execution.lock.locked():
                         execution.lock.release()
+                        logger.info(f"Successfully released lock for thread {thread_id}")
                 except Exception as e:
                     logger.error(f"Error force releasing lock for thread {thread_id}: {e}")
                     
                 self._cleanup_execution(thread_id)
+                logger.info(f"Cleaned up workflow execution state for thread {thread_id}")
                 return True
         
+        logger.debug(f"No active workflow found for thread {thread_id} to force release")
         return False
+    
+    def clear_thread_state(self, thread_id: str) -> bool:
+        """Clear all workflow state for a thread, including any interrupted state"""
+        logger.info(f"Clearing all workflow state for thread {thread_id}")
+        
+        # Force release any locks
+        lock_released = self.force_release_lock(thread_id)
+        
+        # Clear any additional state that might exist
+        # This could include clearing checkpointed state if needed
+        
+        return lock_released
     
     def get_active_executions(self) -> Dict[str, str]:
         """Get currently active workflow executions"""

@@ -61,7 +61,7 @@ def register_map_state_routes(server):
                 state = {
                     "places": [],  # Single source of truth
                     "selected_polygons": [],
-                    "extracted_place_names": []
+                    # extracted_place_names removed - using places array as single source of truth
                 }
             
             # Get current selections using helper functions
@@ -70,7 +70,8 @@ def register_map_state_routes(server):
             current_unit_types = get_selected_unit_types(state)
             current_places = [place.get("g_place") for place in state.get("places", []) if place.get("g_place")]
             current_polygons = state.get("selected_polygons", [])
-            current_names = state.get("extracted_place_names", [])
+            places = state.get("places", []) or []
+            current_names = [p.get("name", f"Place {i}") for i, p in enumerate(places)]
             current_place_objects = state.get("places", [])
             
             # Convert polygon_id to int for consistency
@@ -141,7 +142,7 @@ def register_map_state_routes(server):
             # Update state - only store the single source of truth
             state.update({
                 "selected_polygons": current_polygons,
-                "extracted_place_names": current_names,
+                # extracted_place_names removed - using places array as single source of truth
                 "places": current_place_objects,  # Single source of truth
                 "current_place_index": len(current_place_objects)
             })
@@ -186,7 +187,7 @@ def register_map_state_routes(server):
                 response_data = {
                     "selected_polygons": state.get("selected_polygons", []),
                     "selected_unit_types": get_selected_unit_types(state),
-                    "selected_place_names": state.get("extracted_place_names", []),
+                    "selected_place_names": [p.get("name", f"Place {i}") for i, p in enumerate(state.get("places", []) or [])],
                     "total_selected": len(get_selected_units(state))
                 }
             else:
@@ -223,7 +224,7 @@ def register_map_state_routes(server):
                 # Clear all selection-related fields
                 state.update({
                     "selected_polygons": [],
-                    "extracted_place_names": [],
+                    # extracted_place_names removed - using places array as single source of truth,
                     "places": [],  # Single source of truth
                     "current_place_index": 0,
                     "selected_theme": None,
