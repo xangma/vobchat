@@ -2,7 +2,7 @@
 from __future__ import annotations
 import logging
 from typing import Optional
-from langchain_core.messages import AIMessage
+# AIMessage import removed - using _append_ai utility instead
 from langgraph.types import interrupt, Command
 from vobchat.state_schema import lg_State, get_selected_units, get_selected_unit_types
 from vobchat.utils.constants import UNIT_TYPES
@@ -124,6 +124,15 @@ def request_map_selection(state: lg_State) -> lg_State | Command:
     if not units_needing_map_selection:
         logger.debug("URGENT DEBUG: No units need selection, returning state unchanged")
         return state
+    
+    # Check if we've already processed this specific request to prevent duplicates
+    target_unit = units_needing_map_selection[0]
+    from .utils import _has_message_content
+    expected_message = f"Highlighting {places[current_place_index-1].get('name', 'the area') if current_place_index and current_place_index > 0 and current_place_index-1 < len(places) else 'the area'} on the map."
+    
+    if _has_message_content(state, expected_message):
+        logger.info(f"URGENT DEBUG: Already processed highlighting message for unit {target_unit}, skipping duplicate")
+        return state
 
     # Check if this is a multi-place workflow
     is_multi_place = len(places) > 1
@@ -151,10 +160,15 @@ def request_map_selection(state: lg_State) -> lg_State | Command:
             "selected_polygons_unit_types": all_selected_unit_types  # Include unit types for count display
         }
 
-        # Prepare AI message for user feedback
+        # Prepare AI message for user feedback using proper _append_ai function
+        from .utils import _append_ai, _has_message_content
         message = f"Highlighting {place_name} on the map."
-        current_messages = state.get("messages", [])
-        updated_messages = current_messages + [AIMessage(content=message)]
+        
+        # Only add message if it doesn't already exist to prevent duplicates
+        if not _has_message_content(state, message):
+            _append_ai(state, message)
+        
+        updated_messages = state.get("messages", [])
 
         logger.info(f"URGENT DEBUG: Multi-place - continuing to resolve_place_and_unit via Command")
         # Clear the processed unit from units_needing_map_selection
