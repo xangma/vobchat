@@ -23,7 +23,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY src/ src/
-# COPY CLAUDE.md .
+COPY create_user.py .
 
 # Create logs directory
 RUN mkdir -p /app/logs

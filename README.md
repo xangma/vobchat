@@ -79,8 +79,21 @@ For easier deployment, VobChat can be run in a Docker container with Redis inclu
    SECRET_KEY=your-production-secret-key-here
    ```
 4. Build and run: `docker-compose up --build`
-5. Create a login user: `docker-compose exec vobchat flask add-user admin@example.com`
+5. Create a login user: `docker-compose exec vobchat flask --app vobchat.app:server add-user admin@example.com`
 6. Access the application at `http://localhost:8050`
+
+**Running in Background:**
+To run the container in the background (detached mode):
+```bash
+docker-compose up -d --build
+```
+
+**Managing the Background Container:**
+* View logs: `docker-compose logs -f vobchat`
+* Stop container: `docker-compose down`
+* Restart container: `docker-compose restart`
+* Check status: `docker-compose ps`
+* Create user (while running): `docker-compose exec vobchat flask --app vobchat.app:server add-user admin@example.com`
 
 **Docker Architecture:**
 - **Internal**: Redis server runs inside the container

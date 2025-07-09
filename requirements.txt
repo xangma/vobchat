@@ -34,3 +34,4 @@ sshtunnel
 trio
 gevent
 flask-socketio
+argon2_cffi
