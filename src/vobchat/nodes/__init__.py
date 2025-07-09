@@ -15,7 +15,6 @@ from .place_nodes import (
     multi_place_tool_call
 )
 from .theme_nodes import (
-    AddTheme_node,
     RemoveTheme_node,
     ListThemesForSelection_node,
     ListAllThemes_node,
@@ -34,11 +33,9 @@ from .data_nodes import (
 )
 from .workflow_place_nodes import (
     update_polygon_selection,
-    check_map_selection_needed_router,
-    request_map_selection,
+    # request_map_selection,
     select_unit_on_map,
     resolve_place_and_unit,
-    should_continue_to_themes
 )
 
 __all__ = [
@@ -48,7 +45,6 @@ __all__ = [
     'postcode_tool_call',
     'multi_place_tool_call',
     # Theme nodes
-    'AddTheme_node',
     'RemoveTheme_node',
     'ListThemesForSelection_node',
     'ListAllThemes_node',
@@ -63,9 +59,7 @@ __all__ = [
     'find_cubes_node',
     # Workflow place nodes
     'update_polygon_selection',
-    'check_map_selection_needed_router',
-    'request_map_selection',
+    # 'request_map_selection',
     'select_unit_on_map',
     'resolve_place_and_unit',
-    'should_continue_to_themes',
 ]

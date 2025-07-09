@@ -9,7 +9,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def ask_followup_node(state: lg_State):
+def ask_followup_node(state: lg_State) -> dict | Command:
     """Generic follow-up / clarification node.
 
     When the router in *agent_node* cannot map the user message to any of the

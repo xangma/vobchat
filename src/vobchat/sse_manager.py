@@ -1,599 +1,514 @@
-# src/vobchat/sse_manager.py
+# # Simple SSE Manager - Clean rewrite
+# # Single responsibility: Stream events to connected clients
 
+# import json
+# import logging
+# from collections import defaultdict
+# from typing import Dict, Any, Optional
+# from dataclasses import dataclass
+
+# logger = logging.getLogger(__name__)
+
+# @dataclass
+# class SSEEvent:
+#     """Simple SSE event"""
+#     event_type: str  # 'message', 'state_update', 'interrupt', 'error'
+#     data: Any
+#     thread_id: str
+
+# class SimpleSSEManager:
+#     """Simplified SSE manager - no Redis, no complex pub/sub, just direct streaming"""
+
+#     def __init__(self):
+#         self.active_connections: Dict[str, list] = defaultdict(list)
+#         logger.info("Simple SSE Manager initialized")
+
+#     def add_client(self, thread_id: str, response_generator):
+#         """Add a client connection"""
+#         self.active_connections[thread_id].append(response_generator)
+#         logger.info(f"SSE client added for thread {thread_id}")
+
+#     def remove_client(self, thread_id: str, response_generator):
+#         """Remove a client connection"""
+#         if thread_id in self.active_connections:
+#             try:
+#                 self.active_connections[thread_id].remove(response_generator)
+#                 if not self.active_connections[thread_id]:
+#                     del self.active_connections[thread_id]
+#             except ValueError:
+#                 pass  # Client not in list
+#         logger.info(f"SSE client removed for thread {thread_id}")
+
+#     def send_event(self, event: SSEEvent):
+#         """Send event to all clients for this thread"""
+#         thread_id = event.thread_id
+#         if thread_id not in self.active_connections:
+#             logger.debug(f"No clients for thread {thread_id}")
+#             return
+
+#         # Format SSE message
+#         sse_data = json.dumps(event.data)
+#         sse_message = f"event: {event.event_type}\ndata: {sse_data}\n\n"
+
+#         # Send to all clients for this thread
+#         for connection in self.active_connections[thread_id][:]:  # Copy list to avoid modification during iteration
+#             try:
+#                 connection.send(sse_message)
+#             except Exception as e:
+#                 logger.warning(f"Failed to send to client: {e}")
+#                 # Remove dead connection
+#                 self.remove_client(thread_id, connection)
+
+#         logger.debug(f"Sent {event.event_type} event to {len(self.active_connections[thread_id])} clients")
+
+#     def send_message(self, thread_id: str, content: str):
+#         """Send a message event"""
+#         self.send_event(SSEEvent(
+#             event_type="message",
+#             data={"content": content},
+#             thread_id=thread_id
+#         ))
+
+#     def send_state_update(self, thread_id: str, state: Dict[str, Any]):
+#         """Send a state update event"""
+#         self.send_event(SSEEvent(
+#             event_type="state_update",
+#             data={"state": state},
+#             thread_id=thread_id
+#         ))
+
+#     def send_interrupt(self, thread_id: str, interrupt_data: Dict[str, Any]):
+#         """Send an interrupt event"""
+#         self.send_event(SSEEvent(
+#             event_type="interrupt",
+#             data=interrupt_data,
+#             thread_id=thread_id
+#         ))
+
+#     def send_error(self, thread_id: str, error: str):
+#         """Send an error event"""
+#         self.send_event(SSEEvent(
+#             event_type="error",
+#             data={"error": error},
+#             thread_id=thread_id
+#         ))
+
+#     def get_client_count(self, thread_id: str) -> int:
+#         """Get number of active clients for thread"""
+#         return len(self.active_connections.get(thread_id, []))
+
+# # Global instance
+# simple_sse_manager = SimpleSSEManager()
+
+
+# class SSEResponseGenerator:
+#     """Simple generator for SSE responses (deprecated - use QueueingSSEGenerator in routes)"""
+
+#     def __init__(self, thread_id: str):
+#         self.thread_id = thread_id
+#         self.is_active = True
+
+#     def send(self, message: str):
+#         """Send message to client (called by SSE manager)"""
+#         # This implementation is deprecated - actual sending is handled by QueueingSSEGenerator
+#         logger.debug(f"SSE[{self.thread_id}]: {message.strip()}")
+
+#     def close(self):
+#         """Close the connection"""
+#         self.is_active = False
+
+
+"""Thread-safe, multi-worker SSE manager backed by Redis.
+
+Key fixes over the previous revision
+------------------------------------
+* One long-lived event-loop per listener thread (no per-message loops).
+* Sync Redis calls moved to a background thread/executor so they never
+  block an asyncio context.
+* Uses a literal channel (``sse_cleanup:all``) for global cleanup instead
+  of publishing to the pattern string ``sse_cleanup:*``.
+* Lazy global singleton – Redis connection is created the first time the
+  manager is actually needed, not at import time.
+"""
+from __future__ import annotations
+
+import asyncio
 import json
 import logging
-import math
-import threading
 import time
-import queue
-import os
-from typing import Dict, Any, Optional, List
-from flask import Response
-from vobchat.utils.redis_pool import redis_pool_manager
+from dataclasses import dataclass
+from threading import Lock, Thread
+from typing import Any, Dict, Set
 
 logger = logging.getLogger(__name__)
 
-def make_json_safe(data: Any) -> Any:
-    """Recursively convert data to JSON-safe format"""
-    if isinstance(data, dict):
-        return {k: make_json_safe(v) for k, v in data.items()}
-    elif isinstance(data, list):
-        return [make_json_safe(item) for item in data]
-    elif isinstance(data, float):
-        # Handle NaN and infinity values which aren't JSON serializable
-        if math.isnan(data):
-            return None  # Convert NaN to null
-        elif math.isinf(data):
-            return None  # Convert infinity to null
-        else:
-            return data
-    elif isinstance(data, (str, int, bool, type(None))):
-        return data
-    else:
-        # Convert non-serializable objects to string
-        return str(data)
+# ---------------------------------------------------------------------------
+# Dataclasses
+# ---------------------------------------------------------------------------
 
+
+@dataclass(frozen=True, slots=True)
 class SSEEvent:
-    """Base class for SSE events"""
-    
-    def __init__(self, event_type: str, data: Dict[str, Any], thread_id: str):
-        self.event_type = event_type
-        self.data = data
-        self.thread_id = thread_id
-        self.timestamp = time.time()
-    
-    def to_sse_format(self) -> str:
-        """Convert event to SSE format"""
-        try:
-            data_json = json.dumps(self.data)
-            return f"event: {self.event_type}\ndata: {data_json}\n\n"
-        except Exception as e:
-            logger.error(f"Error serializing SSE event data: {e}", exc_info=True)
-            # Return a safe fallback event
-            return f"event: error\ndata: {{\"error\": \"Failed to serialize event data\"}}\n\n"
+    event_type: str
+    data: Any
 
-class MessageEvent(SSEEvent):
-    """Event for streaming AI messages"""
-    
-    def __init__(self, content: str, thread_id: str, is_partial: bool = False, message_id: Optional[str] = None):
-        super().__init__("message", {
-            "content": content,
-            "is_partial": is_partial,
-            "thread_id": thread_id,
-            "message_id": message_id
-        }, thread_id)
+    def encode(self) -> str:
+        # Ensure no embedded new-lines break the SSE frame
+        payload = json.dumps(self.data, default=str).replace("\n", "\\n")
+        return f"event: {self.event_type}\ndata: {payload}\n\n"
 
-class InterruptEvent(SSEEvent):
-    """Event for workflow interrupts (button choices, etc.)"""
-    
-    def __init__(self, interrupt_data: Dict[str, Any], thread_id: str):
-        # Ensure interrupt_data is JSON serializable
-        safe_data = make_json_safe(interrupt_data)
-        super().__init__("interrupt", {
-            "data": safe_data,
-            "thread_id": thread_id
-        }, thread_id)
-    
 
-class StateUpdateEvent(SSEEvent):
-    """Event for workflow state updates"""
-    
-    def __init__(self, state_updates: Dict[str, Any], thread_id: str):
-        # Ensure state_updates is JSON serializable
-        safe_data = make_json_safe(state_updates)
-        super().__init__("state_update", {
-            "data": safe_data,
-            "thread_id": thread_id
-        }, thread_id)
-    
+# ---------------------------------------------------------------------------
+# Manager
+# ---------------------------------------------------------------------------
 
-class ErrorEvent(SSEEvent):
-    """Event for errors"""
-    
-    def __init__(self, error: str, thread_id: str):
-        super().__init__("error", {
-            "error": error,
-            "thread_id": thread_id
-        }, thread_id)
 
-class RedisSSEManager:
-    """Redis-backed SSE manager that works across multiple Gunicorn workers"""
-    
-    def __init__(self):
-        # Local worker state
-        self.event_queues: Dict[str, queue.Queue] = {}  # client_id -> queue
-        self.lock = threading.Lock()
-        
-        # Redis connection for shared state using connection pool
-        self.redis_client = redis_pool_manager.get_sync_client()
-        
-        # Connection lifecycle management
-        self.client_last_seen: Dict[str, float] = {}  # client_id -> timestamp
-        self.heartbeat_interval = 30  # seconds
-        self.connection_timeout = 90  # seconds
-        
-        # Redis key prefixes
-        self.client_key_prefix = "sse:clients:"  # {thread_id} -> {client_id}
-        self.worker_key_prefix = "sse:workers:"  # {client_id} -> {worker_id}
-        
-        # Worker ID for this process
-        self.worker_id = f"worker_{os.getpid()}"
-        
-        logger.debug(f" Initialized Redis SSE Manager for worker {self.worker_id}")
-        
-        # Redis pub/sub for cross-worker event delivery
-        self.pubsub_channel = "sse_events"
-        # Create a dedicated client for pub/sub to avoid connection conflicts
-        self.pubsub_client = redis_pool_manager.get_sync_client()
-        self.pubsub = self.pubsub_client.pubsub()
-        self.pubsub.subscribe(self.pubsub_channel)
-        
-        # Start background thread for pub/sub message handling
-        self._pubsub_listener_started = False
-        self._start_pubsub_listener()
-        
-        # Start cleanup thread for stale connections
-        self._start_cleanup_thread()
-    
-    def _start_pubsub_listener(self):
-        """Start background thread to listen for Redis pub/sub messages"""
-        if self._pubsub_listener_started:
-            logger.debug(f" Pub/sub listener already started for worker {self.worker_id}")
+class SSEManager:
+    """Redis-based Server-Sent-Events hub that works across multiple workers."""
+
+    def __init__(self) -> None:
+        logger.info("DEBUG: SSEManager.__init__ called")
+        logger.info("SSEManager.__init__ called")
+        self._clients: Dict[str, Set[Any]] = {}
+        self._lock = Lock()
+        self._redis_listener_started = False
+        self._listener_loop: asyncio.AbstractEventLoop | None = None
+        logger.info("DEBUG: About to start Redis listener")
+        self._start_redis_listener()
+        logger.info("DEBUG: Redis listener started")
+
+    # ------------------------------------------------------------------
+    # Client registration (synchronous – safe for WSGI/Flask entrypoints)
+    # ------------------------------------------------------------------
+
+    def add_client(self, thread_id: str, sender: Any) -> None:
+        """Register a new SSE sender for *thread_id*."""
+        with self._lock:
+            # Drop duplicates so each thread keeps at most one live sender.
+            if thread_id in self._clients and self._clients[thread_id]:
+                logger.warning(
+                    "Replacing %d existing SSE clients for thread %s",
+                    len(self._clients[thread_id]),
+                    thread_id,
+                )
+                self._clients[thread_id].clear()
+            self._clients.setdefault(thread_id, set()).add(sender)
+        logger.debug("SSE client added – thread=%s count=%d",
+                     thread_id, self.client_count(thread_id))
+
+    def remove_client(self, thread_id: str, sender: Any) -> None:
+        with self._lock:
+            if sender in self._clients.get(thread_id, set()):
+                self._clients[thread_id].discard(sender)
+                if not self._clients[thread_id]:
+                    self._clients.pop(thread_id, None)
+        logger.debug("SSE client removed – thread=%s", thread_id)
+
+    # ------------------------------------------------------------------
+    # Redis pub/sub listener – runs in its own dedicated thread
+    # ------------------------------------------------------------------
+
+    def _start_redis_listener(self) -> None:
+        if self._redis_listener_started:
             return
-            
-        def listen_for_events():
+        self._redis_listener_started = True
+
+        def _listener_thread() -> None:
             try:
-                logger.debug(f" Started pub/sub listener for worker {self.worker_id}")
-                for message in self.pubsub.listen():
-                    if message['type'] == 'message':
-                        try:
-                            event_data = json.loads(message['data'])
-                            target_worker = event_data.get('target_worker')
-                            if target_worker == self.worker_id:
-                                # This event is for us, deliver it locally
-                                client_id = event_data.get('client_id')
-                                event_type = event_data.get('event_type')
-                                thread_id = event_data.get('thread_id')
-                                
-                                logger.debug(f" Received cross-worker event {event_type} for client {client_id}")
-                                
-                                # Reconstruct the SSE event
-                                if event_type == 'message':
-                                    event = MessageEvent(
-                                        event_data['content'], 
-                                        thread_id, 
-                                        event_data.get('is_partial', False)
-                                    )
-                                elif event_type == 'interrupt':
-                                    event = InterruptEvent(event_data['data'], thread_id)
-                                elif event_type == 'state_update':
-                                    event = StateUpdateEvent(event_data['data'], thread_id)
-                                elif event_type == 'error':
-                                    event = ErrorEvent(event_data['error'], thread_id)
-                                else:
-                                    continue
-                                
-                                # Deliver to local client
-                                self._deliver_local_event(client_id, event)
-                        except Exception as e:
-                            logger.debug(f" Error processing pub/sub message: {e}")
+                print("DEBUG: Starting Redis listener thread")
+                logger.info("Starting Redis listener thread")
+                
+                # local import – optional dependency
+                from vobchat.utils.redis_pool import redis_pool_manager
+
+                # Use a simpler approach: no event loop, just process messages synchronously
+                redis_client = redis_pool_manager.get_sync_client()
+                pubsub = redis_client.pubsub()
+                pubsub.psubscribe("sse:*", "sse_cleanup:*", "sse_cleanup:all")
+
+                logger.info("Redis SSE listener started")
+                print("DEBUG: Redis SSE listener started")
+                
+                # Process Redis messages in a simple sync loop
+                print("DEBUG: Starting Redis listener loop")
+                logger.debug("Starting Redis listener loop")
+                for message in pubsub.listen():
+                    print(f"DEBUG: Redis message received: {message}")
+                    logger.debug("Redis message received: %s", message)
+                    if message["type"] != "pmessage":
+                        continue
+
+                    channel = (
+                        message["channel"].decode("utf-8")
+                        if isinstance(message["channel"], bytes)
+                        else message["channel"]
+                    )
+                    data_raw = (
+                        message["data"].decode("utf-8")
+                        if isinstance(message["data"], bytes)
+                        else message["data"]
+                    )
+
+                    logger.debug("Processing Redis message: channel=%s, data=%s", channel, data_raw)
+                    # Process message synchronously
+                    try:
+                        self._process_redis_message_sync(channel, data_raw)
+                        logger.debug("Message processed successfully")
+                    except Exception as e:
+                        logger.error("Failed to process message: %s", e)
             except Exception as e:
-                logger.debug(f" Pub/sub listener error: {e}")
-        
-        import threading
-        listener_thread = threading.Thread(target=listen_for_events, daemon=True)
-        listener_thread.start()
-        self._pubsub_listener_started = True
-    
-    def _start_cleanup_thread(self):
-        """Start background thread to clean up stale connections"""
-        def cleanup_stale_connections():
-            while True:
-                try:
-                    time.sleep(30)  # Check every 30 seconds
-                    current_time = time.time()
-                    stale_clients = []
-                    
-                    with self.lock:
-                        for client_id, last_seen in list(self.client_last_seen.items()):
-                            if current_time - last_seen > self.connection_timeout:
-                                stale_clients.append(client_id)
-                                logger.warning(f"Client {client_id} timed out (last seen: {current_time - last_seen:.1f}s ago)")
-                    
-                    # Remove stale clients
-                    for client_id in stale_clients:
-                        self.remove_client(client_id)
-                        
-                except Exception as e:
-                    logger.error(f"Error in cleanup thread: {e}")
-        
-        cleanup_thread = threading.Thread(target=cleanup_stale_connections, daemon=True, name="SSE-Cleanup")
-        cleanup_thread.start()
-        logger.info("Started SSE connection cleanup thread")
-    
-    def _deliver_local_event(self, client_id: str, event: SSEEvent):
-        """Deliver an event to a local client"""
-        if client_id in self.event_queues:
-            try:
-                self.event_queues[client_id].put_nowait(event)
-                logger.debug(f" Successfully delivered cross-worker {event.event_type} event to client {client_id}")
-            except queue.Full:
-                logger.debug(f" Event queue full for client {client_id}")
-        else:
-            logger.debug(f" No local event queue found for client {client_id}")
-    
-    def add_client(self, client_id: str, thread_id: str):
-        """Add a new SSE client using Redis for shared state"""
-        with self.lock:
-            # Store client mapping in Redis
-            client_key = f"{self.client_key_prefix}{thread_id}"
-            worker_key = f"{self.worker_key_prefix}{client_id}"
-            
-            # Clear any existing clients for this thread
-            self.clear_thread_clients(thread_id)
-            
-            # Add new client to Redis
-            self.redis_client.set(client_key, client_id, ex=300)  # 5 min expiry
-            self.redis_client.set(worker_key, self.worker_id, ex=300)  # 5 min expiry
-            
-            # Create local event queue
-            self.event_queues[client_id] = queue.Queue(maxsize=1000)  # Limit queue size
-            
-            # Track client for lifecycle management
-            self.client_last_seen[client_id] = time.time()
-            
-            logger.debug(f" Added SSE client {client_id} for thread {thread_id} in worker {self.worker_id}")
-            logger.info(f"Added SSE client {client_id} for thread {thread_id}")
-    
-    def remove_client(self, client_id: str):
-        """Remove an SSE client"""
-        with self.lock:
-            # Find thread_id for this client
-            worker_key = f"{self.worker_key_prefix}{client_id}"
-            stored_worker = self.redis_client.get(worker_key)
-            
-            if stored_worker == self.worker_id:
-                # Remove from Redis
-                self.redis_client.delete(worker_key)
-                
-                # Find and remove client key
-                for key in self.redis_client.scan_iter(match=f"{self.client_key_prefix}*"):
-                    if self.redis_client.get(key) == client_id:
-                        self.redis_client.delete(key)
-                        break
-                
-                logger.debug(f" Removed SSE client {client_id} from Redis")
-            
-            # Remove local queue
-            if client_id in self.event_queues:
-                # Signal queue to close by putting None
-                try:
-                    self.event_queues[client_id].put_nowait(None)
-                except queue.Full:
-                    pass
-                del self.event_queues[client_id]
-                logger.debug(f" Removed local queue for client {client_id}")
-            
-            # Remove from lifecycle tracking
-            if client_id in self.client_last_seen:
-                del self.client_last_seen[client_id]
-    
-    def clear_thread_clients(self, thread_id: str):
-        """Remove all existing clients for a thread"""
-        client_key = f"{self.client_key_prefix}{thread_id}"
-        existing_client = self.redis_client.get(client_key)
-        
-        if existing_client:
-            logger.debug(f" Clearing existing client {existing_client} for thread {thread_id}")
-            worker_key = f"{self.worker_key_prefix}{existing_client}"
-            self.redis_client.delete(client_key)
-            self.redis_client.delete(worker_key)
-    
-    def broadcast_event(self, event: SSEEvent):
-        """Broadcast event to all clients listening to the thread"""
-        logger.debug(f" Broadcasting {event.event_type} event to thread {event.thread_id}")
-        
-        # Find client for this thread in Redis
-        client_key = f"{self.client_key_prefix}{event.thread_id}"
-        client_id = self.redis_client.get(client_key)
-        
-        if not client_id:
-            logger.debug(f" No Redis client found for thread {event.thread_id}")
-            logger.warning(f"No clients found for thread {event.thread_id} - event not delivered")
-            return
-        
-        # Check if client is on this worker
-        worker_key = f"{self.worker_key_prefix}{client_id}"
-        stored_worker = self.redis_client.get(worker_key)
-        
-        if stored_worker != self.worker_id:
-            logger.debug(f" Client {client_id} is on worker {stored_worker}, not {self.worker_id}")
-            logger.debug(f" Sending cross-worker event via Redis pub/sub")
-            
-            # Send event via Redis pub/sub for cross-worker delivery
-            event_message = {
-                'target_worker': stored_worker,
-                'client_id': client_id,
-                'event_type': event.event_type,
-                'thread_id': event.thread_id
-            }
-            
-            # Add event-specific data
-            if hasattr(event, 'data') and hasattr(event.data, 'get'):
-                if event.event_type == 'message':
-                    event_message['content'] = event.data.get('content', '')
-                    event_message['is_partial'] = event.data.get('is_partial', False)
-                elif event.event_type in ['interrupt', 'state_update']:
-                    event_message['data'] = event.data.get('data', {})
-                elif event.event_type == 'error':
-                    event_message['error'] = event.data.get('error', '')
-            
-            try:
-                self.redis_client.publish(self.pubsub_channel, json.dumps(event_message))
-                logger.debug(f" Published cross-worker event to Redis channel")
-                logger.info(f"Sent {event.event_type} event to client {client_id} via pub/sub")
-            except Exception as pub_error:
-                logger.debug(f" Error publishing to Redis: {pub_error}")
-                logger.error(f"Failed to publish event via Redis: {pub_error}")
-            return
-        
-        # Client is on this worker, deliver locally
-        if client_id in self.event_queues:
-            try:
-                self.event_queues[client_id].put_nowait(event)
-                logger.debug(f" Successfully queued {event.event_type} event for client {client_id}")
-                logger.debug(f"Sent {event.event_type} event to client {client_id}")
-            except queue.Full:
-                logger.debug(f" Event queue full for client {client_id}")
-                logger.warning(f"Event queue full for client {client_id}")
-        else:
-            logger.debug(f" No local event queue found for client {client_id}")
-    
-    @property
-    def clients(self):
-        """Compatibility property for legacy code - returns Redis clients"""
-        result = {}
-        for key in self.redis_client.scan_iter(match=f"{self.client_key_prefix}*"):
-            thread_id = key.replace(self.client_key_prefix, "")
-            client_id = self.redis_client.get(key)
-            if client_id:
-                result[client_id] = thread_id
-        return result
-    
-    def get_clients_summary(self) -> Dict[str, List[str]]:
-        """Get a summary of clients by thread"""
-        summary: Dict[str, List[str]] = {}
-        for key in self.redis_client.scan_iter(match=f"{self.client_key_prefix}*"):
-            thread_id = key.replace(self.client_key_prefix, "")
-            client_id = self.redis_client.get(key)
-            if client_id:
-                if thread_id not in summary:
-                    summary[thread_id] = []
-                summary[thread_id].append(str(client_id))
-        return summary
-    
-    def update_client_heartbeat(self, client_id: str):
-        """Update the last seen timestamp for a client"""
-        with self.lock:
-            if client_id in self.event_queues:
-                self.client_last_seen[client_id] = time.time()
-                # Also update Redis TTL
-                worker_key = f"{self.worker_key_prefix}{client_id}"
-                self.redis_client.expire(worker_key, 300)  # Reset to 5 min
-    
-    def get_connection_status(self) -> Dict[str, Any]:
-        """Get detailed connection status"""
-        with self.lock:
-            current_time = time.time()
-            return {
-                'total_connections': len(self.event_queues),
-                'connections_by_thread': self.get_clients_summary(),
-                'worker_id': self.worker_id,
-                'stale_connections': [
-                    {
-                        'client_id': cid,
-                        'idle_time': current_time - last_seen
-                    }
-                    for cid, last_seen in self.client_last_seen.items()
-                    if current_time - last_seen > 60  # More than 1 minute idle
-                ]
-            }
+                print(f"DEBUG: Exception in listener thread: {e}")
+                logger.exception("Exception in listener thread: %s", e)
 
-class SimpleSSEManager:
-    """Simple, synchronous SSE manager that works with Flask - LEGACY"""
-    
-    def __init__(self):
-        self.clients: Dict[str, str] = {}  # client_id -> thread_id
-        self.client_threads: Dict[str, str] = {}  # client_id -> thread_id
-        self.event_queues: Dict[str, queue.Queue] = {}  # client_id -> queue
-        self.lock = threading.Lock()
-    
-    def clear_thread_clients(self, thread_id: str):
-        """Remove all existing clients for a thread"""
-        with self.lock:
-            clients_to_remove = [
-                client_id for client_id, tid in self.clients.items()
-                if tid == thread_id
-            ]
-            for client_id in clients_to_remove:
-                logger.debug(f" Clearing old client {client_id} for thread {thread_id}")
-                if client_id in self.clients:
-                    del self.clients[client_id]
-                if client_id in self.client_threads:
-                    del self.client_threads[client_id]
-                if client_id in self.event_queues:
-                    # Signal the queue to close
-                    try:
-                        self.event_queues[client_id].put_nowait(None)
-                    except queue.Full:
-                        pass
-                    del self.event_queues[client_id]
-            if clients_to_remove:
-                logger.debug(f" Cleared {len(clients_to_remove)} old clients for thread {thread_id}")
+        Thread(target=_listener_thread,
+               name="SSE-Redis-Listener", daemon=True).start()
 
-    def add_client(self, client_id: str, thread_id: str):
-        """Add a new SSE client"""
-        with self.lock:
-            self.clients[client_id] = thread_id
-            self.client_threads[client_id] = thread_id
-            self.event_queues[client_id] = queue.Queue()
-            logger.debug(f" Added SSE client {client_id} for thread {thread_id}")
-            logger.debug(f" Total clients now: {len(self.clients)}, All mappings: {dict(self.clients)}")
-            logger.info(f"Added SSE client {client_id} for thread {thread_id}")
-    
-    def remove_client(self, client_id: str):
-        """Remove an SSE client"""
-        with self.lock:
-            if client_id in self.clients:
-                thread_id = self.clients[client_id]
-                logger.debug(f" Removing SSE client {client_id} for thread {thread_id}")
-                import traceback
-                logger.debug(f" Remove client called from: {traceback.format_stack()[-2].strip()}")
-                del self.clients[client_id]
-                del self.client_threads[client_id]
-                if client_id in self.event_queues:
-                    del self.event_queues[client_id]
-                logger.debug(f" Client {client_id} removed, {len(self.clients)} clients remaining")
-                logger.info(f"Removed SSE client {client_id} for thread {thread_id}")
-            else:
-                logger.debug(f" Attempted to remove non-existent client {client_id}")
-    
-    def broadcast_event(self, event: SSEEvent):
-        """Broadcast event to all clients listening to the thread"""
-        with self.lock:
-            logger.debug(f" Broadcasting {event.event_type} event to thread {event.thread_id}")
-            logger.debug(f" Current clients: {dict(self.clients)}")
-            
-            clients_to_notify = [
-                client_id for client_id, thread_id in self.clients.items()
-                if thread_id == event.thread_id
-            ]
-            
-            logger.debug(f" Found {len(clients_to_notify)} clients for thread {event.thread_id}: {clients_to_notify}")
-            
-            for client_id in clients_to_notify:
-                if client_id in self.event_queues:
-                    try:
-                        self.event_queues[client_id].put_nowait(event)
-                        logger.debug(f" Successfully queued {event.event_type} event for client {client_id}")
-                        logger.debug(f"Sent {event.event_type} event to client {client_id}")
-                    except queue.Full:
-                        logger.debug(f" Event queue full for client {client_id}")
-                        logger.warning(f"Event queue full for client {client_id}")
-                else:
-                    logger.debug(f" No event queue found for client {client_id}")
-            
-            if not clients_to_notify:
-                logger.debug(f" No clients found for thread {event.thread_id} - event not delivered")
-                logger.warning(f"No clients found for thread {event.thread_id} - event not delivered")
-    
-    def broadcast_event_sync(self, event: SSEEvent):
-        """Synchronous version of broadcast_event"""
-        self.broadcast_event(event)
-    
-    def update_client_heartbeat(self, client_id: str):
-        """Update heartbeat for client (no-op for simple manager)"""
-        pass  # Simple manager doesn't track heartbeats
-    
-    def get_connection_status(self) -> Dict[str, Any]:
-        """Get connection status"""
-        with self.lock:
-            return {
-                'total_connections': len(self.clients),
-                'connections_by_thread': dict(self.client_threads),
-                'worker_id': 'simple-manager'
-            }
+    # ------------------------------------------------------------------
+    # Redis message handler (runs inside *listener_loop*)
+    # ------------------------------------------------------------------
 
-# Global SSE manager instance
-# Use Redis-backed manager for multi-worker support
-try:
-    sse_manager = RedisSSEManager()
-    logger.info("Using Redis-backed SSE manager")
-except Exception as e:
-    logger.debug(f" Failed to initialize Redis SSE manager: {e}")
-    logger.info("Falling back to simple SSE manager")
-    sse_manager = SimpleSSEManager()
-
-def create_sse_response(client_id: str) -> Response:
-    """Create an SSE response for a client"""
-    
-    def event_stream():
+    def _process_redis_message_sync(self, channel: str, data_raw: str) -> None:
+        """Synchronous version of message processing"""
         try:
-            logger.debug(f" Starting SSE stream for client {client_id}")
-            # Send initial connection event
-            connected_data = {'client_id': client_id, 'timestamp': time.time()}
-            connected_event = f"event: connected\ndata: {json.dumps(connected_data)}\n\n"
-            logger.debug(f" Sending connected event: {connected_event.strip()}")
-            yield connected_event
+            print(f"DEBUG: _process_redis_message_sync called with channel={channel}")
+            logger.debug("_process_redis_message_sync called with channel=%s", channel)
+            logger.debug("Channel type: %s, startswith sse:: %s", type(channel), channel.startswith("sse:"))
             
-            # Keep connection alive and yield events from queue
-            last_heartbeat = time.time()
+            if channel == "sse_cleanup:all":
+                logger.debug("Matched cleanup:all channel")
+                payload = json.loads(data_raw)
+                keep = payload.get("keep_thread_id")
+                logger.info("Received global cleanup; keeping %s", keep)
+                self.cleanup_all_threads_except(keep)
+                return
+
+            if channel.startswith("sse_cleanup:"):
+                logger.debug("Matched cleanup channel")
+                payload = json.loads(data_raw)
+                if payload.get("action") == "cleanup":
+                    thread_id = channel.replace("sse_cleanup:", "")
+                    logger.info("Received cleanup for thread %s", thread_id)
+                    self._cleanup_local_clients(thread_id)
+                return
+
+            if channel.startswith("sse:"):
+                logger.debug("Matched sse: channel")
+                thread_id = channel.replace("sse:", "")
+                event_data = json.loads(data_raw)
+                logger.debug("Creating SSEEvent: event_type=%s, data=%s", event_data["event_type"], event_data["data"])
+                event = SSEEvent(
+                    event_type=event_data["event_type"], data=event_data["data"])
+
+                logger.debug("Broadcasting local event to thread %s", thread_id)
+                # Broadcast synchronously
+                self._broadcast_local_sync(thread_id, event)
+            else:
+                logger.debug("Channel did not match any patterns: %s", channel)
+        except Exception as exc:  # noqa: BLE001 – log and continue listening
+            logger.exception("Error processing Redis message: %s", exc)
+
+    async def _process_redis_message(self, channel: str, data_raw: str) -> None:
+        try:
+            print(f"DEBUG: _process_redis_message called with channel={channel}")
+            logger.debug("_process_redis_message called with channel=%s", channel)
+            logger.debug("Channel type: %s, startswith sse:: %s", type(channel), channel.startswith("sse:"))
             
-            while client_id in sse_manager.clients:
-                try:
-                    # Check for events in client queue
-                    if client_id in sse_manager.event_queues:
-                        queue_obj = sse_manager.event_queues[client_id]
-                        
-                        # Try to get event with very short timeout to avoid worker blocking
-                        try:
-                            event = queue_obj.get(timeout=0.1)  # Much shorter timeout
-                            # Check for shutdown signal
-                            if event is None:
-                                logger.debug(f" Shutdown signal received for client {client_id}")
-                                break
-                            event_data = event.to_sse_format()
-                            logger.debug(f" Sending SSE event: {event.event_type} - {event_data[:100]}...")
-                            yield event_data
-                            continue  # Skip sleep if we got an event
-                        except queue.Empty:
-                            pass  # No events, continue to heartbeat check
-                    
-                    # Send heartbeat more frequently and yield control
-                    current_time = time.time()
-                    if current_time - last_heartbeat > 10:  # Send heartbeat every 10 seconds
-                        heartbeat_event = f"event: heartbeat\ndata: {json.dumps({'timestamp': current_time})}\n\n"
-                        logger.debug(f" Sending heartbeat: {heartbeat_event.strip()}")
-                        yield heartbeat_event
-                        last_heartbeat = current_time
-                        
-                        # Update client heartbeat in SSE manager if using Redis manager
-                        if hasattr(sse_manager, 'update_client_heartbeat'):
-                            sse_manager.update_client_heartbeat(client_id)
-                    
-                    # Very short sleep to yield control to other threads/processes
-                    time.sleep(0.1)
-                        
-                except Exception as e:
-                    logger.debug(f" Error in event stream loop for client {client_id}: {e}")
-                    logger.error(f"Error in event stream for client {client_id}: {e}", exc_info=True)
-                    # Break on error to avoid infinite loops
-                    break
-                    
-        except Exception as e:
-            logger.debug(f" Error in SSE stream setup for client {client_id}: {e}")
-            logger.error(f"Error in SSE stream for client {client_id}: {e}", exc_info=True)
+            if channel == "sse_cleanup:all":
+                logger.debug("Matched cleanup:all channel")
+                payload = json.loads(data_raw)
+                keep = payload.get("keep_thread_id")
+                logger.info("Received global cleanup; keeping %s", keep)
+                self.cleanup_all_threads_except(keep)
+                return
+
+            if channel.startswith("sse_cleanup:"):
+                logger.debug("Matched cleanup channel")
+                payload = json.loads(data_raw)
+                if payload.get("action") == "cleanup":
+                    thread_id = channel.replace("sse_cleanup:", "")
+                    logger.info("Received cleanup for thread %s", thread_id)
+                    self._cleanup_local_clients(thread_id)
+                return
+
+            if channel.startswith("sse:"):
+                logger.debug("Matched sse: channel")
+                thread_id = channel.replace("sse:", "")
+                event_data = json.loads(data_raw)
+                logger.debug("Creating SSEEvent: event_type=%s, data=%s", event_data["event_type"], event_data["data"])
+                event = SSEEvent(
+                    event_type=event_data["event_type"], data=event_data["data"])
+
+                logger.debug("Broadcasting local event to thread %s", thread_id)
+                # Create task directly since we're in an async context
+                task = asyncio.create_task(self._broadcast_local(thread_id, event))
+                logger.debug("Task created successfully: %s", task)
+            else:
+                logger.debug("Channel did not match any patterns: %s", channel)
+        except Exception as exc:  # noqa: BLE001 – log and continue listening
+            logger.exception("Error processing Redis message: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Broadcasting helpers
+    # ------------------------------------------------------------------
+
+    def _broadcast_local_sync(self, thread_id: str, event: SSEEvent) -> None:
+        """Synchronous version of local broadcasting"""
+        logger.debug("_broadcast_local_sync called for thread %s with event %s", thread_id, event.event_type)
+        payload = event.encode()
+        dead = set()
+        with self._lock:
+            clients = list(self._clients.get(thread_id, set()))
+            logger.debug("Current clients for thread %s: %d", thread_id, len(clients))
+            logger.debug("All threads with clients: %s", list(self._clients.keys()))
+
+        logger.debug("Broadcasting to %d clients for thread %s: %s", len(clients), thread_id, payload[:100])
+        for sender in clients:
             try:
-                error_event = f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
-                logger.debug(f" Sending error event: {error_event.strip()}")
-                yield error_event
-            except Exception as error_e:
-                logger.debug(f" Failed to send error event: {error_e}")
-        finally:
-            # Clean up client when connection closes
-            logger.debug(f" SSE stream generator finished for client {client_id}")
-            logger.debug(f" About to clean up SSE client {client_id}")
-            sse_manager.remove_client(client_id)
-            logger.info(f"SSE connection closed for client {client_id}")
-    
-    return Response(
-        event_stream(),
-        mimetype='text/event-stream',
-        headers={
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Cache-Control',
-            'X-Accel-Buffering': 'no'  # Disable nginx buffering
+                logger.debug("Sending to client: %s", sender)
+                sender.send(payload)  # Call synchronously
+                logger.debug("Successfully sent to client")
+            except Exception as exc:
+                logger.warning("Dropping dead SSE sender: %s", exc)
+                dead.add(sender)
+
+        for d in dead:
+            self.remove_client(thread_id, d)
+
+    async def _broadcast_local(self, thread_id: str, event: SSEEvent) -> None:
+        """Deliver *event* to every local client listening on *thread_id*."""
+        logger.debug("_broadcast_local called for thread %s with event %s", thread_id, event.event_type)
+        payload = event.encode()
+        dead: Set[Any] = set()
+        with self._lock:
+            clients = list(self._clients.get(thread_id, set()))
+            logger.debug("Current clients for thread %s: %d", thread_id, len(clients))
+            logger.debug("All threads with clients: %s", list(self._clients.keys()))
+
+        logger.debug("Broadcasting to %d clients for thread %s: %s", len(clients), thread_id, payload[:100])
+        for sender in clients:
+            try:
+                logger.debug("Sending to client: %s", sender)
+                maybe_coro = sender.send(payload)
+                if asyncio.iscoroutine(maybe_coro):
+                    await maybe_coro
+                logger.debug("Successfully sent to client")
+            except Exception as exc:  # noqa: BLE001 – network can fail
+                logger.warning("Dropping dead SSE sender: %s", exc)
+                dead.add(sender)
+
+        for d in dead:
+            self.remove_client(thread_id, d)
+
+    async def _publish_to_redis(self, thread_id: str, event: SSEEvent) -> None:
+        """Publish *event* on Redis without blocking the asyncio loop."""
+        from vobchat.utils.redis_pool import redis_pool_manager
+
+        event_data = {
+            "event_type": event.event_type,
+            "data": event.data,
+            "timestamp": time.time(),
         }
-    )
+        channel = f"sse:{thread_id}"
+        # Off-load sync publish to the default executor (thread-pool)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: redis_pool_manager.get_sync_client().publish(
+                channel, json.dumps(event_data)),
+        )
+        logger.debug("Published %s event to Redis for thread %s",
+                     event.event_type, thread_id)
+
+    async def _broadcast(self, thread_id: str, event: SSEEvent) -> None:
+        await self._publish_to_redis(thread_id, event)
+
+    # ------------------------------------------------------------------
+    # Public helpers
+    # ------------------------------------------------------------------
+
+    async def send(self, thread_id: str, event_type: str, data: Any) -> None:
+        await self._broadcast(thread_id, SSEEvent(event_type, data))
+
+    async def message(self, thread_id: str, text: str) -> None:
+        await self.send(thread_id, "message", {"content": text})
+
+    async def state(self, thread_id: str, state: dict) -> None:
+        await self.send(thread_id, "state_update", {"state": state})
+
+    async def interrupt(self, thread_id: str, payload: dict) -> None:
+        await self.send(thread_id, "interrupt", payload)
+
+    async def error(self, thread_id: str, err: str) -> None:
+        await self.send(thread_id, "error", {"error": err})
+
+    # ------------------------------------------------------------------
+    # Cleanup helpers – may be called from any thread
+    # ------------------------------------------------------------------
+
+    def _cleanup_local_clients(self, thread_id: str) -> None:
+        with self._lock:
+            if self._clients.get(thread_id):
+                logger.info("Cleaning up %d local SSE clients for thread %s", len(
+                    self._clients[thread_id]), thread_id)
+                self._clients.pop(thread_id, None)
+
+    def broadcast_cleanup_signal(self, thread_id: str) -> None:
+        """Ask *all* workers to drop clients for *thread_id*."""
+        from vobchat.utils.redis_pool import redis_pool_manager
+
+        cleanup_message = json.dumps(
+            {"action": "cleanup", "thread_id": thread_id, "timestamp": time.time()})
+        redis_pool_manager.get_sync_client().publish(
+            f"sse_cleanup:{thread_id}", cleanup_message)
+        logger.info("Broadcast cleanup signal for thread %s", thread_id)
+
+    def broadcast_cleanup_all_except(self, keep_thread_id: str | None = None) -> None:
+        """Ask workers to drop clients for every thread *except* ``keep_thread_id``."""
+        from vobchat.utils.redis_pool import redis_pool_manager
+
+        cleanup_message = json.dumps(
+            {"action": "cleanup_all_except", "keep_thread_id": keep_thread_id, "timestamp": time.time()})
+        redis_pool_manager.get_sync_client().publish("sse_cleanup:all", cleanup_message)
+        logger.info("Broadcast global cleanup (keeping %s)", keep_thread_id)
+
+    # ------------------------------------------------------------------
+    # Diagnostics
+    # ------------------------------------------------------------------
+
+    def client_count(self, thread_id: str) -> int:
+        with self._lock:
+            return len(self._clients.get(thread_id, set()))
+
+    def get_all_active_threads(self) -> Dict[str, int]:
+        with self._lock:
+            return {tid: len(clients) for tid, clients in self._clients.items() if clients}
+
+    def cleanup_all_threads_except(self, keep_thread_id: str | None) -> int:
+        cleaned = 0
+        with self._lock:
+            for tid in list(self._clients):
+                if keep_thread_id is None or tid != keep_thread_id:
+                    count = len(self._clients[tid])
+                    if count:
+                        logger.info(
+                            "Cleaning up %d SSE clients for old thread %s", count, tid)
+                        cleaned += count
+                        self._clients.pop(tid, None)
+        return cleaned
+
+
+# ---------------------------------------------------------------------------
+# Lazy singleton helper
+# ---------------------------------------------------------------------------
+
+_simple_manager: SSEManager | None = None
+
+
+def get_sse_manager() -> SSEManager:
+    """Return the process-wide *singleton* ``SSEManager`` instance."""
+    global _simple_manager
+    if _simple_manager is None:
+        print("DEBUG: Creating SSEManager singleton")
+        logger.info("Creating SSEManager singleton")
+        _simple_manager = SSEManager()
+    return _simple_manager

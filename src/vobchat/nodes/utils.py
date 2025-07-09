@@ -34,14 +34,14 @@ def _has_message_content(state: lg_State, search_content: str) -> bool:
                 return True
     return False
 
-def _maybe_route_to_cubes(state: lg_State):
-    """Jump to cube retrieval when both slots (theme + ≥1 unit) are filled."""
-    from vobchat.state_schema import get_selected_units
-    selected_units = get_selected_units(state)
-    if state.get("selected_theme") and selected_units:
-        from langgraph.types import Command
-        return Command(goto="find_cubes_node")
-    return state
+# def _maybe_route_to_cubes(state: lg_State):
+#     """Jump to cube retrieval when both slots (theme + ≥1 unit) are filled."""
+#     from vobchat.state_schema import get_selected_units
+#     selected_units = get_selected_units(state)
+#     if state.get("selected_theme") and selected_units:
+#         from langgraph.types import Command
+#         return Command(goto="find_cubes_node")
+#     return state
 
 def _initial_state() -> Dict:
     """Return a fresh lg_State dict that clears ALL state fields."""
@@ -81,13 +81,8 @@ def _initial_state() -> Dict:
         "min_year": None,
         "max_year": None,
 
-        # map interaction
-        "selected_polygons": [],
-        "selected_polygons_unit_types": [],
-
         # misc / meta
         "current_node": None,
-        "last_intent_payload": {},
         "options": [],
         "message": None,
         "_prompted_for_place": False,

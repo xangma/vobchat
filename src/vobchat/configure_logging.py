@@ -5,12 +5,12 @@ import json
 from typing import Any, Dict, Optional
 import pprint
 from datetime import datetime
-from langchain_core.messages import BaseMessage
+from langchain_core.messages.base import BaseMessage
 import pandas as pd
 
 class PrettyFormatter(logging.Formatter):
     """A custom formatter that handles complex objects and provides better visual structure"""
-    
+
     def __init__(self):
         super().__init__()
         self.plain_formatter = logging.Formatter(
@@ -52,23 +52,23 @@ class PrettyFormatter(logging.Formatter):
         """Format the log record with enhanced readability"""
         # Handle basic message first
         basic_msg = self.plain_formatter.format(record)
-        
+
         # If the message is a dict, format it as sections
         if isinstance(record.msg, dict):
             sections = []
             for key, value in record.msg.items():
                 sections.append(self._format_section(key.upper(), value))
             return basic_msg + "\n".join(sections)
-            
+
         # If it's any other complex object, format it appropriately
         if isinstance(record.msg, (list, dict, pd.DataFrame, BaseMessage)):
             return basic_msg + self._format_complex_value(record.msg)
-            
+
         return basic_msg
 
 class EnhancedLogHandler(logging.Handler):
     """Enhanced log handler with better formatting and memory management"""
-    
+
     def __init__(self, level=logging.NOTSET, max_buffer_size: int = 1000000):
         super().__init__(level)
         self.log_buffer = io.StringIO()
@@ -78,13 +78,13 @@ class EnhancedLogHandler(logging.Handler):
     def emit(self, record: logging.LogRecord):
         try:
             msg = self.formatter.format(record)
-            
+
             # Check buffer size and rotate if needed
             if self.log_buffer.tell() > self.max_buffer_size:
                 self.rotate_buffer()
-                
+
             self.log_buffer.write(msg + "\n")
-            
+
         except Exception as e:
             fallback_msg = f"Error formatting log: {str(e)}\n"
             self.log_buffer.write(fallback_msg)
@@ -110,24 +110,24 @@ def configure_enhanced_logging():
     import warnings
     import asyncio
     import os
-    
+
     # Create and configure the root logger
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
-    
+
     # Remove any existing handlers
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
-    
+
     # Add our enhanced buffer handler
     buffer_handler = EnhancedLogHandler()
     logger.addHandler(buffer_handler)
-    
+
     # Add a console handler with the same formatter
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(PrettyFormatter())
     logger.addHandler(console_handler)
-    
+
     # Add file handler for backend logs (overwrite mode)
     backend_log_path = "/Users/xangma/Library/CloudStorage/OneDrive-Personal/repos/vobchat/backend.log"
     try:
@@ -140,16 +140,16 @@ def configure_enhanced_logging():
         print(f"Backend logging configured to: {backend_log_path}")
     except Exception as e:
         print(f"Failed to setup backend log file: {e}")
-    
+
     # Suppress asyncio event loop cleanup warnings
     # These are harmless cleanup warnings that occur during garbage collection
     asyncio_logger = logging.getLogger('asyncio')
     asyncio_logger.setLevel(logging.ERROR)
-    
+
     # Suppress specific asyncio warnings at the system level
     warnings.filterwarnings("ignore", message=".*I/O operation on closed.*")
     warnings.filterwarnings("ignore", category=ResourceWarning, module="asyncio")
-    
+
     return logger
 
 def log_workflow_response(logger: logging.Logger, response: Dict[str, Any]):
@@ -158,7 +158,7 @@ def log_workflow_response(logger: logging.Logger, response: Dict[str, Any]):
         "workflow_status": "Response received",
         "messages": response.get('messages', []),
         "extracted_data": {
-            k: v for k, v in response.items() 
+            k: v for k, v in response.items()
             if k != 'messages' and not k.startswith('_')
         }
     })

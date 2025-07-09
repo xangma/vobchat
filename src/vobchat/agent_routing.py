@@ -40,7 +40,17 @@ def agent_node(state: lg_State):
         has_pending_options = bool(state.get("options"))
         if not (current_node == "resolve_place_and_unit" and has_pending_options):
             logging.info(f"agent_node: Found {num_places - current_index} more places to process, routing to resolve_place_and_unit")
-            return Command(goto="resolve_place_and_unit", update=state)
+            return Command(goto="resolve_place_and_unit")
+    
+    # CRITICAL: If all places are processed and we have selected units, route to theme selection
+    # But only if we haven't already tried and failed (to prevent infinite loops)
+    elif num_places > 0 and current_index >= num_places:
+        from vobchat.state_schema import get_selected_units
+        selected_units = get_selected_units(state)
+        current_node = state.get("current_node")
+        if selected_units and not state.get("selected_theme") and current_node != "resolve_theme":
+            logging.info(f"agent_node: All places processed ({current_index}/{num_places}), routing to theme selection")
+            return Command(goto="resolve_theme")
 
     # Priority 1: Check for pre-set intent from Command update (e.g., map click)
     # BUT only if there's no new human message to process
@@ -62,31 +72,12 @@ def agent_node(state: lg_State):
                 "last_intent_payload": payload_to_route,
             }
 
-            # CRITICAL: For AddPlace/RemovePlace intents, only clear theme state when there's actual interference
-            if final_intent in [AssistantIntent.ADD_PLACE, AssistantIntent.REMOVE_PLACE]:
-                # Only clear theme state if we have existing theme data that might interfere
-                selected_theme = state.get("selected_theme")
-                extracted_theme = state.get("extracted_theme")
-                has_existing_theme = selected_theme or extracted_theme
-
-                # Debug: Log the actual theme state values
-                logging.info(f"agent_node: DEBUG theme state - selected_theme='{selected_theme}', extracted_theme='{extracted_theme}', has_existing_theme={has_existing_theme}")
-
-                if has_existing_theme:
-                    update_for_command.update({
-                        "extracted_theme": None,  # Clear any pending theme queries
-                        "current_node": None,     # Clear any pending node state
-                        "options": [],            # Clear any pending options
-                    })
-                    logging.info(f"agent_node: Cleared existing theme state for {final_intent.value} intent to prevent interference")
-                else:
-                    # Don't clear theme state when there's no existing theme - let theme buttons appear
-                    logging.info(f"agent_node: No existing theme state found for {final_intent.value} intent - preserving clean state for theme button generation")
             # CRITICAL: DON'T clear last_intent_payload here - let the target node clear it after processing
             # If we clear it in the Command update, the target node won't see the arguments
             logger.info(f"agent_node: Routing to {target_node} with payload intact - target node will clear after processing")
 
             return Command(goto=target_node, update=update_for_command)
+
         except ValueError:
             logging.warning(f"agent_node: Invalid intent '{pre_set_payload.get('intent')}' in last_intent_payload.")
             state["last_intent_payload"] = None # Clear invalid payload
@@ -298,6 +289,16 @@ def agent_node(state: lg_State):
                  # Or try next queue item? For now, return state to avoid complexity.
                  return state
         else:
+            # Check if we have selected units and a theme but no cube data - route to find_cubes_node
+            from vobchat.state_schema import get_selected_units
+            selected_units = get_selected_units(state)
+            selected_theme = state.get("selected_theme")
+            existing_cubes = state.get("selected_cubes")
+            
+            if selected_units and selected_theme and not existing_cubes:
+                logging.info("agent_node: Have selected units and theme but no cube data, routing to find_cubes_node")
+                return Command(goto="find_cubes_node")
+            
             logging.info("agent_node: No human message, no pre-set payload, queue empty. Ending turn.")
             return state # Nothing to process
 
@@ -323,15 +324,6 @@ def agent_node(state: lg_State):
             # CRITICAL: Preserve last_intent_payload for target nodes that need it (like DescribeTheme_node)
             "last_intent_payload": payload_to_route,
         }
-
-        # CRITICAL: For AddPlace/RemovePlace intents, clear any pending theme state to prevent interference
-        if final_intent in [AssistantIntent.ADD_PLACE, AssistantIntent.REMOVE_PLACE]:
-            update_for_command.update({
-                "extracted_theme": None,  # Clear any pending theme queries
-                "current_node": None,     # Clear any pending node state
-                "options": [],            # Clear any pending options
-            })
-            logging.info(f"agent_node: Cleared theme state for {final_intent.value} intent to prevent interference")
 
         # CRITICAL: DON'T clear last_intent_payload here - let the target node clear it after processing
         # If we clear it in the Command update, the target node won't see the arguments

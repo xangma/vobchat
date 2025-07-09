@@ -83,8 +83,15 @@ def register_polygon_routes(server):
             if unit_type not in UNIT_TYPES:
                 return jsonify({"error": f"Invalid unit type: {unit_type}"}), 400
                 
-            # Get optional IDs parameter
-            # ids = ids.split(',') if ids else []
+            # Get optional IDs parameter and convert to list of integers
+            if ids:
+                if isinstance(ids, str):
+                    # Split comma-separated string and convert to integers
+                    ids = [int(id.strip()) for id in ids.split(',') if id.strip()]
+                else:
+                    ids = []
+            else:
+                ids = []
             
             # Get polygons from the cache
             gdf = polygon_cache.get_polygons_by_ids(unit_type, ids)

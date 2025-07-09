@@ -7,6 +7,7 @@ shapely
 pyproj
 plotly
 langchain
+langchain_core
 langgraph
 langchain_community
 langchain_openai
@@ -20,11 +21,16 @@ redis
 celery
 diskcache
 dash[diskcache]
-dash[celery]
+# dash[celery]
 sqlalchemy
 flask
 flask_sqlalchemy
 flask_login
+flask[async]
 passlib
 authlib
 geoalchemy2
+sshtunnel
+trio
+gevent
+flask-socketio

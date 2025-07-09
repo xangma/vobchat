@@ -9,7 +9,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def ShowState_node(state: lg_State):
+def ShowState_node(state: lg_State) -> dict:
     """Display the current state of selections to the user."""
     summary: List[str] = []
 
@@ -33,12 +33,16 @@ def ShowState_node(state: lg_State):
         summary.append(f"• years: {yrs[0] or '…'} - {yrs[1] or '…'}")
 
     _append_ai(state, "Current selection:\n" + "\n".join(summary))
-    state["last_intent_payload"] = {}
-    return state
 
-def Reset_node(state: lg_State):
+    # Only return the specific fields this node updates
+    return {
+        "messages": state.get("messages", []),  # Updated by _append_ai
+        "last_intent_payload": {}  # Clear after processing to prevent loops
+    }
+
+def Reset_node(state: lg_State) -> Command:
     """Reset all state to start fresh."""
-    _append_ai(state, "Starting over - previous selections cleared.")
+    # _append_ai(state, "Starting over - previous selections cleared.")
     # Get fresh state (selection_idx already set to None in _initial_state)
     reset_state = _initial_state()
     logger.info("Reset_node: Cleared all state including selection_idx")
@@ -46,4 +50,22 @@ def Reset_node(state: lg_State):
     # Note: Streamed message IDs are cleared on the frontend when reset is received
     # Backend clearing would require thread_id context which is not easily accessible here
 
-    return Command(goto="START", update=reset_state)
+    # Only return the fields that need to be reset, not the entire state
+    reset_places = reset_state.get("places", [])
+
+    return Command(goto="START", update={
+        "messages": state.get("messages", []),  # Include the "Starting over" message
+        "places": reset_places,
+        "selected_theme": reset_state.get("selected_theme"),
+        "selected_cubes": reset_state.get("selected_cubes"),
+        "min_year": reset_state.get("min_year"),
+        "max_year": reset_state.get("max_year"),
+        "last_intent_payload": reset_state.get("last_intent_payload", {}),
+        "current_place_index": reset_state.get("current_place_index"),
+        "extracted_theme": reset_state.get("extracted_theme"),
+        "show_visualization": reset_state.get("show_visualization", False),
+        "current_node": reset_state.get("current_node"),
+        "selection_idx": reset_state.get("selection_idx"),
+        "options": reset_state.get("options", []),
+        "map_update_request": reset_state.get("map_update_request")
+    })

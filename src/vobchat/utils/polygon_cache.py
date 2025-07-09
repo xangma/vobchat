@@ -84,10 +84,10 @@ class PolygonCache:
                 AND util.get_start_year(g_duration) <= {end_year}
                 """
         
-        # Create a comma-separated list of feature IDs
-        # id_list = "', '".join([str(id).replace("'", "''") for id in feature_ids])
+        # Create a comma-separated list of feature IDs for SQL IN clause
+        id_list = ", ".join([str(id) for id in feature_ids])
         
-        id_filter = f"AND g_unit IN ('{feature_ids}')"
+        id_filter = f"AND g_unit IN ({id_list})"
         logger.debug(f"Added ID filter to include {len(feature_ids)} IDs")
         # Build the SQL query
         query = f"""

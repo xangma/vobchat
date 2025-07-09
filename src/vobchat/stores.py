@@ -6,8 +6,6 @@ map_state_data = {
     "active_unit_type": None,
     "year_range": None,
     "year_bounds": None,
-    "selected_polygons": [],
-    "selected_polygons_unit_types": [],
     "show_unselected": True,
     "zoom_to_selection": False,
     # "programmatic_unit_change_pending": None,
@@ -66,9 +64,8 @@ def create_stores():
         dcc.Store(id='map-click-remove-trigger'),
         dcc.Store(id='visualization-zoom-trigger'),
         dcc.Store(id='visualization-resize-debouncer'),
-        
-        # SSE-related stores
-        dcc.Store(id='sse-connection-status'),
-        dcc.Store(id='sse-event-processor'),
-        dcc.Store(id='place-disambiguation-processed'),
+
+        dcc.Store(id='sse-connection-status', data={}),
+        dcc.Store(id='sse-event-processor', data={}),
+
     ])

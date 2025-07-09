@@ -130,9 +130,6 @@ class lg_State(TypedDict):
     # place + unit selections - SINGLE SOURCE OF TRUTH
     # places array contains: {"name": str, "g_unit": int, "g_unit_type": str, "g_place": int, ...}
     places: Optional[List[dict]]
-    
-    # map state synchronization
-    selected_polygons: Optional[List[int]]
 
     # theme selection
     selected_theme: Optional[str]
