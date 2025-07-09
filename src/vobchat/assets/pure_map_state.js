@@ -203,7 +203,7 @@ class PureMapState {
         // Derive selected polygons from places array (single source of truth)
         const places = state.places || [];
         console.log('PureMapState: _workflowSyncState received places:', places);
-        
+
         const newPolygons = places
             .filter(place => place.g_unit !== null && place.g_unit !== undefined)
             .map(place => String(place.g_unit));
@@ -215,7 +215,7 @@ class PureMapState {
         // Quick check: if workflow state matches current user state exactly, skip entirely
         console.log('PureMapState: Comparing states - new polygons:', newPolygons, 'current polygons:', this.userState.selectedPolygons);
         console.log('PureMapState: Comparing states - new types:', newPolygonTypes, 'current types:', this.userState.selectedPolygonTypes);
-        
+
         if (JSON.stringify(newPolygons.sort()) === JSON.stringify(this.userState.selectedPolygons.slice().sort()) &&
             JSON.stringify(newPolygonTypes.sort()) === JSON.stringify(this.userState.selectedPolygonTypes.slice().sort())) {
             console.log('PureMapState: Workflow state matches current state exactly, skipping sync');
@@ -305,6 +305,7 @@ class PureMapState {
                         window.polygonManagement.refreshLayerStyles(layer, this.userState.selectedPolygons);
                     }
                 }
+                map.fire('moveend');
 
                 // Also update the map-state store for consistency with other UI components
                 const mapStateStore = document.querySelector('#map-state');

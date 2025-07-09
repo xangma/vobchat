@@ -112,10 +112,6 @@ def register_simple_chat_callbacks(app, compiled_workflow):
         if user_input and user_input.strip() and ("send-button" in trigger or "chat-input" in trigger):
             logger.info(f"Text input: {user_input}")
 
-            # Add user message to chat immediately
-            user_message_div = html.Div(user_input, className="speech-bubble user-bubble")
-            updated_chat_display = (chat_display or []) + [user_message_div]
-
             workflow_input = {"messages": [("user", user_input)]}
 
         # Handle map clicks
@@ -157,11 +153,8 @@ def register_simple_chat_callbacks(app, compiled_workflow):
                 "timestamp": time.time()
             }
 
-            # Return updates: clear input, keep thread_id, disable button, update chat, trigger SSE
-            if 'updated_chat_display' in locals():
-                return "", thread_id, True, updated_chat_display, sse_status
-            else:
-                return "", thread_id, True, no_update, sse_status
+            # Return updates: clear input, keep thread_id, disable button, no chat update, trigger SSE
+            return "", thread_id, True, no_update, sse_status
 
         raise PreventUpdate
 

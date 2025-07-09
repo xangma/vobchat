@@ -403,9 +403,9 @@ def register_simple_clientside_callbacks(app: Dash):
         function(moveend_trigger, map_state) {
             const context = dash_clientside.callback_context;
 
-            if (!context.triggered || context.triggered.length === 0 || !map_state || !moveend_trigger) {
-                return window.dash_clientside.no_update;
-            }
+            //if (!context.triggered || context.triggered.length === 0 || !map_state || !moveend_trigger) {
+            //    return window.dash_clientside.no_update;
+            //}
 
             const mapElement = document.getElementById('leaflet-map');
             const map = mapElement?._leaflet_map;
@@ -468,11 +468,11 @@ def register_simple_clientside_callbacks(app: Dash):
             // Handle SSE connection status that includes workflow input
             if (sse_status && sse_status.connect_sse && sse_status.thread_id && window.simpleSSE) {
                 console.log("SSE: Connecting with workflow input:", sse_status.workflow_input);
-                
+
                 // If this is a reset, also clear map state
                 if (sse_status.reset) {
                     console.log("SSE: Reset detected, clearing all state");
-                    
+
                     // Clear map state via pureMapState if available
                     if (window.pureMapState) {
                         window.pureMapState.executeWorkflowCommand({
@@ -481,10 +481,10 @@ def register_simple_clientside_callbacks(app: Dash):
                                 places: []
                             }
                         });
-                        
+
                         // Reset unit types to default and trigger map update
                         window.pureMapState.userSetUnitTypes(['MOD_REG'], false);
-                        
+
                         // Force map refresh to show MOD_REG polygons after reset
                         setTimeout(() => {
                             if (window.polygonManagement && window.polygonManagement.updateMapWithBounds) {
@@ -509,7 +509,7 @@ def register_simple_clientside_callbacks(app: Dash):
                             }
                         }, 100); // Small delay to ensure unit type change is processed
                     }
-                    
+
                     // Also update Dash map-state store to trigger UI updates
                     if (typeof dash_clientside !== 'undefined' && dash_clientside.set_props) {
                         const currentYear = new Date().getFullYear();
@@ -523,7 +523,7 @@ def register_simple_clientside_callbacks(app: Dash):
                         });
                     }
                 }
-                
+
                 window.simpleSSE.connect(sse_status.thread_id, sse_status.workflow_input);
                 return [true, sse_status.thread_id];
             }

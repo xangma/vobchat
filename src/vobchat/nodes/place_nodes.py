@@ -461,11 +461,13 @@ def AddPlace_node(state: lg_State) -> Dict[str, Union[str, list, dict]] | Comman
             g_unit_type=unit_types[i] if i < len(unit_types) else None,
         )
 
+
     return Command(
         goto="multi_place_tool_call",
         update={
             "last_intent_payload": {},
             "extracted_theme": None,
+            "show_visualization": state.get("show_visualization", None),
             "current_place_index": 0,
             "places": state.get("places", []),
         },
@@ -501,9 +503,6 @@ def RemovePlace_node(state: lg_State) -> Dict[str, Union[str, list, dict]] | Com
     remaining_units = get_selected_units(state)
     cubes_json = _filter_cubes(state, remaining_units)
 
-    show_viz = bool(remaining_units and state.get(
-        "selected_theme") and cubes_json)
-
     _append_ai(state, f"Removed {display}.")
 
     return Command(
@@ -512,7 +511,7 @@ def RemovePlace_node(state: lg_State) -> Dict[str, Union[str, list, dict]] | Com
             "last_intent_payload": {},
             "places": state.get("places", []),
             "selected_cubes": cubes_json,
-            "show_visualization": show_viz,
+            "show_visualization": state.get("show_visualization", None),
             "map_update_request": {
                 "action": "update_map_selection",
                 "places": state.get("places", []),

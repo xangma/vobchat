@@ -102,7 +102,7 @@ class SimpleSSEClient {
             }
         });
 
-        this.eventSource.onerror = (event) => {
+        this.eventSource.onerror = () => {
             console.error('SSE: Connection error');
             this.isConnected = false;
             this.attemptReconnect();
@@ -133,25 +133,11 @@ class SimpleSSEClient {
         }, 2000);
     }
 
-    // Simple message handling - add directly to chat
+    // Simple message handling - now handled through state updates
     handleMessage(content) {
-        console.log('SSE: Received message:', content);
-
-        const chatDisplay = document.getElementById('chat-display');
-        if (chatDisplay) {
-            const messageDiv = document.createElement('div');
-            messageDiv.className = 'speech-bubble ai-bubble';
-            messageDiv.textContent = content;
-            chatDisplay.insertBefore(messageDiv, chatDisplay.firstChild);
-
-            // Re-enable send button after message
-            const sendButton = document.getElementById('send-button');
-            if (sendButton) {
-                sendButton.disabled = false;
-            }
-        } else {
-            console.error('SSE: chat-display element not found');
-        }
+        console.log('SSE: Received individual message (handled via state updates):', content);
+        // Individual messages are now handled through the messages array in state updates
+        // This prevents duplicates and ensures proper ordering
     }
 
     // Simple state update - update stores directly
@@ -168,6 +154,11 @@ class SimpleSSEClient {
         if (!state || typeof state !== 'object') {
             console.log('SSE: Invalid state update received, skipping');
             return;
+        }
+
+        // Handle messages array to update chat display
+        if (state.messages && Array.isArray(state.messages)) {
+            this.updateChatDisplay(state.messages);
         }
 
         // Update visualization if we have cube data
@@ -192,23 +183,38 @@ class SimpleSSEClient {
 
         // Update stores via Dash (minimal, targeted updates only)
         if (typeof dash_clientside !== 'undefined' && dash_clientside.set_props) {
-            // Only update place-state with essential data
-            if (state.places || state.cubes || state.selected_theme) {
+            // Only update place-state with essential data if something actually changed
+            const updates = {};
+            let hasUpdates = false;
+
+            if (state.places !== undefined) {
+                updates.places = state.places;
+                hasUpdates = true;
+            }
+            if (state.cubes !== undefined) {
+                updates.cubes = state.cubes;
+                hasUpdates = true;
+            }
+            if (state.selected_theme !== undefined) {
+                updates.selected_theme = state.selected_theme;
+                hasUpdates = true;
+            }
+
+            if (hasUpdates) {
+                // Note: We can't access current state outside of a callback context
+                // However, Dash should merge partial updates with existing state automatically
+                // We only send the fields that were actually in the state update
                 dash_clientside.set_props('place-state', {
-                    data: {
-                        places: state.places || [],
-                        cubes: state.cubes || [],
-                        selected_theme: state.selected_theme || null
-                    }
+                    data: updates
                 });
             }
 
             // Only update app-state if visualization needs to show/hide
-            if (state.show_visualization !== undefined) {
-                dash_clientside.set_props('app-state', {
-                    data: { show_visualization: state.show_visualization }
-                });
-            }
+            // if (state.show_visualization !== undefined) {
+            //     dash_clientside.set_props('app-state', {
+            //         data: { show_visualization: state.show_visualization }
+            //     });
+            // }
         }
     }
 
@@ -636,6 +642,71 @@ class SimpleSSEClient {
             }
         });
         return result;
+    }
+
+    // Update chat display with all messages in proper order
+    updateChatDisplay(messages) {
+        console.log('SSE: Updating chat display with', messages.length, 'messages');
+        
+        const chatDisplay = document.getElementById('chat-display');
+        if (!chatDisplay) {
+            console.error('SSE: chat-display element not found');
+            return;
+        }
+
+        // Clear existing messages
+        chatDisplay.innerHTML = '';
+
+        // Add messages in reverse order (newest first)
+        for (let i = messages.length - 1; i >= 0; i--) {
+            const msg = messages[i];
+            if (!msg) continue;
+
+            const messageDiv = document.createElement('div');
+            
+            // Determine message type and content
+            let content = '';
+            let className = 'speech-bubble';
+            
+            if (msg._type === 'human' || msg._type === 'HumanMessage') {
+                // Human message
+                content = msg.content;
+                className += ' user-bubble';
+            } else if (msg._type === 'ai' || msg._type === 'AIMessage') {
+                // AI message
+                content = msg.content;
+                className += ' ai-bubble';
+            } else if (typeof msg === 'object' && msg.content) {
+                // Generic message with content
+                content = msg.content;
+                // Try to determine type from other fields
+                if (msg.type === 'human') {
+                    className += ' user-bubble';
+                } else {
+                    className += ' ai-bubble';
+                }
+            } else if (Array.isArray(msg) && msg.length >= 2) {
+                // Tuple format: [role, content]
+                content = msg[1];
+                if (msg[0] === 'user' || msg[0] === 'human') {
+                    className += ' user-bubble';
+                } else {
+                    className += ' ai-bubble';
+                }
+            }
+
+            if (content) {
+                messageDiv.className = className;
+                messageDiv.textContent = content;
+                chatDisplay.appendChild(messageDiv);
+            }
+        }
+        
+        // Re-enable send button after update
+        const sendButton = document.getElementById('send-button');
+        if (sendButton) {
+            sendButton.disabled = false;
+        }
     }
 }
 

@@ -180,7 +180,7 @@
     /* moveend (debounced) */
     map.on('moveend', debounce(() => {
       LOG('moveend');
-      if (flags.programmaticZoomAnimating || flags.programmaticZoomInProgress) return;
+      // if (flags.programmaticZoomAnimating || flags.programmaticZoomInProgress) return;
       window.dash_clientside?.set_props?.('map-moveend-trigger', { data: Date.now() });
     }));
 

@@ -1066,10 +1066,6 @@ def resolve_place_and_unit(state: lg_State):
             "units_needing_map_selection": units_sel,
             "selection_idx": None,
             "options": None,
-            "map_update_request": {
-                "action": "update_map_selection",
-                "places": places
-            }
         },
     )
 

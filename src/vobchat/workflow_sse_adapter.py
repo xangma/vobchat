@@ -162,7 +162,7 @@ import asyncio
 import logging
 from typing import Any, Dict, Optional, Set
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from vobchat.sse_manager import get_sse_manager
 
@@ -174,13 +174,41 @@ _UI_KEYS = {
     "current_node",
     "selected_theme",
     "options",
+    "cubes",
     "selected_cubes",
     "show_visualization",
     "map_update_request",
     "units_needing_map_selection",
+    "messages",  # Include full message history for proper ordering
 }
 
 simple_sse_manager = get_sse_manager()
+
+def serialize_messages(messages):
+    """Convert LangChain message objects to JSON-serializable format."""
+    serialized = []
+    for msg in messages:
+        if isinstance(msg, AIMessage):
+            serialized.append({
+                "_type": "ai",
+                "content": msg.content,
+                "type": "ai"
+            })
+        elif isinstance(msg, HumanMessage):
+            serialized.append({
+                "_type": "human", 
+                "content": msg.content,
+                "type": "human"
+            })
+        elif hasattr(msg, 'content'):
+            # Generic message with content
+            serialized.append({
+                "_type": getattr(msg, '_type', 'unknown'),
+                "content": msg.content,
+                "type": getattr(msg, 'type', 'unknown')
+            })
+    return serialized
+
 class WorkflowSSEAdapter:
     """Run *compiled_workflow* and push updates to clients via SSE_HUB."""
 
@@ -228,6 +256,9 @@ class WorkflowSSEAdapter:
                 # 2️⃣  State snip ---------------------------------------------
                 ui_state = {k: v for k, v in delta.items() if k in _UI_KEYS}
                 if ui_state:
+                    # Serialize messages if present
+                    if "messages" in ui_state:
+                        ui_state["messages"] = serialize_messages(ui_state["messages"])
                     #logger.info(f"SSE Adapter: Streaming state update for thread {thread_id}: {list(ui_state.keys())}")
                     # if 'map_update_request' in ui_state:
 #                        logger.info(f"SSE Adapter: map_update_request = {ui_state['map_update_request']}")
