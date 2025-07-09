@@ -93,7 +93,7 @@ docker-compose up -d --build
 * Stop container: `docker-compose down`
 * Restart container: `docker-compose restart`
 * Check status: `docker-compose ps`
-* Create user (while running): `docker-compose exec vobchat flask --app vobchat.app:server add-user admin@example.com`
+* Create user (while running): `docker-compose exec vobchat python create_user.py testuser@email.com password`
 
 **Docker Architecture:**
 - **Internal**: Redis server runs inside the container
@@ -116,6 +116,16 @@ docker-compose up -d --build
 
 **Authentication:**
 The application requires user authentication via Flask-Login. Users must log in with email/password before accessing the chat interface. Use the `flask add-user` command to create accounts.
+
+**Ollama Integration:**
+
+`ollama show deepseek-r1:latest --modelfile > deepseekr1_wt.modelfile`
+
+change the model template in that file. Then create a new model file with the command:
+
+```bash
+ollama create deepseek-r1-wt --modelfile deepseekr1_wt.model
+```
 
 ### Future Work
 
