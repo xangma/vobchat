@@ -53,7 +53,7 @@ from vobchat.nodes import (
     ShowState_node, ListThemesForSelection_node,
     ListAllThemes_node, Reset_node,
     AddPlace_node, RemovePlace_node,
-    RemoveTheme_node,
+    AddTheme_node, RemoveTheme_node,
     DescribeTheme_node,
     ask_followup_node,
     postcode_tool_call,
@@ -161,9 +161,10 @@ class ThemeDecision(BaseModel):
     theme_code: str = Field(...,
                             description="The selected theme code from available themes, e.g. T_POP")
 
-def build_theme_prompt():
+def build_theme_prompt(themes=None):
     """Build the theme selection prompt with current themes."""
-    themes = get_themes_dict()
+    if themes is None:
+        themes = get_themes_dict()
     if not themes:
         themes = {"T_POP": "Population"}  # Emergency fallback
     return ChatPromptTemplate.from_messages([
@@ -187,9 +188,9 @@ def build_theme_prompt():
     ])
 
 # Build the theme chain dynamically when needed
-def get_theme_chain(model):
+def get_theme_chain(model, themes=None):
     """Get the theme selection chain with current themes."""
-    return build_theme_prompt() | model.with_structured_output(schema=ThemeDecision)
+    return build_theme_prompt(themes) | model.with_structured_output(schema=ThemeDecision)
 
 # ----------------------------------------------------------------------------------------
 # WORKFLOW DEFINITION
@@ -272,6 +273,7 @@ def create_workflow(lg_state: TypedDict):
     workflow.add_node("Reset_node", Reset_node)
     workflow.add_node("AddPlace_node", AddPlace_node)
     workflow.add_node("RemovePlace_node", RemovePlace_node)
+    workflow.add_node("AddTheme_node", AddTheme_node)
     workflow.add_node("RemoveTheme_node", RemoveTheme_node)
 
     workflow.add_node("DescribeTheme_node", DescribeTheme_node)

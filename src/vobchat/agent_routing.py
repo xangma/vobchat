@@ -41,7 +41,7 @@ def agent_node(state: lg_State):
         if not (current_node == "resolve_place_and_unit" and has_pending_options):
             logging.info(f"agent_node: Found {num_places - current_index} more places to process, routing to resolve_place_and_unit")
             return Command(goto="resolve_place_and_unit")
-    
+
     # CRITICAL: If all places are processed and we have selected units, route to theme selection
     # But only if we haven't already tried and failed (to prevent infinite loops)
     elif num_places > 0 and current_index >= num_places:
@@ -49,8 +49,25 @@ def agent_node(state: lg_State):
         selected_units = get_selected_units(state)
         current_node = state.get("current_node")
         if selected_units and not state.get("selected_theme") and current_node != "resolve_theme":
-            logging.info(f"agent_node: All places processed ({current_index}/{num_places}), routing to theme selection")
-            return Command(goto="resolve_theme")
+            # Check if there's an AddTheme intent in the queue that should be processed first
+            queue = state.get("intent_queue", []) or []
+            add_theme_intent = None
+            for intent in queue:
+                if intent.get("intent") == "AddTheme":
+                    add_theme_intent = intent
+                    break
+            
+            if add_theme_intent:
+                logging.info(f"agent_node: Found AddTheme intent in queue, processing before theme selection")
+                # Remove the AddTheme intent from queue and process it
+                updated_queue = [intent for intent in queue if intent != add_theme_intent]
+                return Command(goto="AddTheme_node", update={
+                    "intent_queue": updated_queue,
+                    "last_intent_payload": add_theme_intent
+                })
+            else:
+                logging.info(f"agent_node: All places processed ({current_index}/{num_places}), routing to theme selection")
+                return Command(goto="resolve_theme")
 
     # Priority 1: Check for pre-set intent from Command update (e.g., map click)
     # BUT only if there's no new human message to process
@@ -294,11 +311,11 @@ def agent_node(state: lg_State):
             selected_units = get_selected_units(state)
             selected_theme = state.get("selected_theme")
             existing_cubes = state.get("selected_cubes")
-            
+
             if selected_units and selected_theme and not existing_cubes:
                 logging.info("agent_node: Have selected units and theme but no cube data, routing to find_cubes_node")
                 return Command(goto="find_cubes_node")
-            
+
             logging.info("agent_node: No human message, no pre-set payload, queue empty. Ending turn.")
             return state # Nothing to process
 

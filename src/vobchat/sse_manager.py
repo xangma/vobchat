@@ -217,7 +217,7 @@ class SSEManager:
             try:
                 print("DEBUG: Starting Redis listener thread")
                 logger.info("Starting Redis listener thread")
-                
+
                 # local import – optional dependency
                 from vobchat.utils.redis_pool import redis_pool_manager
 
@@ -227,14 +227,11 @@ class SSEManager:
                 pubsub.psubscribe("sse:*", "sse_cleanup:*", "sse_cleanup:all")
 
                 logger.info("Redis SSE listener started")
-                print("DEBUG: Redis SSE listener started")
-                
+
                 # Process Redis messages in a simple sync loop
-                print("DEBUG: Starting Redis listener loop")
                 logger.debug("Starting Redis listener loop")
                 for message in pubsub.listen():
-                    print(f"DEBUG: Redis message received: {message}")
-                    logger.debug("Redis message received: %s", message)
+#                    logger.debug("Redis message received: %s", message)
                     if message["type"] != "pmessage":
                         continue
 
@@ -249,11 +246,11 @@ class SSEManager:
                         else message["data"]
                     )
 
-                    logger.debug("Processing Redis message: channel=%s, data=%s", channel, data_raw)
+                    # logger.debug("Processing Redis message: channel=%s, data=%s", channel, data_raw)
                     # Process message synchronously
                     try:
                         self._process_redis_message_sync(channel, data_raw)
-                        logger.debug("Message processed successfully")
+                        # logger.debug("Message processed successfully")
                     except Exception as e:
                         logger.error("Failed to process message: %s", e)
             except Exception as e:
@@ -270,36 +267,35 @@ class SSEManager:
     def _process_redis_message_sync(self, channel: str, data_raw: str) -> None:
         """Synchronous version of message processing"""
         try:
-            print(f"DEBUG: _process_redis_message_sync called with channel={channel}")
-            logger.debug("_process_redis_message_sync called with channel=%s", channel)
-            logger.debug("Channel type: %s, startswith sse:: %s", type(channel), channel.startswith("sse:"))
-            
+            # logger.debug("_process_redis_message_sync called with channel=%s", channel)
+            # logger.debug("Channel type: %s, startswith sse:: %s", type(channel), channel.startswith("sse:"))
+
             if channel == "sse_cleanup:all":
-                logger.debug("Matched cleanup:all channel")
+                # logger.debug("Matched cleanup:all channel")
                 payload = json.loads(data_raw)
                 keep = payload.get("keep_thread_id")
-                logger.info("Received global cleanup; keeping %s", keep)
+                # logger.info("Received global cleanup; keeping %s", keep)
                 self.cleanup_all_threads_except(keep)
                 return
 
             if channel.startswith("sse_cleanup:"):
-                logger.debug("Matched cleanup channel")
+                # logger.debug("Matched cleanup channel")
                 payload = json.loads(data_raw)
                 if payload.get("action") == "cleanup":
                     thread_id = channel.replace("sse_cleanup:", "")
-                    logger.info("Received cleanup for thread %s", thread_id)
+                    # logger.info("Received cleanup for thread %s", thread_id)
                     self._cleanup_local_clients(thread_id)
                 return
 
             if channel.startswith("sse:"):
-                logger.debug("Matched sse: channel")
+                # logger.debug("Matched sse: channel")
                 thread_id = channel.replace("sse:", "")
                 event_data = json.loads(data_raw)
-                logger.debug("Creating SSEEvent: event_type=%s, data=%s", event_data["event_type"], event_data["data"])
+                # logger.debug("Creating SSEEvent: event_type=%s, data=%s", event_data["event_type"], event_data["data"])
                 event = SSEEvent(
                     event_type=event_data["event_type"], data=event_data["data"])
 
-                logger.debug("Broadcasting local event to thread %s", thread_id)
+                # logger.debug("Broadcasting local event to thread %s", thread_id)
                 # Broadcast synchronously
                 self._broadcast_local_sync(thread_id, event)
             else:
@@ -309,20 +305,19 @@ class SSEManager:
 
     async def _process_redis_message(self, channel: str, data_raw: str) -> None:
         try:
-            print(f"DEBUG: _process_redis_message called with channel={channel}")
-            logger.debug("_process_redis_message called with channel=%s", channel)
-            logger.debug("Channel type: %s, startswith sse:: %s", type(channel), channel.startswith("sse:"))
-            
+            # logger.debug("_process_redis_message called with channel=%s", channel)
+            # logger.debug("Channel type: %s, startswith sse:: %s", type(channel), channel.startswith("sse:"))
+
             if channel == "sse_cleanup:all":
-                logger.debug("Matched cleanup:all channel")
+                #logger.debug("Matched cleanup:all channel")
                 payload = json.loads(data_raw)
                 keep = payload.get("keep_thread_id")
-                logger.info("Received global cleanup; keeping %s", keep)
+                #logger.info("Received global cleanup; keeping %s", keep)
                 self.cleanup_all_threads_except(keep)
                 return
 
             if channel.startswith("sse_cleanup:"):
-                logger.debug("Matched cleanup channel")
+                # logger.debug("Matched cleanup channel")
                 payload = json.loads(data_raw)
                 if payload.get("action") == "cleanup":
                     thread_id = channel.replace("sse_cleanup:", "")
@@ -331,17 +326,17 @@ class SSEManager:
                 return
 
             if channel.startswith("sse:"):
-                logger.debug("Matched sse: channel")
+                # logger.debug("Matched sse: channel")
                 thread_id = channel.replace("sse:", "")
                 event_data = json.loads(data_raw)
-                logger.debug("Creating SSEEvent: event_type=%s, data=%s", event_data["event_type"], event_data["data"])
+                # logger.debug("Creating SSEEvent: event_type=%s, data=%s", event_data["event_type"], event_data["data"])
                 event = SSEEvent(
                     event_type=event_data["event_type"], data=event_data["data"])
 
-                logger.debug("Broadcasting local event to thread %s", thread_id)
+                # logger.debug("Broadcasting local event to thread %s", thread_id)
                 # Create task directly since we're in an async context
                 task = asyncio.create_task(self._broadcast_local(thread_id, event))
-                logger.debug("Task created successfully: %s", task)
+                #logger.debug("Task created successfully: %s", task)
             else:
                 logger.debug("Channel did not match any patterns: %s", channel)
         except Exception as exc:  # noqa: BLE001 – log and continue listening
@@ -353,20 +348,20 @@ class SSEManager:
 
     def _broadcast_local_sync(self, thread_id: str, event: SSEEvent) -> None:
         """Synchronous version of local broadcasting"""
-        logger.debug("_broadcast_local_sync called for thread %s with event %s", thread_id, event.event_type)
+        # logger.debug("_broadcast_local_sync called for thread %s with event %s", thread_id, event.event_type)
         payload = event.encode()
         dead = set()
         with self._lock:
             clients = list(self._clients.get(thread_id, set()))
-            logger.debug("Current clients for thread %s: %d", thread_id, len(clients))
-            logger.debug("All threads with clients: %s", list(self._clients.keys()))
+            # logger.debug("Current clients for thread %s: %d", thread_id, len(clients))
+            # logger.debug("All threads with clients: %s", list(self._clients.keys()))
 
-        logger.debug("Broadcasting to %d clients for thread %s: %s", len(clients), thread_id, payload[:100])
+        # logger.debug("Broadcasting to %d clients for thread %s: %s", len(clients), thread_id, payload[:100])
         for sender in clients:
             try:
-                logger.debug("Sending to client: %s", sender)
+                #logger.debug("Sending to client: %s", sender)
                 sender.send(payload)  # Call synchronously
-                logger.debug("Successfully sent to client")
+                # logger.debug("Successfully sent to client")
             except Exception as exc:
                 logger.warning("Dropping dead SSE sender: %s", exc)
                 dead.add(sender)
@@ -376,24 +371,24 @@ class SSEManager:
 
     async def _broadcast_local(self, thread_id: str, event: SSEEvent) -> None:
         """Deliver *event* to every local client listening on *thread_id*."""
-        logger.debug("_broadcast_local called for thread %s with event %s", thread_id, event.event_type)
+        #logger.debug("_broadcast_local called for thread %s with event %s", thread_id, event.event_type)
         payload = event.encode()
         dead: Set[Any] = set()
         with self._lock:
             clients = list(self._clients.get(thread_id, set()))
-            logger.debug("Current clients for thread %s: %d", thread_id, len(clients))
-            logger.debug("All threads with clients: %s", list(self._clients.keys()))
+            #logger.debug("Current clients for thread %s: %d", thread_id, len(clients))
+            #logger.debug("All threads with clients: %s", list(self._clients.keys()))
 
         logger.debug("Broadcasting to %d clients for thread %s: %s", len(clients), thread_id, payload[:100])
         for sender in clients:
             try:
-                logger.debug("Sending to client: %s", sender)
+                #logger.debug("Sending to client: %s", sender)
                 maybe_coro = sender.send(payload)
                 if asyncio.iscoroutine(maybe_coro):
                     await maybe_coro
-                logger.debug("Successfully sent to client")
+                #logger.debug("Successfully sent to client")
             except Exception as exc:  # noqa: BLE001 – network can fail
-                logger.warning("Dropping dead SSE sender: %s", exc)
+                #logger.warning("Dropping dead SSE sender: %s", exc)
                 dead.add(sender)
 
         for d in dead:
@@ -416,8 +411,8 @@ class SSEManager:
             lambda: redis_pool_manager.get_sync_client().publish(
                 channel, json.dumps(event_data)),
         )
-        logger.debug("Published %s event to Redis for thread %s",
-                     event.event_type, thread_id)
+        # logger.debug("Published %s event to Redis for thread %s",
+        # event.event_type, thread_id)
 
     async def _broadcast(self, thread_id: str, event: SSEEvent) -> None:
         await self._publish_to_redis(thread_id, event)

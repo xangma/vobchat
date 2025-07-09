@@ -228,9 +228,9 @@ class WorkflowSSEAdapter:
                 # 2️⃣  State snip ---------------------------------------------
                 ui_state = {k: v for k, v in delta.items() if k in _UI_KEYS}
                 if ui_state:
-                    logger.info(f"SSE Adapter: Streaming state update for thread {thread_id}: {list(ui_state.keys())}")
-                    if 'map_update_request' in ui_state:
-                        logger.info(f"SSE Adapter: map_update_request = {ui_state['map_update_request']}")
+                    #logger.info(f"SSE Adapter: Streaming state update for thread {thread_id}: {list(ui_state.keys())}")
+                    # if 'map_update_request' in ui_state:
+#                        logger.info(f"SSE Adapter: map_update_request = {ui_state['map_update_request']}")
                     await simple_sse_manager.state(thread_id, ui_state)
 
             # ----------------------------------------------------------
