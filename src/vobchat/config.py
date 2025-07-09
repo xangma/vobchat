@@ -25,9 +25,12 @@ def load_config(filename=os.path.join(BASE_DIR, "database.ini"), section='postgr
         raise Exception(f'Section {section} not found in {filename}')
 
     if localdb:
-        config['host'] = 'localhost'
-        config['user'] = 'postgres'
-        config['password'] = os.environ.get('POSTGRES_PASS')
+        # Docker environment variables override defaults
+        config['host'] = os.environ.get('DB_HOST', 'localhost')
+        config['user'] = os.environ.get('DB_USER', 'postgres')
+        config['password'] = os.environ.get('DB_PASSWORD', os.environ.get('POSTGRES_PASS'))
+        config['dbname'] = os.environ.get('DB_NAME', config.get('dbname', 'vobchat'))
+        config['port'] = int(os.environ.get('DB_PORT', '5432'))
 
     return config
 
@@ -54,7 +57,7 @@ def get_db(config):
         config['host'] = 'localhost'
         config['port'] = tunnel.local_bind_port
     else:
-        config['port'] = 5432
+        config['port'] = int(os.environ.get('DB_PORT', '5432'))
 
     # Add connection pool settings and timeouts for better reliability
     dburi = f"postgresql://{config['user']}:{config['password']}@{config['host']}:{config['port']}/{config['dbname']}?connect_timeout=10&application_name=vobchat"

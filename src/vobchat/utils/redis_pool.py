@@ -25,7 +25,11 @@ class RedisPoolManager:
     def __init__(self):
         if not hasattr(self, '_initialized'):
             self._initialized = True
-            self._redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+            # Build Redis URL from environment variables
+            redis_host = os.getenv('REDIS_HOST', 'localhost')
+            redis_port = os.getenv('REDIS_PORT', '6379')
+            redis_db = os.getenv('REDIS_DB', '0')
+            self._redis_url = os.getenv('REDIS_URL', f'redis://{redis_host}:{redis_port}/{redis_db}')
             logger.info(f"RedisPoolManager initialized with URL: {self._redis_url}")
             self._configure_redis_persistence_once()
     

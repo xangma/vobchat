@@ -51,11 +51,51 @@ The code is organized into the following directories and files:
 
 ### Installation and Running
 
-(This section is a placeholder for the actual installation and running instructions.)
+#### Local Development
 1. Clone the repository.
 2. Install the required packages: `pip install -r requirements.txt`.
 3. Configure the database connection in `config.py`.
-4. Run the app: `python app/main.py`.
+4. Run the app: `python -m vobchat.app`.
+
+#### Docker Installation
+
+For easier deployment, VobChat can be run in a Docker container with Redis included, while connecting to external Ollama and PostgreSQL services.
+
+**Prerequisites:**
+- Docker and Docker Compose installed
+- Ollama server running on localhost:11434
+- PostgreSQL database running on localhost:5432
+
+**Setup:**
+1. Clone the repository
+2. Copy the environment template: `cp .env.example .env`
+3. Update `.env` with your database credentials:
+   ```
+   DB_HOST=host.docker.internal
+   DB_PORT=5432
+   DB_NAME=vobchat
+   DB_USER=postgres
+   DB_PASSWORD=your_postgres_password
+   ```
+4. Build and run: `docker-compose up --build`
+5. Access the application at `http://localhost:8050`
+
+**Docker Architecture:**
+- **Internal**: Redis server runs inside the container
+- **External**: Connects to Ollama (port 11434) and PostgreSQL (port 5432) on host system
+- **Networking**: Uses host networking mode for seamless access to host services
+- **Logging**: Persistent log directory mounted as volume
+
+**Environment Variables:**
+- `DB_HOST`: Database host (default: host.docker.internal)
+- `DB_PORT`: Database port (default: 5432)
+- `DB_NAME`: Database name (default: vobchat)
+- `DB_USER`: Database username (default: postgres)
+- `DB_PASSWORD`: Database password
+- `OLLAMA_HOST`: Ollama server host (default: host.docker.internal)
+- `OLLAMA_PORT`: Ollama server port (default: 11434)
+- `REDIS_HOST`: Redis host (default: localhost - internal to container)
+- `REDIS_PORT`: Redis port (default: 6379)
 
 ### Future Work
 

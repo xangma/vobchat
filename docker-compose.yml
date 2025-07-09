@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  vobchat:
+    build: .
+    ports:
+      - "8050:8050"
+    environment:
+      # Database connection (host.docker.internal for external PostgreSQL)
+      - DB_HOST=host.docker.internal
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-vobchat}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-password}
+      
+      # Ollama connection (host.docker.internal for external Ollama)
+      - OLLAMA_HOST=host.docker.internal
+      - OLLAMA_PORT=11434
+      
+      # Redis connection (internal to container)
+      - REDIS_HOST=localhost
+      - REDIS_PORT=6379
+      
+      # Application settings
+      - DASH_DEBUG=true
+      - DASH_PREFIX=${DASH_PREFIX:-/}
+      
+    volumes:
+      - ./logs:/app/logs
+      - ./src:/app/src
+      - ./CLAUDE.md:/app/CLAUDE.md
+    
+    # Use host networking for easier access to host services
+    network_mode: host
+    
+    depends_on:
+      - redis-check
+    
+    restart: unless-stopped
+
+  # Health check service for external dependencies
+  redis-check:
+    image: redis:7-alpine
+    command: redis-cli -h host.docker.internal -p 6379 ping || exit 1
+    network_mode: host
+    restart: "no"
