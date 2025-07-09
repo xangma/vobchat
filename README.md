@@ -70,15 +70,17 @@ For easier deployment, VobChat can be run in a Docker container with Redis inclu
 1. Clone the repository
 2. Copy the environment template: `cp .env.example .env`
 3. Update `.env` with your database credentials:
-   ```
+   ```bash
    DB_HOST=host.docker.internal
    DB_PORT=5432
    DB_NAME=vobchat
    DB_USER=postgres
    DB_PASSWORD=your_postgres_password
+   SECRET_KEY=your-production-secret-key-here
    ```
 4. Build and run: `docker-compose up --build`
-5. Access the application at `http://localhost:8050`
+5. Create a login user: `docker-compose exec vobchat flask add-user admin@example.com`
+6. Access the application at `http://localhost:8050`
 
 **Docker Architecture:**
 - **Internal**: Redis server runs inside the container
@@ -87,15 +89,20 @@ For easier deployment, VobChat can be run in a Docker container with Redis inclu
 - **Logging**: Persistent log directory mounted as volume
 
 **Environment Variables:**
-- `DB_HOST`: Database host (default: host.docker.internal)
-- `DB_PORT`: Database port (default: 5432)
-- `DB_NAME`: Database name (default: vobchat)
-- `DB_USER`: Database username (default: postgres)
-- `DB_PASSWORD`: Database password
-- `OLLAMA_HOST`: Ollama server host (default: host.docker.internal)
-- `OLLAMA_PORT`: Ollama server port (default: 11434)
-- `REDIS_HOST`: Redis host (default: localhost - internal to container)
-- `REDIS_PORT`: Redis port (default: 6379)
+* `DB_HOST`: Database host (default: host.docker.internal)
+* `DB_PORT`: Database port (default: 5432)
+* `DB_NAME`: Database name (default: vobchat)
+* `DB_USER`: Database username (default: postgres)
+* `DB_PASSWORD`: Database password
+* `OLLAMA_HOST`: Ollama server host (default: host.docker.internal)
+* `OLLAMA_PORT`: Ollama server port (default: 11434)
+* `REDIS_HOST`: Redis host (default: localhost - internal to container)
+* `REDIS_PORT`: Redis port (default: 6379)
+* `SECRET_KEY`: Flask secret key for session security (required for login)
+* `DATABASE_URL`: User authentication database URL (default: sqlite:///users.db)
+
+**Authentication:**
+The application requires user authentication via Flask-Login. Users must log in with email/password before accessing the chat interface. Use the `flask add-user` command to create accounts.
 
 ### Future Work
 

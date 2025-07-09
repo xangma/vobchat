@@ -57,7 +57,7 @@ def get_db(config):
         config['host'] = 'localhost'
         config['port'] = tunnel.local_bind_port
     else:
-        config['port'] = int(os.environ.get('DB_PORT', '5432'))
+        config['port'] = 5432
 
     # Add connection pool settings and timeouts for better reliability
     dburi = f"postgresql://{config['user']}:{config['password']}@{config['host']}:{config['port']}/{config['dbname']}?connect_timeout=10&application_name=vobchat"

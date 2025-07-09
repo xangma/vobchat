@@ -20,4 +20,9 @@ mkdir -p /app/logs
 # Start the VobChat application
 echo "Starting VobChat application..."
 cd /app
+
+# Initialize the database and create tables if needed
+export FLASK_APP=vobchat.app
+flask db upgrade 2>/dev/null || echo "Database already initialized or no migrations needed"
+
 python -m vobchat.app

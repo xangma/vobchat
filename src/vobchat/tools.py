@@ -170,16 +170,43 @@ def find_units_by_postcode(
     """
     Find units by postcode.
     """
-    query = f"""select    distinct u.g_unit, gp.g_place, auo_util.get_unit_name(u.g_unit) as g_name, u.g_unit_type, gp.county_name, max(public.st_area(f.g_foot_ertslcc))
-    from    hgis.g_unit u, hgis.g_foot f, gbhdb.codepoint_jul2023_gb post, hgis.g_name as gn, hgis.g_place as gp
-    where    f.g_unit=u.g_unit
-	and gn.g_unit=u.g_unit
-	and gn.g_place=gp.g_place
-	and public.st_contains(f.g_foot_ertslcc, post.g_point_etrs)
-	and post.postcode='{postcode}'
-	and u.g_unit_type='MOD_DIST'
-    group    by u.g_unit, gp.g_place, u.g_unit_type, gp.county_name
-    order    by max(public.st_area(f.g_foot_ertslcc))
+
+    user_lang = 'eng'
+    query = """
+    WITH unit_name AS (
+        SELECT g_unit,
+            g_name,
+            ROW_NUMBER() OVER (
+                PARTITION BY g_unit
+                ORDER BY
+                    CASE
+                        WHEN g_language IS NOT NULL
+                                AND g_language = '{user_lang}' THEN 0
+                        WHEN g_language = 'eng' THEN 1
+                        ELSE 2
+                    END
+            ) AS rn
+        FROM   hgis.g_name
+        WHERE  g_name_status = 'P'
+    )
+    SELECT DISTINCT
+        u.g_unit,
+        gp.g_place,
+        un.g_name              AS g_name,
+        u.g_unit_type,
+        gp.county_name,
+        MAX(public.st_area(f.g_foot_ertslcc)) AS max_area
+    FROM   hgis.g_unit   u
+    JOIN   hgis.g_foot   f   ON f.g_unit = u.g_unit
+    JOIN   hgis.g_name   gn  ON gn.g_unit = u.g_unit
+    JOIN   hgis.g_place  gp  ON gn.g_place = gp.g_place
+    JOIN   unit_name     un  ON un.g_unit = u.g_unit AND un.rn = 1
+    JOIN   hgis.codepoint post
+        ON public.st_contains(f.g_foot_ertslcc, post.g_point_etrs)
+    WHERE  post.postcode   = {postcode}
+    AND  u.g_unit_type   = 'MOD_DIST'
+    GROUP  BY u.g_unit, gp.g_place, un.g_name, u.g_unit_type, gp.county_name
+    ORDER  BY MAX(public.st_area(f.g_foot_ertslcc));
     """
     logger.debug(f"[find_units_by_postcode] Running query:\n{query}")
     dbtool = QuerySQLDataBaseTool(db=db)
@@ -312,10 +339,38 @@ def data_query(
     """
     Query data for a given unit name.
     """
-    query=f"""select    d.g_unit, auo_util.get_unit_name(d.g_unit), u.g_unit_type, d.end_date_decimal, d.cellref, d.g_authority, d.g_auth_note, d.g_data
-    from    hgis.g_data d, hgis.g_unit u
-    where    u.g_unit = d.g_unit and
-        auo_util.get_unit_name(d.g_unit) = '{unitname}' limit 20;
+
+    user_lang = 'eng'
+    query = """
+    WITH unit_name AS (
+        SELECT g_unit,
+            g_name,
+            ROW_NUMBER() OVER (
+                PARTITION BY g_unit
+                ORDER BY
+                    CASE
+                        WHEN g_language IS NOT NULL
+                                AND g_language = '{user_lang}' THEN 0
+                        WHEN g_language = 'eng' THEN 1
+                        ELSE 2
+                    END
+            ) AS rn
+        FROM hgis.g_name
+        WHERE g_name_status = 'P'
+    )
+    SELECT  d.g_unit,
+            un.g_name           AS unit_name,
+            u.g_unit_type,
+            d.end_date_decimal,
+            d.cellref,
+            d.g_authority,
+            d.g_auth_note,
+            d.g_data
+    FROM    hgis.g_data d
+    JOIN    hgis.g_unit u   ON u.g_unit = d.g_unit
+    JOIN    unit_name  un   ON un.g_unit = d.g_unit AND un.rn = 1
+    WHERE   un.g_name = %(unitname)s
+    LIMIT 20;
     """
     dbtool = QuerySQLDataBaseTool(db=db)
     res = dbtool.db._execute(query)
@@ -417,16 +472,32 @@ def get_unit_details(unit_ids: List[str]) -> str:
     # Ensure IDs are strings and handle potential SQL injection (though less likely with list)
     safe_unit_ids = [str(uid).replace("'", "''") for uid in unit_ids]
     unit_ids_str = "','".join(safe_unit_ids)
-
+    user_lang = 'eng'
     query = f"""
-    SELECT
-        u.g_unit,
-        COALESCE(auo_util.get_unit_name(u.g_unit), 'Unknown Name') as unit_name,
-        u.g_unit_type
-    FROM
-        hgis.g_unit u
-    WHERE
-        u.g_unit IN ('{unit_ids_str}');
+    WITH unit_name AS (
+        SELECT  g_unit,
+                g_name,
+                ROW_NUMBER() OVER (
+                    PARTITION BY g_unit
+                    ORDER BY
+                        CASE
+                            WHEN g_language IS NOT NULL
+                                AND g_language = '{user_lang}' THEN 0
+                            WHEN g_language = 'eng' THEN 1
+                            ELSE 2
+                        END
+                ) AS rn
+        FROM   hgis.g_name
+        WHERE  g_name_status = 'P'
+    )
+    SELECT  u.g_unit,
+            COALESCE(un.g_name, 'Unknown Name') AS unit_name,
+            u.g_unit_type
+    FROM    hgis.g_unit u
+    LEFT JOIN unit_name un
+        ON un.g_unit = u.g_unit
+        AND un.rn     = 1
+    WHERE   u.g_unit IN ('{unit_ids_str}');
     """
     logger.debug(f"[get_unit_details] Running query:\n{query}")
     dbtool = QuerySQLDataBaseTool(db=db)
