@@ -21,12 +21,10 @@ redis
 celery
 diskcache
 dash[diskcache]
-# dash[celery]
 sqlalchemy
 flask
 flask_sqlalchemy
 flask_login
-flask[async]
 passlib
 authlib
 geoalchemy2

@@ -439,20 +439,15 @@ class SimpleSSEClient {
     // Helper: Handle map update requests (replicated from complex SSE client)
     handleMapUpdateRequest(request) {
         console.log('SSE: handleMapUpdateRequest called with:', request);
-        if (window.pureMapState && request.places) {
+        if (window.pureMapState && request.places !== undefined) {
             console.log('SSE: Request places array:', request.places);
             // Extract units and unit types from places array (single source of truth)
             const units = this.getSelectedUnits({places: request.places});
             const unitTypes = this.getSelectedUnitTypes({places: request.places});
             console.log('SSE: Extracted units from map update request:', units, 'unit types:', unitTypes);
 
-            // Debug: check if units are valid
-            if (!units || units.length === 0) {
-                console.error('SSE: No units extracted from places array!');
-                return;
-            }
-
-            // Sync the selected polygons using places as single source of truth
+            // Always sync the selected polygons using places as single source of truth
+            // This handles both adding polygons and clearing them (when empty)
             window.pureMapState.executeWorkflowCommand({
                 type: 'sync_state',
                 state: {
@@ -460,9 +455,13 @@ class SimpleSSEClient {
                 }
             });
 
-            // Fetch polygons and zoom to them (this was missing!)
-            console.log('SSE: Fetching polygons and zooming for map update request');
-            this.fetchPolygonsAndZoom(units, unitTypes, request.places);
+            // Only fetch polygons if we have units to fetch
+            if (units && units.length > 0) {
+                console.log('SSE: Fetching polygons and zooming for map update request');
+                this.fetchPolygonsAndZoom(units, unitTypes, request.places);
+            } else {
+                console.log('SSE: No units to fetch - map cleared');
+            }
 
             console.log('SSE: Synced map state via map_update_request');
         }

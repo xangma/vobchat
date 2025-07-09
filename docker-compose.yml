@@ -32,8 +32,8 @@ services:
       - ./src:/app/src
       - ./CLAUDE.md:/app/CLAUDE.md
 
-    # Use host networking for easier access to host services
-    network_mode: host
+    # Use standard Docker networking
+    # network_mode: host
 
     depends_on:
       - redis-check

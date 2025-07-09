@@ -25,4 +25,4 @@ cd /app/src
 export FLASK_APP=vobchat.app:server
 flask db upgrade 2>/dev/null || echo "Database already initialized or no migrations needed"
 
-gunicorn --config src/vobchat/gunicorn.conf.py vobchat.app:server
+gunicorn --config /app/src/vobchat/gunicorn.conf.py vobchat.app:server
