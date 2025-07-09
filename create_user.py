@@ -16,6 +16,15 @@ def create_user(email, password):
     app = create_app()
     
     with app.server.app_context():
+        # Create tables if they don't exist
+        try:
+            print("Creating database tables if they don't exist...")
+            db.create_all()
+            print("✓ Database tables created/verified")
+        except Exception as e:
+            print(f"✗ Error creating tables: {e}")
+            return False
+        
         email = email.strip().lower()
         
         # Check if user already exists
