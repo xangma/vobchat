@@ -194,18 +194,51 @@
   const fetchPolygonsByBounds = (unitTypes, bounds, cachedIds, yearRange) => {
     if (!unitTypes.length) return Promise.reject('No unitTypes supplied');
     const [sw, ne] = [bounds.getSouthWest(), bounds.getNorthEast()];
-    const base = { minX: sw.lng, minY: sw.lat, maxX: ne.lng, maxY: ne.lat };
-    if (yearRange) { base.start_year = yearRange.min; base.end_year = yearRange.max; }
+    const boundsObj = { minX: sw.lng, minY: sw.lat, maxX: ne.lng, maxY: ne.lat };
 
     const cacheKey = `${unitTypes.join(',')}|${getBoundsKey(bounds)}|${yearRange?.min ?? ''}-${yearRange?.max ?? ''}`;
     if (cache.pendingRequests[cacheKey]) return cache.pendingRequests[cacheKey];
 
-    const url = new URL('/api/polygons/bbox', window.location.origin);
-    Object.entries(base).forEach(([k, v]) => url.searchParams.set(k, v));
-    url.searchParams.set('unit_types', unitTypes.join(','));
-    if (cachedIds.length) url.searchParams.set('exclude_ids', cachedIds.join(','));
+    // Use POST if we have many cached IDs to avoid URL length limits
+    // Estimate URL length: base URL + params + exclude_ids
+    const excludeIdsParam = cachedIds.length > 0 ? cachedIds.join(',') : '';
+    const estimatedUrlLength = 100 + excludeIdsParam.length; // rough estimate
+    const usePost = estimatedUrlLength > 3000; // Leave some margin under the 4094 limit
 
-    const p = fetch(url, { headers: { Accept: 'application/json' } })
+    let fetchPromise;
+    const url = new URL('/api/polygons/bbox', window.location.origin);
+
+    if (usePost) {
+      // Use POST with JSON body for large exclude_ids lists
+      const postData = {
+        unit_types: unitTypes,
+        bounds: boundsObj,
+        exclude_ids: cachedIds,
+        ...(yearRange && { start_year: yearRange.min, end_year: yearRange.max })
+      };
+
+      fetchPromise = fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify(postData)
+      });
+    } else {
+      // Use GET for smaller requests
+      Object.entries(boundsObj).forEach(([k, v]) => url.searchParams.set(k, v));
+      url.searchParams.set('unit_types', unitTypes.join(','));
+      if (cachedIds.length) url.searchParams.set('exclude_ids', excludeIdsParam);
+      if (yearRange) {
+        url.searchParams.set('start_year', yearRange.min);
+        url.searchParams.set('end_year', yearRange.max);
+      }
+
+      fetchPromise = fetch(url, { headers: { Accept: 'application/json' } });
+    }
+
+    const p = fetchPromise
       .then(r => r.ok ? r.json() : r.text().then(t => Promise.reject(`${r.status} ${t}`)))
       .then(data => {
         if (!Array.isArray(data?.features)) return { type: 'FeatureCollection', features: [] };
