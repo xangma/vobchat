@@ -33,8 +33,9 @@ class SSEEvent:
     data: Any
 
     def encode(self) -> str:
+        from vobchat.nodes.utils import safe_json_dumps
         # Ensure no embedded new-lines break the SSE frame
-        payload = json.dumps(self.data, default=str).replace("\n", "\\n")
+        payload = safe_json_dumps(self.data, default=str).replace("\n", "\\n")
         return f"event: {self.event_type}\ndata: {payload}\n\n"
 
 
@@ -286,10 +287,11 @@ class SSEManager:
         channel = f"sse:{thread_id}"
         # Off-load sync publish to the default executor (thread-pool)
         loop = asyncio.get_running_loop()
+        from vobchat.nodes.utils import safe_json_dumps
         await loop.run_in_executor(
             None,
             lambda: redis_pool_manager.get_sync_client().publish(
-                channel, json.dumps(event_data)),
+                channel, safe_json_dumps(event_data)),
         )
         # logger.debug("Published %s event to Redis for thread %s",
         # event.event_type, thread_id)
@@ -331,7 +333,8 @@ class SSEManager:
         """Ask *all* workers to drop clients for *thread_id*."""
         from vobchat.utils.redis_pool import redis_pool_manager
 
-        cleanup_message = json.dumps(
+        from vobchat.nodes.utils import safe_json_dumps
+        cleanup_message = safe_json_dumps(
             {"action": "cleanup", "thread_id": thread_id, "timestamp": time.time()})
         redis_pool_manager.get_sync_client().publish(
             f"sse_cleanup:{thread_id}", cleanup_message)
@@ -341,7 +344,8 @@ class SSEManager:
         """Ask workers to drop clients for every thread *except* ``keep_thread_id``."""
         from vobchat.utils.redis_pool import redis_pool_manager
 
-        cleanup_message = json.dumps(
+        from vobchat.nodes.utils import safe_json_dumps
+        cleanup_message = safe_json_dumps(
             {"action": "cleanup_all_except", "keep_thread_id": keep_thread_id, "timestamp": time.time()})
         redis_pool_manager.get_sync_client().publish("sse_cleanup:all", cleanup_message)
         logger.info("Broadcast global cleanup (keeping %s)", keep_thread_id)

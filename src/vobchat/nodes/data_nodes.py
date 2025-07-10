@@ -392,7 +392,8 @@ def find_cubes_node(state: lg_State) -> Dict[str, Union[str, list, dict]]:
     # 4️⃣  Merge + store ----------------------------------------------------------
     combined = pd.concat([existing, *fresh],
                          ignore_index=True) if fresh else existing
-    cubes_json = combined.to_json(orient="records")
+    # Handle NaN values properly for JSON serialization
+    cubes_json = combined.to_json(orient="records", force_ascii=False, default_handler=str)
 
     # 5️⃣  Interrupt for visualisation -------------------------------------------
     # Create the message but don't append yet (will be lost due to interrupt)

@@ -1,12 +1,30 @@
 """Shared utilities for node implementations."""
 from __future__ import annotations
 import uuid
-from typing import Dict, List
+import json
+import math
+from typing import Dict, List, Any
 from langchain_core.messages import AIMessage, HumanMessage
 from vobchat.state_schema import lg_State
 import logging
 
 logger = logging.getLogger(__name__)
+
+def make_json_safe(obj: Any) -> Any:
+    """Convert an object to be JSON-safe by handling NaN, inf, and other problematic values."""
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+    elif isinstance(obj, dict):
+        return {k: make_json_safe(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [make_json_safe(item) for item in obj]
+    return obj
+
+def safe_json_dumps(obj: Any, **kwargs) -> str:
+    """JSON dumps with NaN/inf handling."""
+    safe_obj = make_json_safe(obj)
+    return json.dumps(safe_obj, **kwargs)
 
 def serialize_messages(messages):
     """Convert LangChain message objects to JSON-serializable format."""

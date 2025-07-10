@@ -412,7 +412,7 @@ def _filter_cubes(state: lg_State, remaining_units: List[int]):
     if df.empty:
         state["selected_cubes"] = None
         return None
-    filtered = df.to_json(orient="records")
+    filtered = df.to_json(orient='records', force_ascii=False, default_handler=str)
     state["selected_cubes"] = filtered
     return filtered
 
@@ -470,6 +470,7 @@ def AddPlace_node(state: lg_State) -> Dict[str, Union[str, list, dict]] | Comman
             "show_visualization": state.get("show_visualization", None),
             "current_place_index": 0,
             "places": state.get("places", []),
+            "messages": state.get("messages", []),  # CRITICAL: Include messages to persist _append_ai changes
         },
     )
 

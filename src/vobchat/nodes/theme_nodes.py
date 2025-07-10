@@ -212,14 +212,13 @@ def resolve_theme(state: lg_State):
             return {"messages": msgs}
 
         selected_theme = pd.DataFrame(
-            [{"ent_id": code, "labl": label}]).to_json(orient="records")
+            [{"ent_id": code, "labl": label}]).to_json(orient='records', force_ascii=False, default_handler=str)
         _append_ai(state, f"Theme set to {label} ({code}).")
         return Command(goto="find_cubes_node", update={
             "selected_theme": selected_theme,
             "selection_idx": None,
             "options": None,
             "extracted_theme": None,
-            "messages": state["messages"],
         })
 
     # B: Free text ========================================================
@@ -241,12 +240,11 @@ def resolve_theme(state: lg_State):
             return {"messages": msgs}
         if len(df) == 1:
             theme = df.iloc[0]
-            selected_theme = pd.DataFrame([theme]).to_json(orient="records")
+            selected_theme = pd.DataFrame([theme]).to_json(orient='records', force_ascii=False, default_handler=str)
             _append_ai(state, f"Theme set to {theme.labl} ({theme.ent_id}).")
             return Command(goto="find_cubes_node", update={
                 "selected_theme": selected_theme,
                 "extracted_theme": None,
-                "messages": state["messages"],
             })
         _ask_user_to_choose(
             state, df, f"I found {len(df)} themes for ‘{query}’. Please pick one:")

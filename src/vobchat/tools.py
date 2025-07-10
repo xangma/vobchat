@@ -147,7 +147,8 @@ def find_cubes_for_unit_theme(
             # Convert column names to match what we expect
             df.columns = ['Theme_ID','Cube_ID', 'Cube', 'Start', 'End', 'Count']
             logger.debug(f"[find_cubes_for_unit_theme] Query returned: \n\n{df}")
-            return df.to_json(orient='records')
+            # Handle NaN values properly for JSON serialization
+            return df.to_json(orient='records', force_ascii=False, default_handler=str)
 
         except Exception as e:
             logger.warning(f"[find_cubes_for_unit_theme] Database error for unit {g_unit}, theme {theme_id} (attempt {attempt + 1}/{max_retries}): {e}")
@@ -213,7 +214,7 @@ def find_units_by_postcode(
     res = dbtool.db._execute(query)
     df = pd.DataFrame(res)
     logger.debug(f"[find_units_by_postcode] Query returned: \n\n{df}")
-    return df.to_json(orient='records')
+    return df.to_json(orient='records', force_ascii=False, default_handler=str)
 
 
 @tool
@@ -283,7 +284,7 @@ def find_places_by_name(
     res = dbtool.db._execute(query)
     df = pd.DataFrame(res)
     logger.debug(f"[find_places_by_name] Query returned: \n\n{df}")
-    return df.to_json(orient='records')
+    return df.to_json(orient='records', force_ascii=False, default_handler=str)
 
 @tool
 def find_themes_for_unit(
@@ -316,7 +317,7 @@ def find_themes_for_unit(
             res = dbtool.db._execute(query)
             df = pd.DataFrame(res)
             logger.debug(f"[find_themes_for_unit] Query returned: \n\n{df}")
-            return df.to_json(orient='records')
+            return df.to_json(orient='records', force_ascii=False, default_handler=str)
 
         except Exception as e:
             logger.warning(f"[find_themes_for_unit] Database error for unit {unit} (attempt {attempt + 1}/{max_retries}): {e}")
@@ -375,7 +376,7 @@ def data_query(
     dbtool = QuerySQLDataBaseTool(db=db)
     res = dbtool.db._execute(query)
     df = pd.DataFrame(res)
-    return df.to_json(orient='records')
+    return df.to_json(orient='records', force_ascii=False, default_handler=str)
 
 @tool
 def get_cube_data(
@@ -401,7 +402,8 @@ def get_cube_data(
     dbtool = QuerySQLDataBaseTool(db=db)
     res = dbtool.db._execute(query)
     df = pd.DataFrame(res)
-    return df.to_json(orient='records')
+    # Handle NaN values properly for JSON serialization
+    return df.to_json(orient='records', force_ascii=False, default_handler=str)
 
 @tool
 def get_all_cube_data(
@@ -451,7 +453,8 @@ def get_all_cube_data(
         # Pivot the data to create columns for each cube
         pivot_df = df.pivot(index=['g_name', 'year'], columns='cellref', values='value').reset_index()
         logger.debug(f"[get_all_cube_data] Returning {len(pivot_df)} rows for unit {g_unit}")
-        return pivot_df.to_json(orient='records')
+        # Handle NaN values properly for JSON serialization
+        return pivot_df.to_json(orient='records', force_ascii=False, default_handler=str)
     except Exception as e:
         logger.error(f"[get_all_cube_data] Database error for unit {g_unit}: {e}")
         # Return empty result instead of crashing
@@ -467,7 +470,7 @@ def get_unit_details(unit_ids: List[str]) -> str:
     Useful for listing currently selected units.
     """
     if not unit_ids:
-        return pd.DataFrame(columns=['g_unit', 'unit_name', 'unit_type', 'long_name']).to_json(orient='records')
+        return pd.DataFrame(columns=['g_unit', 'unit_name', 'unit_type', 'long_name']).to_json(orient='records', force_ascii=False, default_handler=str)
 
     # Ensure IDs are strings and handle potential SQL injection (though less likely with list)
     safe_unit_ids = [str(uid).replace("'", "''") for uid in unit_ids]
@@ -507,10 +510,10 @@ def get_unit_details(unit_ids: List[str]) -> str:
         # Add the long name for display
         df['long_name'] = df['unit_type'].apply(lambda ut: UNIT_TYPES.get(ut, {}).get('long_name', ut))
         logger.debug(f"[get_unit_details] Query returned: \n\n{df}")
-        return df.to_json(orient='records')
+        return df.to_json(orient='records', force_ascii=False, default_handler=str)
     except Exception as e:
         logger.error(f"[get_unit_details] Error executing query: {e}", exc_info=True)
-        return pd.DataFrame(columns=['g_unit', 'unit_name', 'unit_type', 'long_name']).to_json(orient='records')
+        return pd.DataFrame(columns=['g_unit', 'unit_name', 'unit_type', 'long_name']).to_json(orient='records', force_ascii=False, default_handler=str)
 
 
 # Make sure get_all_themes is robust
@@ -529,10 +532,10 @@ def get_all_themes() -> str:
         res = dbtool.db._execute(query)
         df = pd.DataFrame(res, columns=['ent_id', 'labl', 'text'])
         logger.debug(f"[get_all_themes_tool] Query returned: \n\n{df}")
-        return df.to_json(orient='records')
+        return df.to_json(orient='records', force_ascii=False, default_handler=str)
     except Exception as e:
         logger.error(f"[get_all_themes_tool] Error executing query: {e}", exc_info=True)
-        return pd.DataFrame(columns=['ent_id', 'labl', 'text']).to_json(orient='records')
+        return pd.DataFrame(columns=['ent_id', 'labl', 'text']).to_json(orient='records', force_ascii=False, default_handler=str)
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -552,6 +555,6 @@ def get_theme_text(theme_code: Annotated[str, "Theme code e.g. T_POP"]):
     res    = dbtool.db._execute(query)
     df     = pd.DataFrame(res, columns=["ent_id", "labl", "text"])
     if df.empty:
-        return pd.DataFrame(columns=["ent_id", "labl", "text"]).to_json(orient="records")
-    return df.to_json(orient="records")
+        return pd.DataFrame(columns=["ent_id", "labl", "text"]).to_json(orient='records', force_ascii=False, default_handler=str)
+    return df.to_json(orient='records', force_ascii=False, default_handler=str)
 # ─────────────────────────────────────────────────────────────────────────────
