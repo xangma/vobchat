@@ -308,10 +308,15 @@ def create_workflow(lg_state: TypedDict):
 
         logger.info(f"=== URGENT DEBUG: start_node CALLED - current_node={current_node}, selection_idx={selection_idx}, intent={intent} ===")
 
-        # Check if workflow_input contains updated messages from interrupt (sent by frontend)
+        # Check if workflow_input contains an interrupt_message from frontend
         # This allows interrupt messages to be saved to state when workflow resumes
-        if "messages" in state and isinstance(state["messages"], list):
-            logger.info(f"start_node: Received {len(state['messages'])} messages from workflow input")
+        interrupt_message = state.get("interrupt_message")
+        if interrupt_message:
+            from vobchat.nodes.utils import _append_ai
+            _append_ai(state, interrupt_message)
+            logger.info(f"start_node: Added interrupt message to state: {interrupt_message}")
+            # Clear the interrupt_message to prevent re-processing
+            state["interrupt_message"] = None
 
         # Debug: Check if workflow_input was passed in
         if selection_idx is not None:
@@ -349,12 +354,24 @@ def create_workflow(lg_state: TypedDict):
         if current_node and selection_idx is not None:
             logger.info(f"=== URGENT DEBUG: start_node RESUMING from {current_node} (no new intent) ===")
             logging.info(f"start_node: Resuming from current_node={current_node} with selection_idx={selection_idx}")
+            # If we added an interrupt message, include the updated messages and clear interrupt_message
+            if interrupt_message:
+                return Command(goto=current_node, update={
+                    "messages": state.get("messages", []),
+                    "interrupt_message": None
+                })
             return Command(goto=current_node)
 
         # PRIORITY 4: If we have a current_node but no selection_idx, we're waiting for user input - don't restart
         if current_node:
             logger.info(f"=== URGENT DEBUG: start_node WAITING for user input at {current_node} ===")
             logging.info(f"start_node: Waiting for user input at current_node={current_node}, not restarting workflow")
+            # If we added an interrupt message, include the updated messages and clear interrupt_message
+            if interrupt_message:
+                return Command(goto=current_node, update={
+                    "messages": state.get("messages", []),
+                    "interrupt_message": None
+                })
             return Command(goto=current_node)
 
         # Otherwise start fresh with agent_node

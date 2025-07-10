@@ -158,3 +158,4 @@ class lg_State(TypedDict):
     map_update_request: Optional[dict]
     _prompted_for_place: Optional[bool]
     show_visualization: Optional[bool]
+    interrupt_message: Optional[str]  # Message from interrupt to be added to state on resume

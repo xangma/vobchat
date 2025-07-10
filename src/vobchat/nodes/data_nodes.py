@@ -394,25 +394,21 @@ def find_cubes_node(state: lg_State) -> Dict[str, Union[str, list, dict]]:
                          ignore_index=True) if fresh else existing
     cubes_json = combined.to_json(orient="records")
 
-    _append_ai(
-        state,
-        f"Loaded {len(combined)} data rows for ‘{theme_label}’ across {len(units)} area"
-        f"{'s' if len(units) != 1 else ''}"
-        + (f" (years {min_year or '…'}–{max_year or '…'})" if min_year or max_year else "")
-        + ".",
-    )
-
     # 5️⃣  Interrupt for visualisation -------------------------------------------
+    # Create the message but don't append yet (will be lost due to interrupt)
+    # data_message = (
+    #     f"Loaded {len(combined)} data rows for '{theme_label}' across {len(units)} area"
+    #     f"{'s' if len(units) != 1 else ''}"
+    #     + (f" (years {min_year or '…'}–{max_year or '…'})" if min_year or max_year else "")
+    #     + "."
+    # )
+
     interrupt({
         "cube_data_ready": True,
         "theme_label": theme_label,
         "cubes": cubes_json,
         "places": state.get("places", []),
         "selected_theme": theme_json,
-        "messages": serialize_messages(state.get("messages", []))
+        # "message": data_message,
+        # "messages": serialize_messages(state.get("messages", []))
     })
-
-    return {
-        "messages": state["messages"],
-        "selected_cubes": cubes_json,
-    }

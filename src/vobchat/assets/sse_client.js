@@ -261,8 +261,8 @@ class SimpleSSEClient {
             // Update chat display
             this.updateChatDisplay(allMessages);
             
-            // Store updated messages to send back when workflow resumes
-            this.currentMessages = allMessages;
+            // Store only the new interrupt message to send back when workflow resumes
+            this.pendingInterruptMessage = interruptData.message;
         }
 
         // Show buttons if provided
@@ -400,10 +400,10 @@ class SimpleSSEClient {
             return;
         }
 
-        // Include updated messages if available
-        if (this.currentMessages) {
-            selectionInput.messages = this.currentMessages;
-            this.currentMessages = null; // Clear after including
+        // Include pending interrupt message if available
+        if (this.pendingInterruptMessage) {
+            selectionInput.interrupt_message = this.pendingInterruptMessage;
+            this.pendingInterruptMessage = null; // Clear after including
         }
 
         console.log('SSE: Sending selection via existing connection:', selectionInput);

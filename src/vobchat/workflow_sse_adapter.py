@@ -196,7 +196,7 @@ def serialize_messages(messages):
             })
         elif isinstance(msg, HumanMessage):
             serialized.append({
-                "_type": "human", 
+                "_type": "human",
                 "content": msg.content,
                 "type": "human"
             })
@@ -243,25 +243,12 @@ class WorkflowSSEAdapter:
 
         try:
             async for delta in self.wf.astream(initial_input, config=cfg, stream_mode="values"):
-                # 1️⃣  Messages -------------------------------------------------
-                for msg in delta.get("messages", []):
-                    if isinstance(msg, AIMessage) and msg.content:
-                        mid = getattr(msg, "response_metadata",
-                                      {}).get("message_id")
-                        if mid and mid in streamed_ids:
-                            continue
-                        await simple_sse_manager.message(thread_id, str(msg.content))
-                        if mid:
-                            streamed_ids.add(mid)
                 # 2️⃣  State snip ---------------------------------------------
                 ui_state = {k: v for k, v in delta.items() if k in _UI_KEYS}
                 if ui_state:
                     # Serialize messages if present
                     if "messages" in ui_state:
                         ui_state["messages"] = serialize_messages(ui_state["messages"])
-                    #logger.info(f"SSE Adapter: Streaming state update for thread {thread_id}: {list(ui_state.keys())}")
-                    # if 'map_update_request' in ui_state:
-#                        logger.info(f"SSE Adapter: map_update_request = {ui_state['map_update_request']}")
                     await simple_sse_manager.state(thread_id, ui_state)
 
             # ----------------------------------------------------------
