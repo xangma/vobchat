@@ -1,0 +1,33 @@
+/*
+=============================================================================
+
+	extended.css
+	v1.0
+	2009/05/19
+
+	Headscape
+	Written by Ed Merritt (ed.merritt@headscape.co.uk)
+
+	This stylesheet is offered to every browser. 
+	It contains basic styling 
+
+=============================================================================
+*/
+
+.fullyFeatured #headerOverlay {background-image: url(../images/headerOverlay.png);}
+.fullyFeatured #vobLogo {background-image: url(../images/logo.png);}
+.fullyFeatured.europe #vobLogo {background-image: url(../images/logoEU.png);}
+.fullyFeatured.ireland #vobLogo {background-image: url(../images/logoIreland.png);}
+.fullyFeatured #vobLogo:hover, .fullyFeatured.europe #vobLogo:hover, .fullyFeatured.ireland #vobLogo:hover {background-position: top right;}
+
+
+.fullyFeatured #navigation ul li a {border: 1px solid transparent; border-width: 0 1px;}
+.fullyFeatured #navigation ul li.current a {border-color: #2a2a2a;}
+
+.tText .cols5, .tText .cols13 {min-height: 400px;}
+
+.fullyFeatured .mapSize, .fullyFeatured .mapSizeSmaller {position: absolute; display: block; color: #21759b; cursor: pointer; margin-bottom: 0; float: right; width: auto; right: 5px; top: 12px;}
+.fullyFeatured .mapSize:hover, .fullyFeatured .mapSizeSmaller:hover {color: #2d2b29;}
+
+/* Added by JRW to disable Google auto-placed adverts; should not be needed */
+.google-auto-placed {display: none; visibility: hidden;}

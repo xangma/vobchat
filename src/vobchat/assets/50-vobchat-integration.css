@@ -1,0 +1,138 @@
+/* VobChat Integration with Vision of Britain 2025 Theme
+ * This file contains specific overrides to make VobChat components
+ * work seamlessly with the Vision of Britain website styling
+ */
+
+/* Override Bootstrap styles that conflict with VoB */
+body {
+    font-family: 'IBM Plex Sans', Helvetica, Arial, sans-serif !important;
+    font-size: 16px !important;
+    line-height: 1.5 !important;
+    color: #333 !important;
+    background-color: #f3f4e9 !important;
+}
+
+/* Dash-specific overrides */
+._dash-loading {
+    font-family: 'IBM Plex Sans', Helvetica, Arial, sans-serif !important;
+}
+
+/* Card styling to match VoB */
+.card {
+    background-color: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 0; /* VoB uses sharp corners */
+    box-shadow: none;
+}
+
+.card-header {
+    background-color: #f8f8f8;
+    border-bottom: 1px solid #e0e0e0;
+    font-family: 'IBM Plex Serif', Georgia, serif;
+    font-weight: 600;
+}
+
+/* Input and form controls */
+.form-control,
+.form-select,
+.dash-dropdown,
+.Select-control {
+    font-family: 'IBM Plex Sans', Helvetica, Arial, sans-serif !important;
+    font-size: 16px !important;
+    border: 1px solid #ccc !important;
+    border-radius: 0 !important;
+}
+
+.form-control:focus,
+.form-select:focus,
+.Select.is-focused .Select-control {
+    border-color: #666 !important;
+    box-shadow: none !important;
+}
+
+/* Button styling to match VoB */
+.btn {
+    font-family: 'IBM Plex Sans', Helvetica, Arial, sans-serif !important;
+    font-size: 16px !important;
+    border-radius: 0 !important;
+    text-transform: none !important;
+    padding: 8px 16px !important;
+}
+
+.btn-primary {
+    background-color: #4a7c59 !important;
+    border-color: #4a7c59 !important;
+}
+
+.btn-primary:hover {
+    background-color: #3a6249 !important;
+    border-color: #3a6249 !important;
+}
+
+/* Chat container styling */
+.chat-messages {
+    background-color: #fff;
+    border: 1px solid #e0e0e0;
+}
+
+/* Map container styling */
+.leaflet-container {
+    font-family: 'IBM Plex Sans', Helvetica, Arial, sans-serif !important;
+}
+
+/* Table styling */
+.dash-table-container {
+    font-family: 'IBM Plex Sans', Helvetica, Arial, sans-serif !important;
+}
+
+.dash-spreadsheet-container .dash-spreadsheet-inner th {
+    font-family: 'IBM Plex Serif', Georgia, serif !important;
+    font-weight: 600 !important;
+}
+
+/* Plotly chart styling */
+.plot-container {
+    font-family: 'IBM Plex Sans', Helvetica, Arial, sans-serif !important;
+}
+
+/* Responsive typography from VoB 2025 */
+h1, h2, h3, h4, h5, h6 {
+    font-family: 'IBM Plex Serif', Georgia, serif !important;
+    font-weight: 600 !important;
+    line-height: 1.2 !important;
+}
+
+h1 { font-size: 48px !important; }
+h2 { font-size: 36px !important; }
+h3 { font-size: 28px !important; }
+h4 { font-size: 24px !important; }
+h5 { font-size: 20px !important; }
+h6 { font-size: 18px !important; }
+
+/* Responsive adjustments */
+@media (max-width: 800px) {
+    h1 { font-size: 36px !important; }
+    h2 { font-size: 28px !important; }
+    h3 { font-size: 24px !important; }
+    h4 { font-size: 20px !important; }
+    h5 { font-size: 18px !important; }
+    h6 { font-size: 16px !important; }
+}
+
+/* Remove Bootstrap rounded corners globally */
+* {
+    border-radius: 0 !important;
+}
+
+/* Exception for specific elements that need rounded corners */
+.speech-bubble {
+    border-radius: 15px !important;
+}
+
+.user-bubble {
+    border-bottom-right-radius: 5px !important;
+}
+
+.ai-bubble {
+    border-bottom-left-radius: 5px !important;
+}

@@ -1,0 +1,110 @@
+/* 
+=============================================================================
+
+	basic.css
+	v1.0
+	2008/01/21
+
+	Headscape
+	Written by Ed Merritt (ed.merritt@headscape.co.uk)
+
+	This stylesheet is offered to every browser. 
+	It contains very basic styling 
+
+=============================================================================
+*/
+
+/*
+	Eric Meyer's Universal Reset Reloaded (http://meyerweb.com/eric/thoughts/2007/05/01/reset-reloaded/)
+*/
+
+html, body, div, span, applet, object, iframe,
+h1, h2, h3, h4, h5, h6, p, blockquote, pre,
+a, abbr, acronym, address, big, cite, code,
+del, dfn, em, font, img, ins, kbd, q, s, samp,
+small, strike, strong, sub, sup, tt, var,
+dl, dt, dd, ol, ul, li,
+fieldset, form, label, legend,
+table, caption, tbody, tfoot, thead, tr, th, td {
+	margin: 0;
+	padding: 0;
+	border: 0;
+	outline: 0;
+	font-weight: inherit;
+	font-style: inherit;
+	font-size: 100%;
+	font-family: inherit;
+	vertical-align: baseline;
+}
+/* remember to define focus styles! */
+:focus {
+	outline: 0;
+}
+body {
+	line-height: 1;
+	color: black;
+	background: white;
+}
+ol, ul {
+	list-style: none;
+}
+/* tables still need 'cellspacing="0"' in the markup */
+table {
+	border-collapse: separate;
+	border-spacing: 0;
+}
+caption, th, td {
+	font-weight: normal;
+}
+/* 
+removes all default quote marks from all browsers. Add quotes to css as required 
+eg.
+&ldquo;<q>This is a quote</q>&rdquo;
+*/
+blockquote:before, blockquote:after,
+q:before, q:after {
+	content: "";
+}
+blockquote, q {
+	quotes: "" "";
+}
+
+
+/*
+=============================================================================
+*/
+
+/*
+	Basic Screen Styling
+*/
+
+.number {text-align:right}
+html { overflow-y: scroll;}
+* {line-height: 18px;}
+body {position: relative; font: 12px Helvetica, Arial, sans-serif; margin: 0; background: #f3f4e9; color: #3a3835;}
+img {-ms-interpolation-mode: bicubic;}
+hr {height: 0; line-height: 0; overflow: hidden; background: transparent; border: none; border-top: 1px solid #000;}
+h1, h2, h3, h4, h5, h6 {font-family: "Times New Roman", Times, serif; font-weight: normal; margin-top: 10px; margin-bottom: 10px; width: 100%;}
+p, blockquote, ul, ol {margin-bottom: 18px; color: #565350;}
+ol {list-style:decimal;}
+ul ul, ol {margin: 0 0 18px 18px;}
+ul ul, ol ol {margin-bottom: 0;}
+strong {font-weight: bold;}
+em {font-style: italic;}
+#page ul, #page ol {padding-left: 6px;}
+#page p + ul, #page p + ol {margin-top: -7px;}
+#page ul ul, #page ul ol, #page ol ol , #page ol ul {margin-bottom: 0; margin-top: 0;}
+ul li {padding-left: 10px; /*background: url(../images/bulletsBlueWhite.gif) 0 4px no-repeat;*/}
+
+#page p, #page h1, #page h2, #page h3, #page h4, #page h5, #page h6 {padding: 0 6px;}
+.textCenter {text-align: center;}
+.textColumns2 {-moz-column-count: 2; -moz-column-gap: 18px; -webkit-column-count: 2; -webkit-column-gap: 18px; column-count: 2; column-gap: 18px; gap:18px;}
+h1 {font-size: 35px; line-height: 36px;}
+h2 {font-size: 26px; line-height: 36px;}
+h3 {font-size: 22px; line-height: 36px;}
+h4 {font-size: 1.3em;}
+h5 {font-size: 1.2em;}
+h6 {font-size: 1.1em;}
+acronym, abbr {border-bottom: 1px dotted #333;}
+
+
