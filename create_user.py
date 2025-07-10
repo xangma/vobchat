@@ -4,10 +4,9 @@ Simple script to create a user in VobChat without interactive prompts
 Usage: python create_user.py email@example.com password123
 """
 import sys
-import os
 sys.path.insert(0, '/app/src')
 
-from vobchat.models import db, User, pwd_ctx
+from vobchat.models import db, User, pwd_ctx, Base
 from vobchat.app import create_app
 
 def create_user(email, password):
@@ -19,7 +18,8 @@ def create_user(email, password):
         # Create tables if they don't exist
         try:
             print("Creating database tables if they don't exist...")
-            db.create_all()
+            # Use the Base metadata to create tables since User inherits from Base
+            Base.metadata.create_all(db.engine)
             print("✓ Database tables created/verified")
         except Exception as e:
             print(f"✗ Error creating tables: {e}")
