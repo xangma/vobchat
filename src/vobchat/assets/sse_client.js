@@ -243,13 +243,26 @@ class SimpleSSEClient {
             }
         }
 
-        // Show message if provided and store it for later inclusion in state
-        if (interruptData.message) {
-            // Store the interrupt message to send back when workflow resumes
-            this.pendingInterruptMessage = interruptData.message;
+        // Handle interrupt message and update chat display
+        if (interruptData.message && interruptData.messages) {
+            // Get existing messages from interrupt data
+            const existingMessages = interruptData.messages || [];
             
-            // Add the message to chat display immediately
-            this.addInterruptMessageToChat(interruptData.message);
+            // Create new interrupt message
+            const newInterruptMessage = {
+                _type: 'ai',
+                content: interruptData.message,
+                type: 'ai'
+            };
+            
+            // Combine existing messages with new interrupt message
+            const allMessages = [...existingMessages, newInterruptMessage];
+            
+            // Update chat display
+            this.updateChatDisplay(allMessages);
+            
+            // Store updated messages to send back when workflow resumes
+            this.currentMessages = allMessages;
         }
 
         // Show buttons if provided
@@ -387,10 +400,10 @@ class SimpleSSEClient {
             return;
         }
 
-        // Include pending interrupt message if available
-        if (this.pendingInterruptMessage) {
-            selectionInput.interrupt_message = this.pendingInterruptMessage;
-            this.pendingInterruptMessage = null; // Clear after including
+        // Include updated messages if available
+        if (this.currentMessages) {
+            selectionInput.messages = this.currentMessages;
+            this.currentMessages = null; // Clear after including
         }
 
         console.log('SSE: Sending selection via existing connection:', selectionInput);
@@ -718,29 +731,6 @@ class SimpleSSEClient {
         }
     }
 
-    // Add an interrupt message to the chat display immediately
-    addInterruptMessageToChat(message) {
-        console.log('SSE: Adding interrupt message to chat:', message);
-        
-        const chatDisplay = document.getElementById('chat-display');
-        if (!chatDisplay) {
-            console.error('SSE: chat-display element not found');
-            return;
-        }
-
-        const messageDiv = document.createElement('div');
-        messageDiv.className = 'speech-bubble ai-bubble';
-        messageDiv.textContent = message;
-        
-        // Add to the top of the chat display (newest first)
-        chatDisplay.insertBefore(messageDiv, chatDisplay.firstChild);
-        
-        // Re-enable send button after update
-        const sendButton = document.getElementById('send-button');
-        if (sendButton) {
-            sendButton.disabled = false;
-        }
-    }
 }
 
 // Create global instance

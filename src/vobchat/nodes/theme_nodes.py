@@ -15,7 +15,7 @@ from vobchat.tools import (
 from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
-from .utils import _append_ai, _has_message_content, _clean_duplicate_intents_from_queue
+from .utils import _append_ai, _has_message_content, _clean_duplicate_intents_from_queue, serialize_messages
 import logging
 
 logger = logging.getLogger(__name__)
@@ -176,6 +176,7 @@ def _ask_user_to_choose(state: lg_State, df: pd.DataFrame, prompt: str):
         "message": prompt,
         "options": options,
         "current_node": "resolve_theme",
+        "messages": serialize_messages(state.get("messages", []))
     })
 
 # -----------------------------------------------------------------------------

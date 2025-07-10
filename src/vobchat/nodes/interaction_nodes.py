@@ -4,7 +4,7 @@ from typing import List
 from langgraph.types import interrupt
 from langgraph.types import Command
 from vobchat.state_schema import lg_State
-from .utils import _append_ai
+from .utils import _append_ai, serialize_messages
 import logging
 
 logger = logging.getLogger(__name__)
@@ -43,6 +43,7 @@ def ask_followup_node(state: lg_State) -> dict | Command:
         interrupt(value={
             "options": state["options"],          # keep the same buttons alive
             "current_node": "ask_followup_node",
+            "messages": serialize_messages(state.get("messages", []))
         })
         # CRITICAL: Don't return entire state to avoid duplicate selection_idx
         return {}  # No state changes needed
@@ -117,6 +118,7 @@ def ask_followup_node(state: lg_State) -> dict | Command:
             "message": "I'm not entirely sure what you need. Choose one of the quick actions below or rephrase your request:",
             "options": quick_buttons,
             "current_node": "ask_followup_node",
+            "messages": serialize_messages(state.get("messages", []))
         }
     )
 

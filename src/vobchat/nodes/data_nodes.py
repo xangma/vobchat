@@ -283,7 +283,7 @@ from langgraph.types import Command, interrupt
 
 from vobchat.state_schema import lg_State, get_selected_units
 from vobchat.tools import find_cubes_for_unit_theme
-from .utils import _append_ai
+from .utils import _append_ai, serialize_messages
 
 logger = logging.getLogger(__name__)
 
@@ -409,6 +409,7 @@ def find_cubes_node(state: lg_State) -> Dict[str, Union[str, list, dict]]:
         "cubes": cubes_json,
         "places": state.get("places", []),
         "selected_theme": theme_json,
+        "messages": serialize_messages(state.get("messages", []))
     })
 
     return {

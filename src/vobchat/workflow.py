@@ -308,6 +308,11 @@ def create_workflow(lg_state: TypedDict):
 
         logger.info(f"=== URGENT DEBUG: start_node CALLED - current_node={current_node}, selection_idx={selection_idx}, intent={intent} ===")
 
+        # Check if workflow_input contains updated messages from interrupt (sent by frontend)
+        # This allows interrupt messages to be saved to state when workflow resumes
+        if "messages" in state and isinstance(state["messages"], list):
+            logger.info(f"start_node: Received {len(state['messages'])} messages from workflow input")
+
         # Debug: Check if workflow_input was passed in
         if selection_idx is not None:
             logger.info(f"=== URGENT DEBUG: start_node - selection_idx={selection_idx} was passed, likely from button click ===")

@@ -23,3 +23,5 @@ src/instance/users.db
 backend.log
 frontend.log
 *.log
+
+.env

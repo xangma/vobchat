@@ -839,7 +839,7 @@ from vobchat.state_schema import (
     get_selected_units,
 )
 from vobchat.utils.constants import UNIT_TYPES
-from .utils import _append_ai
+from .utils import _append_ai, serialize_messages
 
 logger = logging.getLogger(__name__)
 
@@ -1020,6 +1020,7 @@ def resolve_place_and_unit(state: lg_State):
                     "current_node": "resolve_place_and_unit",
                     "current_place_index": idx,
                     "places": places,  # Use updated places array
+                    "messages": serialize_messages(state.get("messages", []))
                 })
 
 
@@ -1051,6 +1052,7 @@ def resolve_place_and_unit(state: lg_State):
                     "current_node": "resolve_place_and_unit",
                     "current_place_index": idx,
                     "places": places,  # Use updated places array
+                    "messages": serialize_messages(state.get("messages", []))
                 })
 
     # ── done with this place ───────────────────────────────────────────────

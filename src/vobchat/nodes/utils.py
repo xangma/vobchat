@@ -2,11 +2,36 @@
 from __future__ import annotations
 import uuid
 from typing import Dict, List
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from vobchat.state_schema import lg_State
 import logging
 
 logger = logging.getLogger(__name__)
+
+def serialize_messages(messages):
+    """Convert LangChain message objects to JSON-serializable format."""
+    serialized = []
+    for msg in messages:
+        if isinstance(msg, AIMessage):
+            serialized.append({
+                "_type": "ai",
+                "content": msg.content,
+                "type": "ai"
+            })
+        elif isinstance(msg, HumanMessage):
+            serialized.append({
+                "_type": "human", 
+                "content": msg.content,
+                "type": "human"
+            })
+        elif hasattr(msg, 'content'):
+            # Generic message with content
+            serialized.append({
+                "_type": getattr(msg, '_type', 'unknown'),
+                "content": msg.content,
+                "type": getattr(msg, 'type', 'unknown')
+            })
+    return serialized
 
 def _append_ai(state: lg_State, text: str):
     """Append an AI message to the state with streaming metadata."""
