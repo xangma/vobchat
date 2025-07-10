@@ -243,9 +243,13 @@ class SimpleSSEClient {
             }
         }
 
-        // Show message if provided
+        // Show message if provided and store it for later inclusion in state
         if (interruptData.message) {
-            this.handleMessage(interruptData.message);
+            // Store the interrupt message to send back when workflow resumes
+            this.pendingInterruptMessage = interruptData.message;
+            
+            // Add the message to chat display immediately
+            this.addInterruptMessageToChat(interruptData.message);
         }
 
         // Show buttons if provided
@@ -381,6 +385,12 @@ class SimpleSSEClient {
         if (!this.threadId) {
             console.error('SSE: No thread ID available for sending selection');
             return;
+        }
+
+        // Include pending interrupt message if available
+        if (this.pendingInterruptMessage) {
+            selectionInput.interrupt_message = this.pendingInterruptMessage;
+            this.pendingInterruptMessage = null; // Clear after including
         }
 
         console.log('SSE: Sending selection via existing connection:', selectionInput);
@@ -646,7 +656,7 @@ class SimpleSSEClient {
     // Update chat display with all messages in proper order
     updateChatDisplay(messages) {
         console.log('SSE: Updating chat display with', messages.length, 'messages');
-        
+
         const chatDisplay = document.getElementById('chat-display');
         if (!chatDisplay) {
             console.error('SSE: chat-display element not found');
@@ -662,11 +672,11 @@ class SimpleSSEClient {
             if (!msg) continue;
 
             const messageDiv = document.createElement('div');
-            
+
             // Determine message type and content
             let content = '';
             let className = 'speech-bubble';
-            
+
             if (msg._type === 'human' || msg._type === 'HumanMessage') {
                 // Human message
                 content = msg.content;
@@ -700,6 +710,30 @@ class SimpleSSEClient {
                 chatDisplay.appendChild(messageDiv);
             }
         }
+
+        // Re-enable send button after update
+        const sendButton = document.getElementById('send-button');
+        if (sendButton) {
+            sendButton.disabled = false;
+        }
+    }
+
+    // Add an interrupt message to the chat display immediately
+    addInterruptMessageToChat(message) {
+        console.log('SSE: Adding interrupt message to chat:', message);
+        
+        const chatDisplay = document.getElementById('chat-display');
+        if (!chatDisplay) {
+            console.error('SSE: chat-display element not found');
+            return;
+        }
+
+        const messageDiv = document.createElement('div');
+        messageDiv.className = 'speech-bubble ai-bubble';
+        messageDiv.textContent = message;
+        
+        // Add to the top of the chat display (newest first)
+        chatDisplay.insertBefore(messageDiv, chatDisplay.firstChild);
         
         // Re-enable send button after update
         const sendButton = document.getElementById('send-button');

@@ -45,4 +45,4 @@ services:
     image: redis:7-alpine
     command: redis-cli -h host.docker.internal -p 6379 ping || exit 1
     network_mode: host
-    restart: "no"
+    restart: unless-stopped

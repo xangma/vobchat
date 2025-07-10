@@ -86,6 +86,26 @@ def register_simple_clientside_callbacks(app: Dash):
 
                 new_state.unit_types = Array.from(current_types);
                 state_changed = true;
+
+                // Immediately update polygons when unit types change
+                setTimeout(() => {
+                    const mapElement = document.getElementById('leaflet-map');
+                    const map = mapElement?._leaflet_map;
+                    
+                    if (map && window.polygonManagement && window.polygonManagement.updateMapWithBounds) {
+                        const bounds = map.getBounds();
+                        const yearRange = new_state.year_range ? { min: new_state.year_range[0], max: new_state.year_range[1] } : null;
+                        
+                        console.log('Unit filter: Updating polygons for unit types:', new_state.unit_types);
+                        window.polygonManagement.updateMapWithBounds(map, new_state.unit_types, bounds, new_state, yearRange)
+                            .then(result => {
+                                console.log('Unit filter: Polygon update completed');
+                            })
+                            .catch(error => {
+                                console.error('Unit filter: Error updating polygons:', error);
+                            });
+                    }
+                }, 0);
             }
             // Handle Year Slider
             else if (triggered_id.includes('year-range-slider.value') && slider_value) {

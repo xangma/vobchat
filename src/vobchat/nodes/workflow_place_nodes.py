@@ -59,7 +59,7 @@
 
 #     # # If all places are processed, skip map selection checks and go to theme resolution
 #     # if not has_more_places:
-#     #     logger.debug("URGENT DEBUG: All places processed – routing directly to resolve_theme")
+#     #     logger.debug("URGENT DEBUG: All places processed - routing directly to resolve_theme")
 #     #     return Command(goto="resolve_theme")
 
 #     # Handle routing logic (moved from check_map_selection_needed_router)
@@ -72,10 +72,10 @@
 #     # dedicated interrupt node so the frontend can highlight / ask for
 #     # confirmation before the workflow proceeds.
 #     if units_needing_map_selection:
-#         logger.debug("URGENT DEBUG: Map selection still required – routing to request_map_selection")
+#         logger.debug("URGENT DEBUG: Map selection still required - routing to request_map_selection")
 #         return Command(goto="request_map_selection")
 #     # If we get here, no units need map selection and more places remain
-#     logger.info(f"URGENT DEBUG: No map selection needed and more places remain – continuing to resolve_place_and_unit (will process place {current_place_index})")
+#     logger.info(f"URGENT DEBUG: No map selection needed and more places remain - continuing to resolve_place_and_unit (will process place {current_place_index})")
 
 #     return Command(goto="resolve_place_and_unit")
 
@@ -806,13 +806,13 @@
 #     return Command(goto="agent_node", update=update_dict)
 
 
-# workflow_place_nodes.py – drive the *place‑resolution* mini‑workflow
+# workflow_place_nodes.py - drive the *place‑resolution* mini‑workflow
 # ====================================================================
 # Four public nodes:
 #   • **UpdatePolygonSelection_node**
 #   • **RequestMapSelection_node**
 #   • **ResolvePlaceAndUnit_node**
-#   • **SelectUnitOnMap_node** (thin legacy shim – optional)
+#   • **SelectUnitOnMap_node** (thin legacy shim - optional)
 #
 # The orchestration logic is deliberately simple:
 #     1. Resolve one place at a time → ResolvePlaceAndUnit_node (may interrupt)
@@ -831,13 +831,12 @@ from __future__ import annotations
 import logging
 from typing import Dict, List, Union
 
-# type: ignore – provided by LangGraph
+# type: ignore - provided by LangGraph
 from langgraph.types import Command, interrupt
 
 from vobchat.state_schema import (
     lg_State,
     get_selected_units,
-    get_selected_unit_types,
 )
 from vobchat.utils.constants import UNIT_TYPES
 from .utils import _append_ai
@@ -845,7 +844,7 @@ from .utils import _append_ai
 logger = logging.getLogger(__name__)
 
 # -----------------------------------------------------------------------------
-# Helper – build button option dictionaries
+# Helper - build button option dictionaries
 # -----------------------------------------------------------------------------
 
 
@@ -873,7 +872,7 @@ def _make_options(rows: List[dict], *, kind: str) -> List[dict]:
     return []
 
 # -----------------------------------------------------------------------------
-# Node – UpdatePolygonSelection_node
+# Node - UpdatePolygonSelection_node
 # -----------------------------------------------------------------------------
 
 
@@ -912,7 +911,7 @@ def update_polygon_selection(state: lg_State):
             }
         })
 
-    # All set – check if we need to continue resolving places or move to next step
+    # All set - check if we need to continue resolving places or move to next step
     current_idx = state.get("current_place_index", 0) or 0
     places = state.get("places", []) or []
 
@@ -924,7 +923,7 @@ def update_polygon_selection(state: lg_State):
     return Command(goto="agent_node")
 
 # -----------------------------------------------------------------------------
-# Node – RequestMapSelection_node
+# Node - RequestMapSelection_node
 # -----------------------------------------------------------------------------
 
 
@@ -950,12 +949,12 @@ def update_polygon_selection(state: lg_State):
 #     return {}
 
 # -----------------------------------------------------------------------------
-# Node – ResolvePlaceAndUnit_node
+# Node - ResolvePlaceAndUnit_node
 # -----------------------------------------------------------------------------
 
 
 def resolve_place_and_unit(state: lg_State):
-    """Disambiguate **one** place per call – name then unit type."""
+    """Disambiguate **one** place per call - name then unit type."""
 
     places = state.get("places", []) or []
     idx = state.get("current_place_index", 0) or 0
@@ -982,7 +981,7 @@ def resolve_place_and_unit(state: lg_State):
         rows = place.get("candidate_rows", [])
         logger.info(f"resolve_place_and_unit: place {place.get('name')} has {len(rows)} candidate rows, g_place={place.get('g_place')}")
         if not rows:
-            _append_ai(state, f"I couldn’t find ‘{place['name']}’. Skipping…")
+            _append_ai(state, f"I couldn't find '{place['name']}'. Skipping...")
             return Command(goto="agent_node", update={"current_place_index": idx + 1})
         if len(rows) == 1:
             place["g_place"] = rows[0]["g_place"]
@@ -1016,7 +1015,7 @@ def resolve_place_and_unit(state: lg_State):
             else:
                 logger.info(f"resolve_place_and_unit: interrupting for place disambiguation of {place.get('name')} with {len(rows)} options")
                 interrupt({
-                    "message": f"More than one **{place['name']}** – which do you mean?",
+                    "message": f"More than one **{place['name']}** - which do you mean?",
                     "options": _make_options(rows, kind="place"),
                     "current_node": "resolve_place_and_unit",
                     "current_place_index": idx,
@@ -1070,9 +1069,9 @@ def resolve_place_and_unit(state: lg_State):
     )
 
 # -----------------------------------------------------------------------------
-# (Optional) Node – SelectUnitOnMap_node
+# (Optional) Node - SelectUnitOnMap_node
 # -----------------------------------------------------------------------------
-# Kept for backward compatibility with earlier graph definitions – simply routes
+# Kept for backward compatibility with earlier graph definitions - simply routes
 # to UpdatePolygonSelection_node so that legacy edges don’t break.
 
 
