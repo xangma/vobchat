@@ -67,5 +67,7 @@ def create_stores():
 
         dcc.Store(id='sse-connection-status', data={}),
         dcc.Store(id='sse-event-processor', data={}),
+        dcc.Store(id='sse-interrupt-store', data={}),
 
+        dcc.Store(id='place-disambiguation-markers', data=[]),
     ])

@@ -1014,9 +1014,30 @@ def resolve_place_and_unit(state: lg_State):
                 })
             else:
                 logger.info(f"resolve_place_and_unit: interrupting for place disambiguation of {place.get('name')} with {len(rows)} options")
+                
+                # Add coordinate data for map display
+                place_coordinates = []
+                for j, r in enumerate(rows):
+                    if r.get('lat') is not None and r.get('lon') is not None:
+                        try:
+                            lat, lon = float(r['lat']), float(r['lon'])
+                            # Validate UK bounds
+                            if 49 <= lat <= 61 and -8 <= lon <= 2:
+                                place_coordinates.append({
+                                    "index": j,
+                                    "name": r['g_name'],
+                                    "county": r['county_name'],
+                                    "lat": lat,
+                                    "lon": lon,
+                                    "g_place": r['g_place']
+                                })
+                        except (ValueError, TypeError):
+                            pass
+                
                 interrupt({
                     "message": f"More than one **{place['name']}** - which do you mean?",
                     "options": _make_options(rows, kind="place"),
+                    "place_coordinates": place_coordinates,  # Add coordinates for map markers
                     "current_node": "resolve_place_and_unit",
                     "current_place_index": idx,
                     "places": places,  # Use updated places array

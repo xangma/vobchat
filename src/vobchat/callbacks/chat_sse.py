@@ -7,8 +7,9 @@ from uuid import uuid4
 from typing import Dict, Any, Optional
 
 import dash
-from dash import html, Input, Output, State, no_update
+from dash import html, Input, Output, State, no_update, ALL
 from dash.exceptions import PreventUpdate
+import dash_leaflet as dl
 
 from vobchat.stores import app_state_data
 from vobchat.intent_handling import AssistantIntent
@@ -30,6 +31,8 @@ def register_simple_chat_callbacks(app, compiled_workflow):
         Output("send-button", "disabled"),
         Output("chat-display", "children", allow_duplicate=True),
         Output("sse-connection-status", "data", allow_duplicate=True),
+        Output("place-disambiguation-markers", "children", allow_duplicate=True),
+        Output("sse-interrupt-store", "data", allow_duplicate=True),
 
         # Inputs
         Input("send-button", "n_clicks"),
@@ -103,7 +106,8 @@ def register_simple_chat_callbacks(app, compiled_workflow):
             }
 
             # Clear chat display and return new thread with reset trigger
-            return "", new_thread_id, False, [], sse_status
+            # Also clear place disambiguation markers and interrupt store
+            return "", new_thread_id, False, [], sse_status, [], {}
 
         # Prepare workflow input based on trigger type
         workflow_input = None
@@ -154,9 +158,108 @@ def register_simple_chat_callbacks(app, compiled_workflow):
             }
 
             # Return updates: clear input, keep thread_id, disable button, no chat update, trigger SSE
-            return "", thread_id, True, no_update, sse_status
+            return "", thread_id, True, no_update, sse_status, no_update, no_update
 
         raise PreventUpdate
+
+    # Add callback for place disambiguation markers
+    @app.callback(
+        Output("place-disambiguation-markers", "children"),
+        Input("sse-interrupt-store", "data"),
+        prevent_initial_call=True
+    )
+    def update_place_disambiguation_markers(interrupt_data):
+        """Update map markers when place disambiguation is needed"""
+        if not interrupt_data:
+            return []
+        
+        # Check if this is a place disambiguation interrupt
+        place_coordinates = interrupt_data.get("place_coordinates", [])
+        if not place_coordinates:
+            return []
+        
+        # Create markers for each candidate place
+        markers = []
+        
+        for place in place_coordinates:
+            marker = dl.Marker(
+                position=[place["lat"], place["lon"]],
+                children=[
+                    dl.Tooltip(f"{place['name']}, {place['county']}")
+                ],
+                id={"type": "place-candidate-marker", "index": place["index"]},
+                # Use a distinct icon for place candidates
+                icon={
+                    "iconUrl": "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png",
+                    "shadowUrl": "https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png",
+                    "iconSize": [25, 41],
+                    "iconAnchor": [12, 41],
+                    "popupAnchor": [1, -34],
+                    "shadowSize": [41, 41]
+                }
+            )
+            markers.append(marker)
+        
+        logger.info(f"Created {len(markers)} place disambiguation markers")
+        return markers
+
+    # Add callback to handle place marker clicks
+    @app.callback(
+        Output("thread-id", "data", allow_duplicate=True),
+        Output("sse-connection-status", "data", allow_duplicate=True),
+        Output("place-disambiguation-markers", "children", allow_duplicate=True),
+        Output("sse-interrupt-store", "data", allow_duplicate=True),
+        Input({"type": "place-candidate-marker", "index": ALL}, "n_clicks"),
+        State("thread-id", "data"),
+        State("sse-interrupt-store", "data"),
+        prevent_initial_call=True
+    )
+    def handle_place_marker_click(n_clicks_list, thread_id, interrupt_data):
+        """Handle clicks on place disambiguation markers"""
+        if not any(n_clicks_list):
+            raise PreventUpdate
+        
+        # Find which marker was clicked
+        ctx = dash.callback_context
+        if not ctx.triggered:
+            raise PreventUpdate
+        
+        # Extract the index from the triggered prop id
+        triggered = ctx.triggered[0]
+        prop_id = triggered['prop_id']
+        import json
+        marker_id = json.loads(prop_id.split('.')[0])
+        selected_index = marker_id['index']
+        
+        logger.info(f"Place marker clicked: index {selected_index}")
+        
+        # Clear markers immediately
+        markers_cleared = []
+        
+        # Clear interrupt store to remove markers
+        interrupt_cleared = {}
+        
+        # Prepare workflow input with the selection
+        workflow_input = {
+            "selection_idx": selected_index,
+            "current_node": interrupt_data.get("current_node"),
+            "current_place_index": interrupt_data.get("current_place_index"),
+            "places": interrupt_data.get("places", [])
+        }
+        
+        # Start workflow with selection
+        logger.info(f"Resuming workflow with place selection: {selected_index}")
+        start_workflow_background(compiled_workflow, thread_id, workflow_input)
+        
+        # Trigger SSE connection
+        sse_status = {
+            "connect_sse": True,
+            "thread_id": thread_id,
+            "workflow_input": workflow_input,
+            "timestamp": time.time()
+        }
+        
+        return thread_id, sse_status, markers_cleared, interrupt_cleared
 
 
 def start_workflow_background(compiled_workflow, thread_id: str, workflow_input: Dict[str, Any]):

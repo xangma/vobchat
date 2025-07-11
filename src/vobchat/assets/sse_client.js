@@ -225,6 +225,21 @@ class SimpleSSEClient {
         // Store current_node for when buttons are clicked
         this.currentNode = interruptData.current_node || null;
 
+        // Store interrupt data in the sse-interrupt-store for callbacks to access
+        if (typeof dash_clientside !== 'undefined' && dash_clientside.set_props) {
+            dash_clientside.set_props('sse-interrupt-store', {
+                data: interruptData
+            });
+        }
+
+        // Handle place disambiguation markers zoom
+        if (interruptData.place_coordinates && interruptData.place_coordinates.length > 0) {
+            // Wait a bit for markers to be created then zoom to them
+            setTimeout(() => {
+                this.zoomToPlaceMarkers(interruptData.place_coordinates);
+            }, 100);
+        }
+
         // Handle cube data if provided
         if (interruptData.cube_data_ready && interruptData.cubes) {
             console.log('SSE: Received cube data, updating state');
@@ -271,6 +286,40 @@ class SimpleSSEClient {
         } else {
             // Clear buttons if no options
             this.clearButtons();
+        }
+    }
+
+    // Zoom to place disambiguation markers
+    zoomToPlaceMarkers(placeCoordinates) {
+        console.log('SSE: Zooming to place markers:', placeCoordinates);
+        
+        // Find the leaflet map instance
+        const mapElement = document.getElementById('leaflet-map');
+        if (!mapElement || !mapElement._leaflet_map) {
+            console.warn('SSE: Could not find leaflet map for zooming to place markers');
+            return;
+        }
+        
+        const map = mapElement._leaflet_map;
+        
+        if (placeCoordinates.length === 0) return;
+        
+        // Calculate bounds for all place coordinates
+        const lats = placeCoordinates.map(p => p.lat);
+        const lons = placeCoordinates.map(p => p.lon);
+        
+        if (placeCoordinates.length === 1) {
+            // Single marker - center on it with reasonable zoom
+            map.setView([lats[0], lons[0]], 10);
+        } else {
+            // Multiple markers - fit bounds to include all
+            const bounds = window.L.latLngBounds(
+                placeCoordinates.map(p => [p.lat, p.lon])
+            );
+            map.fitBounds(bounds, { 
+                padding: [20, 20], 
+                maxZoom: 12 
+            });
         }
     }
 
