@@ -164,7 +164,7 @@ def register_simple_chat_callbacks(app, compiled_workflow):
 
     # Add callback for place disambiguation markers
     @app.callback(
-        Output("place-disambiguation-markers", "children"),
+        Output("place-disambiguation-markers", "children", allow_duplicate=True),
         Input("sse-interrupt-store", "data"),
         prevent_initial_call=True
     )
@@ -172,15 +172,15 @@ def register_simple_chat_callbacks(app, compiled_workflow):
         """Update map markers when place disambiguation is needed"""
         if not interrupt_data:
             return []
-        
+
         # Check if this is a place disambiguation interrupt
         place_coordinates = interrupt_data.get("place_coordinates", [])
         if not place_coordinates:
             return []
-        
+
         # Create markers for each candidate place
         markers = []
-        
+
         for place in place_coordinates:
             marker = dl.Marker(
                 position=[place["lat"], place["lon"]],
@@ -199,7 +199,7 @@ def register_simple_chat_callbacks(app, compiled_workflow):
                 }
             )
             markers.append(marker)
-        
+
         logger.info(f"Created {len(markers)} place disambiguation markers")
         return markers
 
@@ -218,27 +218,27 @@ def register_simple_chat_callbacks(app, compiled_workflow):
         """Handle clicks on place disambiguation markers"""
         if not any(n_clicks_list):
             raise PreventUpdate
-        
+
         # Find which marker was clicked
         ctx = dash.callback_context
         if not ctx.triggered:
             raise PreventUpdate
-        
+
         # Extract the index from the triggered prop id
         triggered = ctx.triggered[0]
         prop_id = triggered['prop_id']
         import json
         marker_id = json.loads(prop_id.split('.')[0])
         selected_index = marker_id['index']
-        
+
         logger.info(f"Place marker clicked: index {selected_index}")
-        
+
         # Clear markers immediately
         markers_cleared = []
-        
+
         # Clear interrupt store to remove markers
         interrupt_cleared = {}
-        
+
         # Prepare workflow input with the selection
         workflow_input = {
             "selection_idx": selected_index,
@@ -246,11 +246,11 @@ def register_simple_chat_callbacks(app, compiled_workflow):
             "current_place_index": interrupt_data.get("current_place_index"),
             "places": interrupt_data.get("places", [])
         }
-        
+
         # Start workflow with selection
         logger.info(f"Resuming workflow with place selection: {selected_index}")
         start_workflow_background(compiled_workflow, thread_id, workflow_input)
-        
+
         # Trigger SSE connection
         sse_status = {
             "connect_sse": True,
@@ -258,7 +258,7 @@ def register_simple_chat_callbacks(app, compiled_workflow):
             "workflow_input": workflow_input,
             "timestamp": time.time()
         }
-        
+
         return thread_id, sse_status, markers_cleared, interrupt_cleared
 
 
