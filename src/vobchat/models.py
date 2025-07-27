@@ -8,6 +8,7 @@ from flask_login import LoginManager, login_user, logout_user, login_required, c
 from vobchat.assets.loginpage import LOGIN_PAGE_NO_SIGNUP, SIGNUP_FORM_HTML
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy import String
+import os
 
 db = SQLAlchemy()
 
@@ -53,7 +54,8 @@ def load_user(user_id):
 def login_page():
     """Initial GET page shown to unauthenticated users."""
     if db.session.get(User, session.get("user_id", -1)):
-        return redirect("/app/")          # already logged in
+        DASH_PREFIX = os.getenv("DASH_URL_BASE", "/app").rstrip("/")
+        return redirect(DASH_PREFIX + "/")          # already logged in
     return render_template_string(LOGIN_PAGE_NO_SIGNUP)
 
 # ---------- sign-up -------------------------------------------------
@@ -88,7 +90,8 @@ def login():
     user = db.session.scalar(db.select(User).filter_by(email=email))
     if user and user.verify_password(pwd):
         login_user(user)
-        return redirect("/app/")
+        DASH_PREFIX = os.getenv("DASH_URL_BASE", "/app").rstrip("/")
+        return redirect(DASH_PREFIX + "/")
 
     flash("Invalid credentials")
     return redirect(url_for(".login_page"))

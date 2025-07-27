@@ -768,7 +768,18 @@ class SimpleSSEClient {
 
             if (content) {
                 messageDiv.className = className;
-                messageDiv.textContent = content;
+                
+                // Use DOMParser to safely parse HTML content
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(content, 'text/html');
+                
+                // Clear the message div and append the parsed content
+                messageDiv.innerHTML = '';
+                // Move all child nodes from parsed body to our message div
+                while (doc.body.firstChild) {
+                    messageDiv.appendChild(doc.body.firstChild);
+                }
+                
                 chatDisplay.appendChild(messageDiv);
             }
         }

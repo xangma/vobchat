@@ -334,7 +334,7 @@ def ListAllThemes_node(state: lg_State):
         return {"messages": state["messages"]}
 
     listing = "\n".join(
-        f"• {row.labl} ({row.ent_id})" for _, row in df.iterrows())
+        f"• {row.labl}" for _, row in df.iterrows())
     _append_ai(state, listing + "\n… all themes shown. Use keywords to narrow.")
     return {"messages": state["messages"]}
 
@@ -371,12 +371,12 @@ def DescribeTheme_node(state: lg_State):
     if theme_df is None or theme_df.empty:
         if not query:
             _append_ai(
-                state, "Please specify a theme, e.g. ‘describe Population’.")
+                state, "Please specify a theme, e.g. 'describe Population'.")
             return {"messages": state["messages"]}
         matches = _find_theme_candidates(query, None)
         if matches.empty:
             _append_ai(
-                state, f"I couldn’t find a theme matching ‘{query}’. Try ‘list themes’.")
+                state, f"I couldn't find a theme matching '{query}'. Try 'list themes'.")
             return {"messages": state["messages"]}
         theme_df = matches.head(1)
 
@@ -386,5 +386,33 @@ def DescribeTheme_node(state: lg_State):
     desc_df = pd.read_json(io.StringIO(get_theme_text(code)), orient="records")
     text = desc_df["text"].iat[0] if not desc_df.empty else "(no description available)"
 
-    _append_ai(state, f"**{labl}** ({code})\n\n{text}")
+    # Clean up the text - it comes from DB with hard line breaks and tabs
+    import re
+
+    # Replace tabs with nothing (they're used for paragraph indentation)
+    text = text.replace('\t', '')
+
+    # Split into paragraphs (separated by double newlines or <br><br>)
+    # First normalize <br> tags
+    text = re.sub(r'<br\s*/?\s*>', '<br>', text, flags=re.IGNORECASE)
+    text = text.replace('<br><br>', '\n\n')
+
+    # Split by double newlines to get paragraphs
+    paragraphs = text.split('\n\n')
+
+    # Within each paragraph, join lines that were hard-wrapped
+    cleaned_paragraphs = []
+    for para in paragraphs:
+        # Remove single newlines within the paragraph
+        para = para.replace('\n', ' ')
+        # Clean up multiple spaces
+        para = re.sub(r' +', ' ', para)
+        para = para.strip()
+        if para:
+            cleaned_paragraphs.append(para)
+
+    # Join paragraphs with double newlines for markdown
+    text = '\n\n'.join(cleaned_paragraphs)
+
+    _append_ai(state, f"**{labl}**\n\n{text}")
     return {"messages": state["messages"]}

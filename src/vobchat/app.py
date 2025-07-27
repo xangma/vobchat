@@ -1,6 +1,6 @@
 # Simple App - Clean rewrite with simplified SSE architecture
 import logging, os
-from dash_extensions.enrich import DashProxy, CycleBreakerTransform, ServersideOutputTransform
+from dash_extensions.enrich import DashProxy, CycleBreakerTransform #ServersideOutputTransform
 import dash_bootstrap_components as dbc
 from dash import html
 from vobchat.workflow import create_workflow
@@ -128,7 +128,8 @@ def create_app():
     # Initialize Dash app
     app = DashProxy(
         __name__,
-        transforms=[CycleBreakerTransform(), ServersideOutputTransform()],
+        # transforms=[CycleBreakerTransform(), ServersideOutputTransform()],
+        transforms=[CycleBreakerTransform()],
         external_stylesheets=[dbc.themes.BOOTSTRAP],
         assets_folder=str(pathlib.Path(__file__).parent / "assets"),
         url_base_pathname=f"{DASH_PREFIX}/"

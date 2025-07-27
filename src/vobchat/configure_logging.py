@@ -129,7 +129,7 @@ def configure_enhanced_logging():
     logger.addHandler(console_handler)
 
     # Add file handler for backend logs (overwrite mode)
-    backend_log_path = "/Users/xangma/Library/CloudStorage/OneDrive-Personal/repos/vobchat/backend.log"
+    backend_log_path = "logs/backend.log"
     try:
         # Ensure directory exists
         os.makedirs(os.path.dirname(backend_log_path), exist_ok=True)
