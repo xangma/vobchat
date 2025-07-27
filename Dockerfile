@@ -17,7 +17,7 @@ WORKDIR /app/src/
 # RUN chmod +x /app/docker-start.sh
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y \
   gcc \
   g++ \
   libpq-dev \
