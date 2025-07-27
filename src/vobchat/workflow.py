@@ -50,8 +50,7 @@ from vobchat.tools import (  # Custom functions to interact with the database/da
 from vobchat.utils.redis_checkpoint import AsyncRedisSaver
 from vobchat.utils.redis_pool import redis_pool_manager
 from vobchat.nodes import (
-    ShowState_node, ListThemesForSelection_node,
-    ListAllThemes_node, Reset_node,
+    ShowState_node, ListThemes_node, Reset_node,
     AddPlace_node, RemovePlace_node,
     AddTheme_node, RemoveTheme_node,
     DescribeTheme_node,
@@ -273,8 +272,7 @@ def create_workflow(lg_state: TypedDict):
     workflow.add_node("find_cubes_node", find_cubes_node) # Retrieves final data cubes (interrupt)
 
     workflow.add_node("ShowState_node", ShowState_node)
-    workflow.add_node("ListThemesForSelection_node", ListThemesForSelection_node)
-    workflow.add_node("ListAllThemes_node", ListAllThemes_node)
+    workflow.add_node("ListThemes_node", ListThemes_node)
     workflow.add_node("Reset_node", Reset_node)
     workflow.add_node("AddPlace_node", AddPlace_node)
     workflow.add_node("RemovePlace_node", RemovePlace_node)
@@ -290,7 +288,7 @@ def create_workflow(lg_state: TypedDict):
     # agent_node handles its own routing with Command, no conditional edges needed
 
     for n in [
-        "ShowState_node", "ListThemesForSelection_node", "ListAllThemes_node",
+        "ShowState_node", "ListThemes_node",
         "DescribeTheme_node", "RemoveTheme_node", "Reset_node",
         "AddPlace_node", "RemovePlace_node"
     ]:

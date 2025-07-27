@@ -19,8 +19,7 @@ class AssistantIntent(str, Enum):
     ADD_THEME = "AddTheme"
     REMOVE_THEME = "RemoveTheme"
     SHOW_STATE = "ShowState"
-    LIST_SELECTION_THEMES = "ListThemesForSelection"
-    LIST_ALL_THEMES = "ListAllThemes"
+    LIST_ALL_THEMES = "ListThemes"
     RESET = "Reset"
     CHAT = "Chat"  # free-form response - no state mutation
 
@@ -93,8 +92,7 @@ _INTENT_EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
         • RemoveTheme is ONLY for explicitly clearing/removing themes, like "remove the theme", "clear theme", "no theme". NOT for changing themes.
         • For state inspection requests ("what have I selected?", "show my current selection") use ShowState.
         • Listing intents:
-            - ListThemesForSelection: list themes *available for the current selection*
-            - ListAllThemes: list all themes in the DB - use for "what statistics", "what themes", "what data", "what's available", "show all themes", "list themes", "what other statistics"
+            - ListThemes: list themes (automatically shows available themes for current selection if any, otherwise all themes) - use for "what statistics", "what themes", "what data", "what's available", "show all themes", "list themes", "what other statistics"
         • The phrase "start over" maps to Reset.
         • Anything else: Chat.  Set arguments.text to the assistant's normal reply.
 
@@ -139,16 +137,16 @@ _INTENT_EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
         DescribeTheme {{"theme": "ThemeSix"}}
 
         • "What other statistics do you have?" →
-        ListAllThemes {{}}
+        ListThemes {{}}
 
         • "What themes are available?" →
-        ListAllThemes {{}}
+        ListThemes {{}}
 
         • "Show me all available data" →
-        ListAllThemes {{}}
+        ListThemes {{}}
 
         • "List all themes" →
-        ListAllThemes {{}}
+        ListThemes {{}}
 
         • "Remove the current theme" →
         RemoveTheme {{}}

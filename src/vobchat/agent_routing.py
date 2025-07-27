@@ -131,7 +131,6 @@ def agent_node(state: lg_State):
                     AssistantIntent.REMOVE_THEME,
                     AssistantIntent.SHOW_STATE,
                     AssistantIntent.DESCRIBE_THEME,  # Moved higher - specific theme descriptions should override general lists
-                    AssistantIntent.LIST_SELECTION_THEMES,
                     AssistantIntent.LIST_ALL_THEMES,
                     AssistantIntent.RESET,
                     AssistantIntent.CHAT

@@ -26,6 +26,53 @@ def safe_json_dumps(obj: Any, **kwargs) -> str:
     safe_obj = make_json_safe(obj)
     return json.dumps(safe_obj, **kwargs)
 
+def clean_database_text(text: str) -> str:
+    """Clean up text from database that has hard line breaks, tabs, and mixed HTML/text formatting.
+    
+    The Vision of Britain database contains text with:
+    - Hard line breaks in the middle of sentences (from fixed-width formatting)
+    - Tab characters for paragraph indentation
+    - Mixed HTML tags like <br> for paragraph breaks
+    
+    This function normalizes the text for display while preserving paragraph structure.
+    
+    Args:
+        text: Raw text from database
+        
+    Returns:
+        Cleaned text with proper paragraph breaks and no hard line wrapping
+    """
+    import re
+    
+    if not text or not isinstance(text, str):
+        return text
+    
+    # Replace tabs with nothing (they're used for paragraph indentation)
+    text = text.replace('\t', '')
+    
+    # Split into paragraphs (separated by double newlines or <br><br>)
+    # First normalize <br> tags
+    text = re.sub(r'<br\s*/?\s*>', '<br>', text, flags=re.IGNORECASE)
+    text = text.replace('<br><br>', '\n\n')
+    
+    # Split by double newlines to get paragraphs
+    paragraphs = text.split('\n\n')
+    
+    # Within each paragraph, join lines that were hard-wrapped
+    cleaned_paragraphs = []
+    for para in paragraphs:
+        # Remove single newlines within the paragraph
+        para = para.replace('\n', ' ')
+        # Clean up multiple spaces
+        para = re.sub(r' +', ' ', para)
+        para = para.strip()
+        if para:
+            cleaned_paragraphs.append(para)
+    
+    # Join paragraphs with double newlines for markdown
+    return '\n\n'.join(cleaned_paragraphs)
+
+
 def serialize_messages(messages):
     """Convert LangChain message objects to JSON-serializable format."""
     serialized = []

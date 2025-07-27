@@ -15,7 +15,7 @@ from vobchat.tools import (
 from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
-from .utils import _append_ai, _has_message_content, _clean_duplicate_intents_from_queue, serialize_messages
+from .utils import _append_ai, _has_message_content, _clean_duplicate_intents_from_queue, serialize_messages, clean_database_text
 import logging
 
 logger = logging.getLogger(__name__)
@@ -126,25 +126,8 @@ def _find_theme_candidates(query: str | None, units: List[str] | None) -> pd.Dat
     if not query:
         return themes_df
 
-    # First try simple substring (case‑insensitive)
-    mask = themes_df["labl"].str.contains(query, case=False, regex=False)
-    if mask.any():
-        logger.info(f"Found {mask.sum()} themes with substring match for '{query}'")
-        return themes_df[mask]
-    else:
-        logger.info(f"No substring match found for '{query}' in themes: {list(themes_df['labl'])}")
-
-    # Otherwise match on individual words
-    combined = pd.Series([False] * len(themes_df))
-    for w in query.lower().split():
-        combined |= themes_df["labl"].str.contains(w, case=False, regex=False)
-
-    if combined.any():
-        logger.info(f"Found {combined.sum()} themes with word match for '{query}'")
-        return themes_df[combined]
-
-    # If no text match, try LLM-based semantic matching
-    logger.info(f"No text match found for '{query}', trying LLM semantic matching")
+    # First try LLM-based semantic matching - this handles variations like "Life and death" vs "Life & Death"
+    logger.info(f"Using LLM semantic matching for '{query}'")
     matched_theme_code = _semantic_theme_match(query, themes_df)
     if matched_theme_code:
         # Return only the semantically matched theme
@@ -152,6 +135,21 @@ def _find_theme_candidates(query: str | None, units: List[str] | None) -> pd.Dat
         if not semantic_match.empty:
             logger.info(f"LLM semantic match found: {semantic_match.iloc[0]['labl']}")
             return semantic_match
+
+    # Fallback to exact substring match for simple cases
+    mask = themes_df["labl"].str.contains(query, case=False, regex=False)
+    if mask.any():
+        logger.info(f"Found {mask.sum()} themes with substring match for '{query}'")
+        return themes_df[mask]
+
+    # Last resort: match on individual words
+    combined = pd.Series([False] * len(themes_df))
+    for w in query.lower().split():
+        combined |= themes_df["labl"].str.contains(w, case=False, regex=False)
+
+    if combined.any():
+        logger.info(f"Found {combined.sum()} themes with word match for '{query}'")
+        return themes_df[combined]
 
     # Return empty if no matches found
     logger.info(f"No matches found for '{query}' using any method")
@@ -302,40 +300,35 @@ def AddTheme_node(state: lg_State) -> dict | Command:
         })
 
 # -----------------------------------------------------------------------------
-# Node – ThemesForSelection_node (pure listing, no state mutation)
+# Node – ListThemes_node (unified listing for all/selection)
 # -----------------------------------------------------------------------------
 
 
-def ListThemesForSelection_node(state: lg_State):
+def ListThemes_node(state: lg_State):
+    """List themes - automatically shows themes for selected places if any, otherwise all themes."""
     sel_units = get_selected_units(state)
-    if not sel_units:
-        _append_ai(state, "No place selected yet.")
-        return {"messages": state.get("messages", [])}
 
-    df = _find_theme_candidates(None, [str(u) for u in sel_units] if sel_units else None)
-    if df.empty:
-        _append_ai(state, "No themes found for your selection.")
-        return {"messages": state["messages"]}
+    # Get themes based on context - if there are selected places, show themes for those
+    if sel_units:
+        # List themes for selected places
+        df = _find_theme_candidates(None, [str(u) for u in sel_units])
+        if df.empty:
+            _append_ai(state, "No themes found for your selection.")
+            return {"messages": state["messages"]}
+        header = "Themes available for your selection:"
+        footer = ""
+    else:
+        # List all themes
+        df = pd.read_json(io.StringIO(get_all_themes("")), orient="records")
+        if df.empty:
+            _append_ai(state, "Theme catalogue appears empty.")
+            return {"messages": state["messages"]}
+        header = "All available themes:"
+        footer = "\n… all themes shown. Use keywords to narrow."
 
-    listing = "\n".join(
-        f"• {row.labl} ({row.ent_id})" for _, row in df.iterrows())
-    _append_ai(state, "Themes available:\n" + listing)
-    return {"messages": state["messages"]}
-
-# -----------------------------------------------------------------------------
-# Node – ListAllThemes_node (pure listing, global)
-# -----------------------------------------------------------------------------
-
-
-def ListAllThemes_node(state: lg_State):
-    df = pd.read_json(io.StringIO(get_all_themes("")), orient="records")
-    if df.empty:
-        _append_ai(state, "Theme catalogue appears empty.")
-        return {"messages": state["messages"]}
-
-    listing = "\n".join(
-        f"• {row.labl}" for _, row in df.iterrows())
-    _append_ai(state, listing + "\n… all themes shown. Use keywords to narrow.")
+    # Format the listing
+    listing = "\n".join(f"• {row.labl}" for _, row in df.iterrows())
+    _append_ai(state, f"{header}\n{listing}{footer}")
     return {"messages": state["messages"]}
 
 # -----------------------------------------------------------------------------
@@ -384,35 +377,10 @@ def DescribeTheme_node(state: lg_State):
     labl = theme_df["labl"].iat[0]
 
     desc_df = pd.read_json(io.StringIO(get_theme_text(code)), orient="records")
-    text = desc_df["text"].iat[0] if not desc_df.empty else "(no description available)"
+    raw_text = desc_df["text"].iat[0] if not desc_df.empty else "(no description available)"
+    
+    # Clean up the database text using the shared utility function
+    clean_text = clean_database_text(raw_text)
 
-    # Clean up the text - it comes from DB with hard line breaks and tabs
-    import re
-
-    # Replace tabs with nothing (they're used for paragraph indentation)
-    text = text.replace('\t', '')
-
-    # Split into paragraphs (separated by double newlines or <br><br>)
-    # First normalize <br> tags
-    text = re.sub(r'<br\s*/?\s*>', '<br>', text, flags=re.IGNORECASE)
-    text = text.replace('<br><br>', '\n\n')
-
-    # Split by double newlines to get paragraphs
-    paragraphs = text.split('\n\n')
-
-    # Within each paragraph, join lines that were hard-wrapped
-    cleaned_paragraphs = []
-    for para in paragraphs:
-        # Remove single newlines within the paragraph
-        para = para.replace('\n', ' ')
-        # Clean up multiple spaces
-        para = re.sub(r' +', ' ', para)
-        para = para.strip()
-        if para:
-            cleaned_paragraphs.append(para)
-
-    # Join paragraphs with double newlines for markdown
-    text = '\n\n'.join(cleaned_paragraphs)
-
-    _append_ai(state, f"**{labl}**\n\n{text}")
+    _append_ai(state, f"**{labl}**\n\n{clean_text}")
     return {"messages": state["messages"]}

@@ -17,8 +17,7 @@ from .place_nodes import (
 from .theme_nodes import (
     AddTheme_node,
     RemoveTheme_node,
-    ListThemesForSelection_node,
-    ListAllThemes_node,
+    ListThemes_node,
     DescribeTheme_node,
     resolve_theme
 )
@@ -48,8 +47,7 @@ __all__ = [
     # Theme nodes
     'AddTheme_node',
     'RemoveTheme_node',
-    'ListThemesForSelection_node',
-    'ListAllThemes_node',
+    'ListThemes_node',
     'DescribeTheme_node',
     'resolve_theme',
     # State nodes
