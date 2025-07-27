@@ -1,18 +1,34 @@
-# Git and version control
+# ====================
+# General
+# ====================
+LICENSE
+README.md
+
+# ====================
+# Version Control
+# ====================
 .git
 .gitignore
 *.git
 
+# ====================
 # Python
-__pycache__/
+# ====================
 *.py[cod]
 *$py.class
 *.so
 .Python
+__pycache__/
+*.egg
+*.egg-info/
+.installed.cfg
+MANIFEST
+
+# Python build artifacts
 build/
-develop-eggs/
 dist/
 downloads/
+develop-eggs/
 eggs/
 .eggs/
 lib/
@@ -21,65 +37,108 @@ parts/
 sdist/
 var/
 wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
 
 # Virtual environments
+.venv/
 venv/
 env/
 ENV/
 env.bak/
 venv.bak/
 
-# IDE
+# ====================
+# Docker
+# ====================
+Dockerfile
+Dockerfile*
+docker-compose*
+compose*
+.dockerignore
+
+# ====================
+# Node
+# ====================
+node_modules/
+npm-debug.log
+
+# ====================
+# IDE / Editor
+# ====================
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+.classpath
+.project
+.settings
+.toolstarget
+.vs
 
-# OS
+# ====================
+# OS Files
+# ====================
 .DS_Store
 Thumbs.db
 
+# ====================
 # Logs
+# ====================
 *.log
 logs/
 backend.log
 frontend.log
 
-# Docker
-Dockerfile
-docker-compose.yml
-.dockerignore
-
-# Documentation
-README.md
-docs/
-
+# ====================
 # Test files
+# ====================
 test/
 tests/
 *_test.py
 test_*.py
 
+# ====================
 # Cache
+# ====================
 .cache/
 .pytest_cache/
 
-# Environment variables
+# ====================
+# Environment Variables
+# ====================
 .env
+.env.*
 .env.local
 .env.development
 .env.test
 .env.production
 
-# Node modules (if any)
-node_modules/
+# ====================
+# Kubernetes / Helm
+# ====================
+charts/
+secrets.dev.yaml
+values.dev.yaml
 
-# Temporary files
+# ====================
+# Documentation
+# ====================
+docs/
+
+# ====================
+# Build Artifacts
+# ====================
+bin/
+obj/
+
+# ====================
+# Temporary
+# ====================
 tmp/
 temp/
 *.tmp
+
+# ====================
+# Unused
+# ====================
+unused/

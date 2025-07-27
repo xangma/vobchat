@@ -1,8 +1,11 @@
 services:
   vobchat:
     build: .
+    container_name: vobchat
+    image: vobchat:latest
     ports:
-      - "8050:8050"
+      - 8050:8050
+      - 5678:5678
     environment:
       # Database connection (host.docker.internal for external PostgreSQL)
       - DB_HOST=host.docker.internal
@@ -27,22 +30,22 @@ services:
       - SECRET_KEY=${SECRET_KEY:-dev-secret-key-change-in-production}
       - DATABASE_URL=${DATABASE_URL:-sqlite:///users.db}
 
+    command: ["sh", "-c", "redis-server --port 6379 --bind 127.0.0.1 --protected-mode no --save '' --stop-writes-on-bgsave-error no & exec python -m debugpy --listen 0.0.0.0:5678 --wait-for-client -m flask run --host 0.0.0.0 --port 8050"]
+
     volumes:
       - ./logs:/app/logs
       - ./src:/app/src
-      - ./CLAUDE.md:/app/CLAUDE.md
 
     # Use standard Docker networking
     # network_mode: host
 
-    depends_on:
-      - redis-check
-
     restart: unless-stopped
 
-  # Health check service for external dependencies
-  redis-check:
-    image: redis:7-alpine
-    command: redis-cli -h host.docker.internal -p 6379 ping || exit 1
-    network_mode: host
-    restart: unless-stopped
+  #   depends_on:
+  #     - redis
+
+
+  # redis:
+  #   image: redis:7-alpine
+  #   command: redis-server --daemonize yes --port 6379 --bind 127.0.0.1 --protected-mode no --save "" --stop-writes-on-bgsave-error no
+  #   restart: no

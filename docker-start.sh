@@ -1,28 +1,44 @@
 #!/bin/bash
 set -e
 
-# Start Redis server in the background
-redis-server --daemonize yes --port 6379 --bind 0.0.0.0 --protected-mode no --save "" --stop-writes-on-bgsave-error no
+# Start Redis
+echo "Starting Redis server..."
+redis-server --daemonize yes \
+  --port 6379 \
+  --bind 127.0.0.1 \
+  --protected-mode no \
+  --save "" \
+  --stop-writes-on-bgsave-error no || {
+    echo "Failed to start Redis server."
+    exit 1
+}
 
 # Wait for Redis to be ready
 echo "Waiting for Redis to start..."
-until redis-cli ping; do
+for i in {1..10}; do
+  if redis-cli -h 127.0.0.1 -p 6379 ping | grep -q PONG; then
+    echo "Redis is ready!"
+    break
+  fi
+  echo "Redis not ready yet... ($i/10)"
   sleep 1
 done
-echo "Redis is ready!"
 
-# Set up environment for Python app
+if ! redis-cli -h 127.0.0.1 -p 6379 ping | grep -q PONG; then
+  echo "Redis did not start in time."
+  exit 1
+fi
+
+# Set PYTHONPATH
 export PYTHONPATH="/app/src:$PYTHONPATH"
 
-# Create logs directory if it doesn't exist
-mkdir -p /app/logs
-
-# Start the VobChat application
-echo "Starting VobChat application..."
+# Go to app directory
 cd /app/src
 
-# Initialize the database and create tables if needed
+# Run DB migrations if needed
 export FLASK_APP=vobchat.app:server
 flask db upgrade 2>/dev/null || echo "Database already initialized or no migrations needed"
 
-gunicorn --config /app/src/vobchat/gunicorn.conf.py vobchat.app:server
+# Start the app
+echo "🚀 Starting VobChat..."
+exec gunicorn --config /app/src/vobchat/gunicorn.conf.py vobchat.app:server

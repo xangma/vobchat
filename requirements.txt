@@ -33,3 +33,4 @@ trio
 gevent
 flask-socketio
 argon2_cffi
+debugpy

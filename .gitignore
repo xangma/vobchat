@@ -1,27 +1,55 @@
+# ====================
+# Environment / Secrets
+# ====================
+.env
 database.ini
-unused/
-dbtools/
-.vscode/
+
+# ====================
+# Python
+# ====================
 __pycache__/
-polygon_cache
+*.db
+vobchat.egg-info/
+src/instance/users.db
+
+# ====================
+# Cache / Temp / Logs
+# ====================
+cache/
+polygon_cache/
+analysedcode.json
 langchain.json
 langgraph.json
 polygons*
-.DS_Store
-langchain
-langgraph
-./app/assets/dashExtensions_default.js
-/assets
-vobchat.egg-info/
-analysedcode.json
-CLAUDE.md
-cache/
-src/instance/users.db
-*.db
-
-# Log files
+*.log
 backend.log
 frontend.log
-*.log
 
-.env
+# ====================
+# Project Specific
+# ====================
+langchain/
+langgraph/
+unused/
+dbtools/
+CLAUDE.md
+
+# ====================
+# Node / Frontend
+# ====================
+node_modules/
+package.json
+package-lock.json
+/assets/
+./app/assets/dashExtensions_default.js
+
+# ====================
+# Editor / System
+# ====================
+.vscode/settings.json
+.DS_Store
+
+# ====================
+# CI / Dependency Management
+# ====================
+dependabot.yml
