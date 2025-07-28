@@ -24,13 +24,13 @@ import logging
 from typing import Dict, List, Union
 
 # type: ignore - provided by LangGraph
-from langgraph.types import Command, interrupt
+from langgraph.types import Command
 
 from vobchat.state_schema import (
     lg_State,
     get_selected_units,
 )
-from .utils import _append_ai, serialize_messages
+from .utils import _append_ai
 
 logger = logging.getLogger(__name__)
 
@@ -246,68 +246,37 @@ def resolve_place_and_unit(state: lg_State):
 
     # ── STEP 2: choose the *unit type* ─────────────────────────────────────
     if place.get("g_unit") is None:
-        units = place.get("unit_rows", [])
-        logger.info(f"resolve_place_and_unit: {place.get('name')} unit selection - {len(units)} unit types, g_place={place.get('g_place')}")
-        if len(units) == 1:
-            logger.info(f"resolve_place_and_unit: auto-selecting single unit type for {place.get('name')}")
-            place.update(units[0])
-            places[idx] = place  # Ensure place is updated in places array
-        else:
-            logger.info(f"resolve_place_and_unit: multiple unit types for {place.get('name')}, sel={sel}, available_types={[u['g_unit_type'] for u in units]}")
-            if sel and isinstance(sel, str):
-                chosen = next(
-                    (r for r in units if r["g_unit_type"] == sel), None)
-                if chosen:
-                    logger.info(f"resolve_place_and_unit: selected unit type {sel} for {place.get('name')}")
-                    place.update(chosen)
-                    places[idx] = place  # Ensure place is updated in places array
-                    state["selection_idx"] = None
-                else:
-                    logger.info(f"resolve_place_and_unit: unit type {sel} not found for {place.get('name')}")
-                    sel = None  # force re‑ask
-            if place.get("g_unit") is None:
-                # Create place coordinates for the current place to keep marker visible
-                place_coordinates = []
-                rows = place.get("candidate_rows", [])
+        from .place_nodes import _disambiguate_unit_type
+        logger.info(f"resolve_place_and_unit: {place.get('name')} unit selection - {len(place.get('unit_rows', []))} unit types, g_place={place.get('g_place')}")
+        
+        try:
+            unit_result = _disambiguate_unit_type(
+                place, 
+                state, 
+                current_node="resolve_place_and_unit",
+                current_place_index=idx,
+                places=places
+            )
+            
+            if unit_result is not None:
+                # Unit was successfully selected
+                logger.info(f"resolve_place_and_unit: selected unit type {unit_result.get('g_unit_type')} for {place.get('name')}")
+                place.update(unit_result)
+                places[idx] = place
+                state["selection_idx"] = None
+            else:
+                # Disambiguation needed - interrupt was triggered
+                return {}
                 
-                # Try to get coordinates from the place data
-                if rows and len(rows) > 0:
-                    # For single places that were auto-selected, we need to find the right row
-                    if len(rows) == 1 or place.get('g_place'):
-                        # Find the row that matches the selected g_place
-                        r = None
-                        if place.get('g_place'):
-                            r = next((row for row in rows if row['g_place'] == place['g_place']), rows[0])
-                        else:
-                            r = rows[0]
-                        
-                        if r and r.get('lat') is not None and r.get('lon') is not None:
-                            try:
-                                lat, lon = float(r['lat']), float(r['lon'])
-                                if 49 <= lat <= 61 and -8 <= lon <= 2:
-                                    place_coordinates.append({
-                                        "index": 0,
-                                        "name": place.get('name', r.get('g_name', '')),
-                                        "county": r.get('county_name', ''),
-                                        "lat": lat,
-                                        "lon": lon,
-                                        "g_place": place.get('g_place'),
-                                        "is_single": True,  # Single marker for unit selection
-                                        "needs_unit_selection": True
-                                    })
-                            except (ValueError, TypeError):
-                                pass
-                
-                from .place_nodes import _make_options
-                interrupt({
-                    "message": f"Which geography for **{place['name']}**?",
-                    "options": _make_options(units, kind="unit"),
-                    "place_coordinates": place_coordinates,  # Keep marker visible
-                    "current_node": "resolve_place_and_unit",
-                    "current_place_index": idx,
-                    "places": places,  # Use updated places array
-                    "messages": serialize_messages(state.get("messages", []))
-                })
+        except Exception as e:
+            from langgraph.errors import GraphInterrupt
+            if isinstance(e, GraphInterrupt):
+                raise
+            
+            logger.error(f"Error in unit disambiguation for {place.get('name')}: {e}", exc_info=True)
+            # Skip this place and continue
+            return Command(goto="agent_node", update={"current_place_index": idx + 1})
+
 
     # ── done with this place ───────────────────────────────────────────────
     places[idx] = place

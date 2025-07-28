@@ -27,7 +27,7 @@ from vobchat.state_schema import (
     add_place_to_state,
     remove_place_from_state,
 )
-from vobchat.tools import find_units_by_postcode, find_places_by_name, get_place_key_findings
+from vobchat.tools import find_units_by_postcode, find_places_by_name, get_place_information
 from vobchat.utils.constants import UNIT_TYPES
 from .utils import _append_ai
 
@@ -60,6 +60,79 @@ def _make_options(rows: List[Dict], kind: str = "place") -> List[Dict]:
             for r in rows
         ]
     return []
+
+def _disambiguate_unit_type(place: Dict, state: lg_State, current_node: str = "resolve_place_and_unit", **extra_interrupt_data) -> Optional[Dict]:
+    """
+    Disambiguate unit type for a place that already has g_place resolved.
+    This handles ONLY the unit type disambiguation step.
+    
+    Args:
+        place: Place dictionary with g_place and unit_rows already resolved
+        state: Current workflow state
+        current_node: The node calling this function (for interrupt context)
+        **extra_interrupt_data: Additional data to pass to interrupt
+    
+    Returns:
+        Dictionary with g_unit and g_unit_type if resolved.
+        None if disambiguation needed (will trigger interrupt).
+    """
+    from .utils import serialize_messages
+    
+    units = place.get("unit_rows", [])
+    if not units:
+        return None
+    
+    if len(units) == 1:
+        # Single unit - auto-select
+        return units[0]
+    
+    # Multiple units - check for user selection
+    sel = state.get("selection_idx")
+    if sel and isinstance(sel, str):
+        chosen = next((r for r in units if r["g_unit_type"] == sel), None)
+        if chosen:
+            return chosen
+    
+    # Need disambiguation - create place coordinates to keep marker visible
+    place_coordinates = []
+    rows = place.get("candidate_rows", [])
+    
+    if rows and len(rows) > 0:
+        # Find the row that matches the selected g_place
+        r = None
+        if place.get('g_place'):
+            r = next((row for row in rows if row['g_place'] == place['g_place']), rows[0])
+        else:
+            r = rows[0]
+        
+        if r and r.get('lat') is not None and r.get('lon') is not None:
+            try:
+                lat, lon = float(r['lat']), float(r['lon'])
+                if 49 <= lat <= 61 and -8 <= lon <= 2:
+                    place_coordinates.append({
+                        "index": 0,
+                        "name": place.get('name', r.get('g_name', '')),
+                        "county": r.get('county_name', ''),
+                        "lat": lat,
+                        "lon": lon,
+                        "g_place": place.get('g_place'),
+                        "is_single": True,
+                        "needs_unit_selection": True
+                    })
+            except (ValueError, TypeError):
+                pass
+    
+    interrupt_data = {
+        "message": f"Which geography for **{place['name']}**?",
+        "options": _make_options(units, kind="unit"),
+        "place_coordinates": place_coordinates,
+        "current_node": current_node,
+        "messages": serialize_messages(state.get("messages", []))
+    }
+    interrupt_data.update(extra_interrupt_data)
+    interrupt(interrupt_data)
+    return None  # Will resume after interrupt
+
 
 def _disambiguate_place_name(place_name: str, state: lg_State, current_node: str = "PlaceInfo_node", store_coordinates: bool = False, **extra_interrupt_data) -> Optional[Dict]:
     """
@@ -398,7 +471,7 @@ def multi_place_tool_call(state: lg_State):
 # -----------------------------------------------------------------------------
 
 def PlaceInfo_node(state: lg_State) -> Dict[str, Any]:
-    """Provide general information about a place, including key findings."""
+    """Provide general information about a place, matching the original Vision of Britain place page display."""
     args = (state.get("last_intent_payload") or {}).get("arguments", {})
     place_name = args.get("place")
     
@@ -406,9 +479,14 @@ def PlaceInfo_node(state: lg_State) -> Dict[str, Any]:
         _append_ai(state, "Please tell me which place you'd like to know about.")
         return {"messages": state.get("messages", [])}
     
-    # Use the shared place disambiguation logic
+    # Use the shared place disambiguation logic with coordinate storage for map marking
     try:
-        place_info = _disambiguate_place_name(place_name, state)
+        place_info = _disambiguate_place_name(
+            place_name, 
+            state, 
+            current_node="PlaceInfo_node", 
+            store_coordinates=True
+        )
         
         if place_info is None:
             # Either no place found or disambiguation needed (interrupt triggered)
@@ -421,73 +499,146 @@ def PlaceInfo_node(state: lg_State) -> Dict[str, Any]:
                 # Disambiguation in progress - interrupt triggered
                 return dict(state)
     
-        # Now we have a disambiguated place with unit_rows available
-        unit_rows = place_info.get("unit_rows", [])
-        place_display_name = place_info.get("place_data", {}).get("g_name", place_name)
-        
-        if not unit_rows:
-            _append_ai(state, f"**{place_display_name}** - Unfortunately, I couldn't find any administrative units for this place.")
+        # Get the g_place from the disambiguated place
+        g_place = place_info.get("g_place")
+        if not g_place:
+            _append_ai(state, f"Sorry, I couldn't find complete information about '{place_name}'.")
             return {"messages": state.get("messages", []), "last_intent_payload": {}}
         
-        # For PlaceInfo, just pick the first available unit (or prioritize certain types)
-        # This avoids the complexity of unit type disambiguation for informational queries
-        chosen_unit = unit_rows[0]  # Simple: take first unit
+        # Get detailed place information using the new tool
+        place_info_json = get_place_information.invoke({"g_place": g_place})
+        place_df = pd.read_json(io.StringIO(place_info_json), orient="records")
         
-        # Could add more sophisticated selection logic here if needed:
-        # - Prefer MOD_DIST over other types
-        # - Prefer units with more recent data
-        # For now, keep it simple
-        
-        g_unit = chosen_unit.get("g_unit")
-        place_type = chosen_unit.get("g_unit_type", "Administrative unit")
-        
-        # Get user-friendly type name
-        type_info = UNIT_TYPES.get(place_type, {})
-        display_type = type_info.get("long_name", place_type)
-        
-        if not g_unit:
-            _append_ai(state, f"**{place_display_name}** - Unfortunately, I couldn't find a valid unit identifier for this place.")
+        if place_df.empty:
+            _append_ai(state, f"Sorry, I couldn't find detailed information about '{place_name}'.")
             return {"messages": state.get("messages", []), "last_intent_payload": {}}
         
-        # Get key findings for this place
-        try:
-            findings_json = get_place_key_findings.invoke({"g_unit": g_unit})
-            findings_df = pd.read_json(io.StringIO(findings_json), orient="records")
-            
-            if findings_df.empty:
-                _append_ai(state, f"**{place_display_name}** is a {display_type}. Unfortunately, I don't have any specific key findings available for this place at the moment.")
+        place_data = place_df.iloc[0]
+        place_display_name = place_data.get("g_name", place_name)
+        
+        # For PlaceInfo, we don't add to places array - just show a point marker
+        
+        # Build the response based on available information
+        response_parts = []
+        
+        # Header with place name and location context
+        location_context = []
+        if place_data.get("county_name"):
+            location_context.append(place_data["county_name"])
+        if place_data.get("nation_name") and place_data["nation_name"] != place_data.get("county_name"):
+            location_context.append(place_data["nation_name"])
+        
+        if location_context:
+            response_parts.append(f"**{place_display_name}** in {', '.join(location_context)}")
+        else:
+            response_parts.append(f"**{place_display_name}**")
+        
+        # Historical description from gazetteer (dg_text)
+        if place_data.get("dg_text") and place_data.get("dg_text_auth"):
+            dg_text = str(place_data["dg_text"]).strip() if place_data["dg_text"] is not None else ""
+            if dg_text:
+                response_parts.append(f"\n**Historical Description:**")
+                response_parts.append(f"{place_data['dg_text_auth']} described {place_display_name} like this:")
+                
+                # Handle long descriptions (like the JSP breakpoint logic)
+                if len(dg_text) > 600:
+                    # Find sentence break after 300 characters
+                    breakpoint = dg_text.find('. ', 300)
+                    if breakpoint != -1:
+                        breakpoint += 2  # Include the '. '
+                        response_parts.append(f"\n> {dg_text[:breakpoint]}")
+                        response_parts.append(f"> \n> {dg_text[breakpoint:]}")
+                    else:
+                        response_parts.append(f"\n> {dg_text}")
+                else:
+                    response_parts.append(f"\n> {dg_text}")
+        
+        # Additional notes
+        if place_data.get("notes"):
+            notes = str(place_data["notes"]).strip() if place_data["notes"] is not None else ""
+            if notes:
+                response_parts.append(f"\n**Additional Information:**")
+                response_parts.append(notes)
+        
+        # See also place reference
+        if place_data.get("see_also_place") and place_data.get("see_also_place_name"):
+            response_parts.append(f"\n**See Also:** Additional information is available for {place_data['see_also_place_name']}.")
+        
+        # Modern administrative context
+        if place_data.get("district_name"):
+            response_parts.append(f"\n**Modern Context:**")
+            if place_data.get("is_district") == 'Y':
+                response_parts.append(f"{place_display_name} is currently the {place_data['district_name']} {place_data.get('district_type', 'district')}.")
             else:
-                # Build the response with key findings
-                response_parts = [
-                    f"**{place_display_name}** is a {display_type}. Here are some key findings:"
-                ]
-                
-                for _, finding in findings_df.iterrows():
-                    label = finding.get('g_label', 'Finding')
-                    text = finding.get('g_text')
-                    
-                    if text and text.strip():
-                        response_parts.append(f"• **{label}**: {text}")
-                    elif label:
-                        response_parts.append(f"• {label}")
-                
-                if len(findings_df) >= 8:
-                    response_parts.append("\n*This shows the top findings for this place.*")
-                
-                _append_ai(state, "\n\n".join(response_parts))
-                
-        except Exception as e:
-            logger.warning(f"Failed to get key findings for g_unit {g_unit}: {e}")
-            _append_ai(state, f"**{place_display_name}** is a {display_type}. I found the place but encountered an issue retrieving detailed information. Please try again later.")
+                response_parts.append(f"{place_display_name} is now part of {place_data['district_name']} {place_data.get('district_type', 'district')}.")
+        
+        # Add coordinate information if available
+        if place_data.get("lat") and place_data.get("lon"):
+            response_parts.append(f"\n**Location:** {place_data['lat']:.3f}°N, {abs(place_data['lon']):.3f}°W")
+        
+        # Multiple names note
+        if place_data.get("has_multiple_names") == 'Y':
+            response_parts.append(f"\n*This place is known by multiple historical names.*")
+        
+        # Combine all parts
+        if len(response_parts) > 1:
+            _append_ai(state, "\n".join(response_parts))
+        else:
+            _append_ai(state, f"**{place_display_name}** - I found this place but don't have detailed historical information available.")
+        
+        # Create a temporary info-only place entry for marker display
+        info_place = None
+        coordinates = None
+        
+        # Get coordinates from place info or place data
+        if place_info.get("selected_coordinates"):
+            coordinates = place_info["selected_coordinates"]
+        elif place_data.get("lat") and place_data.get("lon"):
+            try:
+                lat, lon = float(place_data["lat"]), float(place_data["lon"])
+                if 49 <= lat <= 61 and -8 <= lon <= 2:
+                    coordinates = {"lat": lat, "lon": lon}
+            except (ValueError, TypeError):
+                pass
+        
+        # Create a temporary place entry with special marker flag
+        if coordinates:
+            info_place = {
+                "name": place_display_name,
+                "g_unit": None,  # No unit - just a point marker
+                "g_unit_type": None,
+                "g_place": g_place,
+                "coordinates": coordinates,
+                "is_info_marker": True,  # Special flag for frontend
+                "county_name": place_data.get("county_name", "")
+            }
             
     except Exception as e:
         logger.warning(f"Failed to look up place '{place_name}': {e}")
         _append_ai(state, f"Sorry, I encountered an issue while looking up information about '{place_name}'. Please try again later.")
+        return {
+            "messages": state.get("messages", []),
+            "last_intent_payload": {},
+            "place_entry": None,
+            "selection_idx": None
+        }
     
     # Clear the intent payload and temporary state after processing
-    return {
+    result = {
         "messages": state.get("messages", []),
         "last_intent_payload": {},
         "place_entry": None,
-        "selection_idx": None
+        "selection_idx": None,
+        "places": state.get("places", [])
     }
+    
+    # Add map update request with info marker if we have coordinates
+    if 'info_place' in locals() and info_place:
+        # Create a special map update that shows the info marker
+        result["map_update_request"] = {
+            "action": "show_info_marker",
+            "info_place": info_place,
+            "places": state.get("places", [])  # Keep existing selection
+        }
+    
+    return result

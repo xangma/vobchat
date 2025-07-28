@@ -11,10 +11,23 @@ from langchain_ollama import ChatOllama
 import logging
 import os
 import re
+import json
 
 from .intent_handling import AssistantIntent, SingleIntent, AssistantIntentPayload
 
 logger = logging.getLogger(__name__)
+
+def _get_theme_labels() -> List[str]:
+    """Get theme labels from database for dynamic prompt inclusion."""
+    try:
+        from .tools import get_all_themes
+        themes_json = get_all_themes.invoke({})  # Use invoke instead of direct call
+        themes_data = json.loads(themes_json)
+        return [theme['labl'] for theme in themes_data if theme.get('labl')]
+    except Exception as e:
+        logger.warning(f"Failed to load themes for prompt: {e}")
+        # Fallback to common themes
+        return ["Population", "Housing", "Employment", "Education", "Crime", "Agriculture", "Transport"]
 
 # LLM Configuration
 _MODEL_NAME = "deepseek-r1-wt:latest"
@@ -92,14 +105,22 @@ class ThemeExtractionResult(BaseModel):
     """Result from theme extraction subagent."""
     themes: List[ThemeReference] = Field(default_factory=list)
 
-_THEME_EXTRACTION_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """
+def _create_theme_extraction_prompt():
+    """Create theme extraction prompt with dynamic theme list."""
+    theme_labels = _get_theme_labels()
+    theme_examples = ", ".join(theme_labels[:10])  # Use first 10 themes as examples
+    
+    # Build the system message string to avoid f-string conflicts
+    system_message = """
 Extract statistical themes from user text.
 
+Available themes include: """ + theme_examples + """, and others.
+
 Extract themes when you see:
-- Statistical topics: population, housing, employment, education, crime
+- Statistical topics matching available themes
 - Data words: stats, statistics, data, figures
-- Theme switching: "use X", "change to X", "set theme to X"
+- Theme switching: "use X", "change to X", "set theme to X"  
+- Theme description requests: "what is X", "describe X", "tell me about X" where X is a theme name
 
 Rules:
 - Extract ONLY ONE theme per query (most specific)
@@ -107,25 +128,38 @@ Rules:
 - Don't extract from postcodes alone: "SW1A 1AA", "M1 1AE"
 - Don't extract themes from queries that ONLY contain postcodes
 - Don't extract themes from location queries like "where's X?"
+- Don't extract themes from listing queries: "what stats are there?", "what themes available?"
+- DO extract themes from description queries: "what is population?", "describe housing"
 
 Examples:
 "population stats for portsmouth" → [{{"theme_query": "population", "confidence": 1.0}}]
 "housing data for london" → [{{"theme_query": "housing", "confidence": 1.0}}] 
 "stats for london" → [{{"theme_query": "stats", "confidence": 1.0}}]
-"use employment statistics" → [{{"theme_query": "employment statistics", "confidence": 1.0}}]
+"use employment statistics" → [{{"theme_query": "employment", "confidence": 1.0}}]
 "housing for manchester" → [{{"theme_query": "housing", "confidence": 1.0}}]
 "population in london" → [{{"theme_query": "population", "confidence": 1.0}}]
+"what is agriculture and land use?" → [{{"theme_query": "agriculture and land use", "confidence": 1.0}}]
+"describe transport" → [{{"theme_query": "transport", "confidence": 1.0}}]
+"tell me about population" → [{{"theme_query": "population", "confidence": 1.0}}]
 "add manchester" → [] (no theme)
 "SW1A 1AA" → [] (no theme)
 "M1 1AE" → [] (no theme)
 "show data for M1 1AE" → [] (postcode only query)
 "show me cambridge" → [] (no theme)
 "where's bristol?" → [] (location query)
+"what stats are there?" → [] (listing query)
+"what statistics do you have?" → [] (listing query)
+"what data is available?" → [] (listing query)
 
 Reply with JSON only.
-"""),
-    ("user", "{text}")
-])
+"""
+    
+    return ChatPromptTemplate.from_messages([
+        ("system", system_message),
+        ("user", "{text}")
+    ])
+
+_THEME_EXTRACTION_PROMPT = _create_theme_extraction_prompt()
 
 _theme_extraction_chain = _THEME_EXTRACTION_PROMPT | _subagent_llm.with_structured_output(
     schema=ThemeExtractionResult
@@ -174,12 +208,15 @@ Key patterns:
 - "remove [something]" → remove  
 - "show my selection", "what have I selected" → show
 - "list themes", "what themes available" → list
+- "what stats/statistics/data are there", "what X available" → list
+- "what stats/data/themes do you have" → list
 - Data requests with places, stats, or data → add
 - Location queries "where's", "show me", "find" [place] → add
 - "tell me about [place]", "information about" → info
 - "what is [theme]" → describe
 
 IMPORTANT:
+- Questions about available options like "what stats are there?" should be classified as 'list'
 - "where's X?", "show me X", "find X" should be classified as 'add' (user wants to add place to selection)
 - Only use 'info' for explicit information requests like "tell me about X"
 
@@ -188,6 +225,9 @@ Examples:
 "remove london" → [{{"action": "remove", "target": null, "confidence": 1.0}}]
 "what have I selected" → [{{"action": "show", "target": null, "confidence": 1.0}}]
 "list themes" → [{{"action": "list", "target": null, "confidence": 1.0}}]
+"what stats are there?" → [{{"action": "list", "target": null, "confidence": 1.0}}]
+"what statistics do you have?" → [{{"action": "list", "target": null, "confidence": 1.0}}]
+"what data is available?" → [{{"action": "list", "target": null, "confidence": 1.0}}]
 "population stats for london" → [{{"action": "add", "target": null, "confidence": 1.0}}]
 "where's bristol?" → [{{"action": "add", "target": null, "confidence": 1.0}}]
 "show me cambridge" → [{{"action": "add", "target": null, "confidence": 1.0}}]

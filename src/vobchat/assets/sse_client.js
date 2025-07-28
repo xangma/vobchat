@@ -170,6 +170,9 @@ class SimpleSSEClient {
         if (state.map_update_request && state.map_update_request.action === 'update_map_selection') {
             console.log('SSE: Processing map update request:', state.map_update_request);
             this.handleMapUpdateRequest(state.map_update_request);
+        } else if (state.map_update_request && state.map_update_request.action === 'show_info_marker') {
+            console.log('SSE: Processing info marker request:', state.map_update_request);
+            this.handleInfoMarkerRequest(state.map_update_request);
         } else if (state.places && Array.isArray(state.places)) {
             // Use places as single source of truth
             this.updateMapSelection(state.places);
@@ -644,6 +647,86 @@ class SimpleSSEClient {
             }
 
             console.log('SSE: Synced map state via map_update_request');
+        }
+    }
+
+    // Helper: Handle info marker request  
+    handleInfoMarkerRequest(request) {
+        console.log('SSE: handleInfoMarkerRequest called with:', request);
+        
+        if (!request.info_place) {
+            console.warn('SSE: No info_place in request');
+            return;
+        }
+        
+        const infoPlace = request.info_place;
+        
+        // Create place coordinates for the disambiguation marker system
+        const placeCoordinates = [{
+            index: 0,
+            name: infoPlace.name,
+            county: infoPlace.county_name || '',
+            lat: infoPlace.coordinates.lat,
+            lon: infoPlace.coordinates.lon,
+            g_place: infoPlace.g_place,
+            is_single: true,  // Orange marker
+            is_info_marker: true
+        }];
+        
+        // Use the existing disambiguation marker system to show the info marker
+        const interruptData = {
+            place_coordinates: placeCoordinates,
+            current_node: 'PlaceInfo_node',
+            is_info_marker: true,
+            message: `Information about ${infoPlace.name}`
+        };
+        
+        // Update the sse-interrupt-store to trigger marker display
+        if (typeof dash_clientside !== 'undefined' && dash_clientside.set_props) {
+            dash_clientside.set_props('sse-interrupt-store', {
+                data: interruptData
+            });
+            console.log('SSE: Set info marker in sse-interrupt-store');
+        }
+        
+        // Also zoom to the location or bounds
+        if (infoPlace.coordinates) {
+            // Find the leaflet map instance the same way as zoomToPlaceMarkers
+            const mapElement = document.getElementById('leaflet-map');
+            if (!mapElement || !mapElement._leaflet_map) {
+                console.warn('SSE: Could not find leaflet map element for zooming');
+                return;
+            }
+            
+            const mapInstance = mapElement._leaflet_map;
+            
+            // If we have a g_unit, try to get its bounds
+            if (infoPlace.g_unit && window.pureMapState) {
+                // Try to get polygon bounds from the map state
+                const polygon = window.pureMapState.getPolygonById(infoPlace.g_unit);
+                if (polygon && polygon.getBounds) {
+                    mapInstance.fitBounds(polygon.getBounds());
+                    console.log('SSE: Zoomed to polygon bounds for info place');
+                    return;
+                }
+            }
+            
+            // Otherwise, create a reasonable bounding box around the point
+            // This creates approximately a 10km box around the location
+            const latOffset = 0.045; // ~5km north/south  
+            const lonOffset = 0.065; // ~5km east/west (adjusted for UK latitude)
+            
+            const bounds = [
+                [infoPlace.coordinates.lat - latOffset, infoPlace.coordinates.lon - lonOffset],
+                [infoPlace.coordinates.lat + latOffset, infoPlace.coordinates.lon + lonOffset]
+            ];
+            
+            mapInstance.fitBounds(bounds, {
+                padding: [50, 50] // Add some padding around the bounds
+            });
+            console.log('SSE: Zoomed to bounds around info place location', bounds);
+        } else {
+            console.warn('SSE: No coordinates in info place for zooming');
         }
     }
 

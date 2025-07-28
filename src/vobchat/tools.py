@@ -562,18 +562,74 @@ def get_theme_text(theme_code: Annotated[str, "Theme code e.g. T_POP"]):
 # get key findings for a place
 # ────────────────────────────────────────────────────────────────────────────
 @tool
+def get_place_information(g_place: Annotated[int, "Place identifier (g_place) for the place"]):
+    """Return detailed information about a place from g_place table, matching the original Vision of Britain place page display."""
+    query = f"""
+        SELECT
+            g_name,
+            g_container as county,
+            is_county,
+            is_district,
+            is_nation,
+            is_state,
+            is_domain,
+            nation_name,
+            state_name,
+            domain_name,
+            county_name,
+            g_county,
+            g_nation,
+            g_state,
+            g_domain,
+            mod_dist,
+            district_name,
+            district_type,
+            dg_text_auth,
+            dg_text,
+            has_multiple_names,
+            see_also_place,
+            x_uk as lon,
+            y_uk as lat,
+            notes
+        FROM hgis.g_place
+        WHERE g_place = {g_place}
+    """
+    dbtool = QuerySQLDataBaseTool(db=db)
+    res = dbtool.db._execute(query)
+
+    if not res:
+        return pd.DataFrame().to_json(orient='records', force_ascii=False, default_handler=str)
+
+    # Convert to dict for easier handling
+    place_data = dict(res[0])
+
+    # If there's a see_also_place, get its name
+    if place_data.get('see_also_place'):
+        see_also_query = f"""
+            SELECT g_name
+            FROM hgis.g_place
+            WHERE g_place = {place_data['see_also_place']}
+        """
+        see_also_res = dbtool.db._execute(see_also_query)
+        if see_also_res:
+            place_data['see_also_place_name'] = see_also_res[0]['g_name']
+
+    df = pd.DataFrame([place_data])
+    return df.to_json(orient='records', force_ascii=False, default_handler=str)
+
+
 def get_place_key_findings(g_unit: Annotated[int, "Unit identifier for the place"]):
     """Return key findings for a place from g_unit_key_findings table."""
     query = f"""
-        SELECT 
-            g_url, 
-            g_label, 
-            g_text 
-        FROM 
-            hgis.g_unit_key_findings 
-        WHERE 
-            g_unit = {g_unit} 
-        ORDER BY g_seq 
+        SELECT
+            g_url,
+            g_label,
+            g_text
+        FROM
+            hgis.g_unit_key_findings
+        WHERE
+            g_unit = {g_unit}
+        ORDER BY g_seq
         LIMIT 8;
     """
     dbtool = QuerySQLDataBaseTool(db=db)

@@ -231,7 +231,7 @@ def create_workflow(lg_state: TypedDict):
     ollama_host = os.getenv("OLLAMA_HOST", "localhost")
     ollama_port = os.getenv("OLLAMA_PORT", "11434")
     base_url = f"http://{ollama_host}:{ollama_port}/"
-    
+
     model = ChatOllama(
         model="deepseek-r1-wt:latest",  # The specific Ollama model to use
         base_url=base_url,  # URL of the Ollama API server
@@ -429,20 +429,20 @@ def create_workflow(lg_state: TypedDict):
     except Exception as e:
         logger.warning("Could not generate ASCII diagram", exc_info=True) # Non-critical error
 
-    logger.info("Attempting to generate Mermaid diagram and save as PNG:")
-    try:
-        # Generate a Mermaid diagram (requires Mermaid CLI or API access depending on method).
-        # `draw_mermaid_png` might require internet access if using MermaidDrawMethod.API.
-        compiled_workflow_image = compiled_workflow.get_graph().draw_mermaid_png(
-             draw_method=MermaidDrawMethod.API, # Or MermaidDrawMethod.PYPPETEER if playwright installed
-        )
-        # Save the generated image to a file.
-        with open("compiled_workflow.png", "wb") as png:
-            png.write(compiled_workflow_image)
-        logger.info("Successfully saved workflow diagram to compiled_workflow.png")
-    except Exception as e:
-        # Log errors during diagram generation (e.g., Mermaid service unavailable).
-        logger.warning("Could not generate or save Mermaid PNG diagram", exc_info=True) # Non-critical error
+    # logger.info("Attempting to generate Mermaid diagram and save as PNG:")
+    # try:
+    #     # Generate a Mermaid diagram (requires Mermaid CLI or API access depending on method).
+    #     # `draw_mermaid_png` might require internet access if using MermaidDrawMethod.API.
+    #     compiled_workflow_image = compiled_workflow.get_graph().draw_mermaid_png(
+    #          draw_method=MermaidDrawMethod.API, # Or MermaidDrawMethod.PYPPETEER if playwright installed
+    #     )
+    #     # Save the generated image to a file.
+    #     with open("compiled_workflow.png", "wb") as png:
+    #         png.write(compiled_workflow_image)
+    #     logger.info("Successfully saved workflow diagram to compiled_workflow.png")
+    # except Exception as e:
+    #     # Log errors during diagram generation (e.g., Mermaid service unavailable).
+    #     logger.warning("Could not generate or save Mermaid PNG diagram", exc_info=True) # Non-critical error
 
     logger.info("Workflow creation and compilation completed.")
     # Return both the compiled workflow and the base graph for fresh compilation

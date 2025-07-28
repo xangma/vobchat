@@ -99,7 +99,7 @@ _INTENT_EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
             - ANY variation with stats/data/statistics and place names
             - "fetch [theme] data for [places]"
             - "display [theme] statistics for [places]"
-        • CRITICAL: Always look for ALL place names/city names in requests, especially in patterns like "[THEME] [stats/data/statistics] for [PLACE1] and [PLACE2]". 
+        • CRITICAL: Always look for ALL place names/city names in requests, especially in patterns like "[THEME] [stats/data/statistics] for [PLACE1] and [PLACE2]".
         • CRITICAL: When you see "place1 and place2", extract BOTH as separate AddPlace intents: AddPlace {{"place": "place1"}}, AddPlace {{"place": "place2"}}
         • CRITICAL: Extract each place as a separate AddPlace intent AND extract the theme as AddTheme.
         • DescribeTheme is ONLY for asking about theme definitions/descriptions, like "What is the Population theme?", "Explain Housing statistics", NOT for place queries.
@@ -137,6 +137,9 @@ _INTENT_EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
 
         • "What do you know about [CityDelta]?" →
         PlaceInfo {{"place": "CityDelta"}}
+
+        • "Where is [CityBeta]?" →
+        PlaceInfo {{"place": "CityBeta"}}
 
         • "Information about [VillageGamma]" →
         PlaceInfo {{"place": "VillageGamma"}}
