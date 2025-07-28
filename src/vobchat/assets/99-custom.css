@@ -1,4 +1,20 @@
 /* assets/custom.css */
+
+/* Place disambiguation marker labels */
+.place-label-tooltip {
+    background: rgba(255, 255, 255, 0.95) !important;
+    border: 1px solid #333 !important;
+    border-radius: 4px !important;
+    font-size: 12px !important;
+    font-weight: bold !important;
+    white-space: nowrap !important;
+    box-shadow: 2px 2px 4px rgba(0,0,0,0.3) !important;
+    color: #000 !important;
+}
+
+.place-label-tooltip.leaflet-tooltip-right:before {
+    border-right-color: #333 !important;
+}
 .unit-filter-button:hover {
     background-color: var(--unit-color) !important;
     color: white !important;

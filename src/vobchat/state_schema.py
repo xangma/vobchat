@@ -141,6 +141,7 @@ class lg_State(TypedDict):
 
     # processing state
     current_place_index: Optional[int]
+    place_entry: Optional[dict]  # Temporary storage for place disambiguation
     is_postcode: Optional[bool]
     extracted_postcode: Optional[str]
 

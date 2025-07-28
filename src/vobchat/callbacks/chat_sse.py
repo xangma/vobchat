@@ -180,17 +180,59 @@ def register_simple_chat_callbacks(app, compiled_workflow):
 
         # Create markers for each candidate place
         markers = []
+        
+        # Get current place being processed and places that have been selected
+        current_place_index = interrupt_data.get("current_place_index", 0)
+        places_state = interrupt_data.get("places", [])
+        
+        logger.info(f"Disambiguation markers - current_place_index: {current_place_index}")
+        logger.info(f"Places state: {places_state}")
+        logger.info(f"Place coordinates: {place_coordinates}")
 
-        for place in place_coordinates:
+        for i, place in enumerate(place_coordinates):
+            # IMPORTANT: place_coordinates contains disambiguation options for the CURRENT place being processed
+            # The current_place_index tells us which place in places_state we're disambiguating
+            # So we should check places_state[current_place_index], not place.get("index")
+            
+            # Check if the current place being disambiguated has been selected
+            is_selected = False
+            place_data = None
+            if current_place_index < len(places_state):
+                place_data = places_state[current_place_index]
+                # Only consider selected if g_unit is not None and not empty
+                g_unit = place_data.get("g_unit")
+                is_selected = g_unit is not None and str(g_unit).strip() != "" and g_unit != "null"
+                
+            logger.info(f"Place {place['name']} (disambiguation option {i} for places_state[{current_place_index}]): is_selected={is_selected}, g_unit={place_data.get('g_unit') if place_data else 'N/A'}")
+            
+            # Check if this is a single place (should be highlighted)
+            is_single = place.get("is_single", False)
+            
+            # Choose icon color: green for selected, yellow/orange for single (highlighted), blue for multiple options
+            if is_selected:
+                icon_url = "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png"
+            elif is_single:
+                # Use orange/yellow for single places that need attention
+                icon_url = "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-orange.png"
+            else:
+                icon_url = "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png"
+            
+            # Create marker with appropriate color and permanent tooltip
             marker = dl.Marker(
                 position=[place["lat"], place["lon"]],
                 children=[
-                    dl.Tooltip(f"{place['name']}, {place['county']}")
+                    dl.Tooltip(
+                        f"{place['name']}, {place['county']}" + (" ✓" if is_selected else ""),
+                        permanent=True,
+                        direction="right",
+                        offset=[10, 0],
+                        className="place-label-tooltip"
+                    )
                 ],
                 id={"type": "place-candidate-marker", "index": place["index"]},
-                # Use a distinct icon for place candidates
+                # Use different icon colors based on selection status
                 icon={
-                    "iconUrl": "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png",
+                    "iconUrl": icon_url,
                     "shadowUrl": "https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png",
                     "iconSize": [25, 41],
                     "iconAnchor": [12, 41],
@@ -233,11 +275,22 @@ def register_simple_chat_callbacks(app, compiled_workflow):
 
         logger.info(f"Place marker clicked: index {selected_index}")
 
-        # Clear markers immediately
-        markers_cleared = []
+        # Check if this is a single place marker (auto-selected)
+        # If so, we should keep it visible for potential unit type selection
+        is_single_place = False
+        if interrupt_data and interrupt_data.get("place_coordinates"):
+            coords = interrupt_data.get("place_coordinates", [])
+            if len(coords) == 1 and coords[0].get("is_single"):
+                is_single_place = True
 
-        # Clear interrupt store to remove markers
-        interrupt_cleared = {}
+        if is_single_place:
+            # Keep markers visible for unit type selection
+            markers_cleared = no_update
+            interrupt_cleared = no_update
+        else:
+            # Clear markers for multi-place disambiguation
+            markers_cleared = []
+            interrupt_cleared = {}
 
         # Prepare workflow input with the selection
         workflow_input = {
@@ -251,11 +304,12 @@ def register_simple_chat_callbacks(app, compiled_workflow):
         logger.info(f"Resuming workflow with place selection: {selected_index}")
         start_workflow_background(compiled_workflow, thread_id, workflow_input)
 
-        # Trigger SSE connection
+        # Trigger SSE connection and clear disambiguation mode
         sse_status = {
             "connect_sse": True,
             "thread_id": thread_id,
             "workflow_input": workflow_input,
+            "clear_disambiguation_mode": True,
             "timestamp": time.time()
         }
 

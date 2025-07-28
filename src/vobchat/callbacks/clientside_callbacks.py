@@ -457,6 +457,12 @@ def register_simple_clientside_callbacks(app: Dash):
                 return window.dash_clientside.no_update;
             }
 
+            // Skip if in disambiguation mode (showing place markers)
+            if (window._disambiguationMode) {
+                console.log('Auto-load: Skipping update (disambiguation mode active)');
+                return window.dash_clientside.no_update;
+            }
+
             const bounds = map.getBounds();
             const unitTypes = map_state.unit_types || ['MOD_REG'];
             const yearRange = map_state.year_range ? { min: map_state.year_range[0], max: map_state.year_range[1] } : null;
@@ -488,6 +494,12 @@ def register_simple_clientside_callbacks(app: Dash):
             // Handle SSE connection status that includes workflow input
             if (sse_status && sse_status.connect_sse && sse_status.thread_id && window.simpleSSE) {
                 console.log("SSE: Connecting with workflow input:", sse_status.workflow_input);
+                
+                // Clear disambiguation mode if requested
+                if (sse_status.clear_disambiguation_mode && window.simpleSSE.clearDisambiguationMode) {
+                    console.log("SSE: Clearing disambiguation mode");
+                    window.simpleSSE.clearDisambiguationMode();
+                }
 
                 // If this is a reset, also clear map state
                 if (sse_status.reset) {

@@ -222,8 +222,9 @@ class SimpleSSEClient {
     handleInterrupt(interruptData) {
         console.log('SSE: Received interrupt:', interruptData);
 
-        // Store current_node for when buttons are clicked
+        // Store current_node and full interrupt data for when buttons are clicked
         this.currentNode = interruptData.current_node || null;
+        this.currentInterruptData = interruptData;
 
         // Store interrupt data in the sse-interrupt-store for callbacks to access
         if (typeof dash_clientside !== 'undefined' && dash_clientside.set_props) {
@@ -234,9 +235,13 @@ class SimpleSSEClient {
 
         // Handle place disambiguation markers zoom
         if (interruptData.place_coordinates && interruptData.place_coordinates.length > 0) {
+            // Set disambiguation mode immediately
+            window._disambiguationMode = true;
+            console.log('SSE: Setting disambiguation mode for place markers');
+            
             // Wait a bit for markers to be created then zoom to them
             setTimeout(() => {
-                this.zoomToPlaceMarkers(interruptData.place_coordinates);
+                this.zoomToPlaceMarkers(interruptData.place_coordinates, interruptData);
             }, 100);
         }
 
@@ -289,9 +294,13 @@ class SimpleSSEClient {
         }
     }
 
-    // Zoom to place disambiguation markers
-    zoomToPlaceMarkers(placeCoordinates) {
+    // Zoom to place disambiguation markers and any selected polygons
+    zoomToPlaceMarkers(placeCoordinates, interruptData = null) {
         console.log('SSE: Zooming to place markers:', placeCoordinates);
+        
+        // FIRST: Set disambiguation mode immediately to prevent polygon loading
+        window._disambiguationMode = true;
+        console.log('SSE: Disambiguation mode enabled in zoomToPlaceMarkers');
         
         // Find the leaflet map instance
         const mapElement = document.getElementById('leaflet-map');
@@ -304,23 +313,88 @@ class SimpleSSEClient {
         
         if (placeCoordinates.length === 0) return;
         
-        // Calculate bounds for all place coordinates
-        const lats = placeCoordinates.map(p => p.lat);
-        const lons = placeCoordinates.map(p => p.lon);
+        // Get selected polygons that should remain visible
+        const places = interruptData?.places || [];
+        const selectedUnits = places
+            .filter(place => place.g_unit !== null && place.g_unit !== undefined)
+            .map(place => String(place.g_unit));
         
-        if (placeCoordinates.length === 1) {
-            // Single marker - center on it with reasonable zoom
-            map.setView([lats[0], lons[0]], 10);
-        } else {
-            // Multiple markers - fit bounds to include all
-            const bounds = window.L.latLngBounds(
-                placeCoordinates.map(p => [p.lat, p.lon])
-            );
-            map.fitBounds(bounds, { 
-                padding: [20, 20], 
-                maxZoom: 12 
-            });
+        console.log('SSE: Selected units to keep visible:', selectedUnits);
+        
+        // Clear cache and layer
+        console.log('SSE: Clearing unselected polygons for place disambiguation');
+        if (window.polygonManagement && window.polygonManagement.clearCache) {
+            window.polygonManagement.clearCache();
         }
+        
+        const geojsonLayer = window.polygonManagement?.findGeoJSONLayer?.(map);
+        if (geojsonLayer && geojsonLayer.clearLayers) {
+            console.log('SSE: Clearing all polygons from map');
+            geojsonLayer.clearLayers();
+        }
+        
+        // If we have selected units, fetch and display them
+        if (selectedUnits.length > 0 && window.polygonManagement && window.polygonManagement.fetchPolygonsByIds) {
+            console.log('SSE: Fetching selected polygons for display during disambiguation');
+            
+            // Group selected units by their unit types
+            const unitsByType = {};
+            places.forEach(place => {
+                if (place.g_unit && place.g_unit_type) {
+                    if (!unitsByType[place.g_unit_type]) {
+                        unitsByType[place.g_unit_type] = [];
+                    }
+                    unitsByType[place.g_unit_type].push(String(place.g_unit));
+                }
+            });
+            
+            console.log('SSE: Units grouped by type:', unitsByType);
+            
+            // Fetch polygons for each unit type
+            const fetchPromises = [];
+            const mapState = window.mapState || {};
+            
+            for (const [unitType, units] of Object.entries(unitsByType)) {
+                console.log(`SSE: Fetching ${units.length} polygons of type ${unitType}`);
+                const promise = window.polygonManagement.fetchPolygonsByIds(map, mapState, unitType, units, null);
+                fetchPromises.push(promise);
+            }
+            
+            if (fetchPromises.length > 0) {
+                Promise.all(fetchPromises)
+                    .then(() => {
+                        console.log('SSE: All selected polygons loaded');
+                        
+                        // Update the hideout to show selected polygons
+                        const geojsonLayer = window.polygonManagement?.findGeoJSONLayer?.(map);
+                        if (geojsonLayer && geojsonLayer.options) {
+                            console.log('SSE: Updating hideout with selected units:', selectedUnits);
+                            geojsonLayer.options.hideout = { selected: selectedUnits };
+                            
+                            // Force style refresh
+                            if (window.polygonManagement && window.polygonManagement.refreshLayerStyles) {
+                                window.polygonManagement.refreshLayerStyles(geojsonLayer, selectedUnits);
+                            }
+                        }
+                        
+                        this.calculateCombinedZoomBounds(map, geojsonLayer, selectedUnits, placeCoordinates);
+                    })
+                    .catch(error => {
+                        console.error('SSE: Error fetching selected polygons:', error);
+                        this.calculateCombinedZoomBounds(map, null, [], placeCoordinates);
+                    });
+                return;
+            }
+        }
+        
+        // No selected polygons, just zoom to markers
+        this.calculateCombinedZoomBounds(map, null, [], placeCoordinates);
+    }
+
+    // Clear disambiguation mode to re-enable polygon loading
+    clearDisambiguationMode() {
+        console.log('SSE: Clearing disambiguation mode');
+        window._disambiguationMode = false;
     }
 
     // Simple error handling
@@ -430,6 +504,21 @@ class SimpleSSEClient {
                         current_node: this.currentNode  // Pass back the current_node from interrupt
                     };
 
+                    // Include interrupt context for unit type selections to preserve state
+                    if (option.option_type === 'unit' && this.currentInterruptData) {
+                        // Preserve critical workflow state when resuming from unit type selection
+                        if (this.currentInterruptData.current_place_index !== undefined) {
+                            selectionInput.current_place_index = this.currentInterruptData.current_place_index;
+                        }
+                        if (this.currentInterruptData.places) {
+                            selectionInput.places = this.currentInterruptData.places;
+                        }
+                        console.log('SSE: Including interrupt context for unit selection:', {
+                            current_place_index: selectionInput.current_place_index,
+                            places_count: selectionInput.places ? selectionInput.places.length : 0
+                        });
+                    }
+
                     // Send selection through existing connection instead of creating new one
                     this.sendSelection(selectionInput);
                 }
@@ -511,6 +600,14 @@ class SimpleSSEClient {
     // Helper: Handle map update requests (replicated from complex SSE client)
     handleMapUpdateRequest(request) {
         console.log('SSE: handleMapUpdateRequest called with:', request);
+        
+        // Clear disambiguation mode when handling map update requests
+        // This ensures proper polygon display after place/unit selection is complete
+        if (window._disambiguationMode) {
+            console.log('SSE: Clearing disambiguation mode due to map update request');
+            this.clearDisambiguationMode();
+        }
+        
         if (window.pureMapState && request.places !== undefined) {
             console.log('SSE: Request places array:', request.places);
             // Extract units and unit types from places array (single source of truth)
@@ -527,10 +624,21 @@ class SimpleSSEClient {
                 }
             });
 
+            // Check if we have selected place coordinates to include in zoom
+            const selectedPlaceCoords = request.selected_place_coordinates || [];
+            console.log('SSE: Selected place coordinates for zoom:', selectedPlaceCoords);
+
             // Only fetch polygons if we have units to fetch
             if (units && units.length > 0) {
                 console.log('SSE: Fetching polygons and zooming for map update request');
-                this.fetchPolygonsAndZoom(units, unitTypes, request.places);
+                this.fetchPolygonsAndZoom(units, unitTypes, request.places, selectedPlaceCoords);
+            } else if (selectedPlaceCoords.length > 0) {
+                // No polygons but we have place coordinates to zoom to
+                console.log('SSE: No polygons but zooming to selected place coordinates');
+                const mapElement = document.getElementById('leaflet-map');
+                if (mapElement && mapElement._leaflet_map) {
+                    this.calculateCombinedZoomBounds(mapElement._leaflet_map, null, [], selectedPlaceCoords);
+                }
             } else {
                 console.log('SSE: No units to fetch - map cleared');
             }
@@ -574,8 +682,55 @@ class SimpleSSEClient {
         }
     }
 
+    // Helper: Calculate combined zoom bounds for polygons and place coordinates
+    calculateCombinedZoomBounds(map, layer, polygonIds, placeCoordinates) {
+        console.log('SSE: Calculating combined bounds for polygons and places');
+        
+        const bounds = window.L.latLngBounds();
+        let hasContent = false;
+        
+        // Add polygon bounds if available
+        if (layer && layer._layers && polygonIds && polygonIds.length > 0) {
+            Object.values(layer._layers).forEach(layerObj => {
+                if (layerObj.feature && polygonIds.includes(String(layerObj.feature.id))) {
+                    if (layerObj.getBounds) {
+                        bounds.extend(layerObj.getBounds());
+                        hasContent = true;
+                        console.log('SSE: Added polygon bounds for ID:', layerObj.feature.id);
+                    }
+                }
+            });
+        }
+        
+        // Add place coordinates to bounds
+        if (placeCoordinates && placeCoordinates.length > 0) {
+            placeCoordinates.forEach(coord => {
+                bounds.extend([coord.lat, coord.lon]);
+                hasContent = true;
+                console.log('SSE: Added place coordinate bounds:', coord.name || 'Unknown', coord.lat, coord.lon);
+            });
+        }
+        
+        // Apply zoom if we have valid bounds
+        if (hasContent && bounds.isValid()) {
+            console.log('SSE: Zooming to combined bounds');
+            map.fitBounds(bounds, { 
+                padding: [30, 30], 
+                maxZoom: 12 
+            });
+            return true;
+        } else if (placeCoordinates && placeCoordinates.length === 1) {
+            // Fallback: single place coordinate
+            console.log('SSE: Fallback to single coordinate zoom');
+            map.setView([placeCoordinates[0].lat, placeCoordinates[0].lon], 10);
+            return true;
+        }
+        
+        return false; // No zoom applied
+    }
+
     // Helper: Fetch polygons, zoom to bounds, and update unit types
-    fetchPolygonsAndZoom(units, unitTypes, places) {
+    fetchPolygonsAndZoom(units, unitTypes, places, includePlaceCoordinates = []) {
         // Add defensive checks
         if (!Array.isArray(units)) {
             console.error('SSE: units is not an array:', units);
@@ -653,9 +808,20 @@ class SimpleSSEClient {
 
                 if (layer && polygonManagement.zoomTo) {
                     console.log('SSE: Using zoomTo with layer and unit strings:', unitStrings);
+                    console.log('SSE: Including place coordinates in zoom:', includePlaceCoordinates);
 
-                    // Use the proper zoomTo signature: (map, ids, layer)
-                    polygonManagement.zoomTo(map, unitStrings, layer);
+                    // Try combined zoom first if we have place coordinates
+                    let zoomApplied = false;
+                    if (includePlaceCoordinates && includePlaceCoordinates.length > 0) {
+                        console.log('SSE: Creating custom zoom bounds with place coordinates');
+                        zoomApplied = this.calculateCombinedZoomBounds(map, layer, unitStrings, includePlaceCoordinates);
+                    }
+                    
+                    // Fallback to original polygon zoom if combined zoom wasn't applied
+                    if (!zoomApplied) {
+                        console.log('SSE: Using standard polygon zoom');
+                        polygonManagement.zoomTo(map, unitStrings, layer);
+                    }
 
                     // Only update unit types if we actually have units to zoom to
                     console.log('SSE: Zoom initiated for units:', unitStrings);

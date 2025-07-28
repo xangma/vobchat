@@ -61,10 +61,16 @@ def _make_options(rows: List[Dict], kind: str = "place") -> List[Dict]:
         ]
     return []
 
-def _disambiguate_place_name(place_name: str, state: lg_State) -> Optional[Dict]:
+def _disambiguate_place_name(place_name: str, state: lg_State, current_node: str = "PlaceInfo_node", store_coordinates: bool = False, **extra_interrupt_data) -> Optional[Dict]:
     """
     Disambiguate a place name to a specific g_place and return available unit rows.
     This handles ONLY the place name disambiguation step.
+    
+    Args:
+        place_name: Name of the place to disambiguate
+        state: Current workflow state
+        current_node: The node calling this function (for interrupt context)
+        store_coordinates: Whether to store selected coordinates for zoom functionality
     
     Returns:
         Dictionary with g_place, unit_rows, and other place info if resolved.
@@ -107,15 +113,25 @@ def _disambiguate_place_name(place_name: str, state: lg_State) -> Optional[Dict]
             
         if len(rows) == 1:
             # Single match - auto-select
-            place_entry["g_place"] = rows[0]["g_place"]
-            gu, gut = rows[0]["g_unit"], rows[0]["g_unit_type"]
+            r = rows[0]
+            place_entry["g_place"] = r["g_place"]
+            gu, gut = r["g_unit"], r["g_unit_type"]
             if not isinstance(gu, list):
                 gu, gut = [gu], [gut]
             place_entry["unit_rows"] = [
                 {"g_unit": u, "g_unit_type": t} for u, t in zip(gu, gut)
             ]
             # Also store the full place data for reference
-            place_entry["place_data"] = rows[0]
+            place_entry["place_data"] = r
+            
+            # Store coordinates for zoom functionality if requested
+            if store_coordinates and r.get('lat') is not None and r.get('lon') is not None:
+                try:
+                    lat, lon = float(r['lat']), float(r['lon'])
+                    if 49 <= lat <= 61 and -8 <= lon <= 2:  # UK bounds check
+                        place_entry["selected_coordinates"] = {"lat": lat, "lon": lon}
+                except (ValueError, TypeError):
+                    pass
         else:
             # Multiple matches - need disambiguation
             if sel is not None and isinstance(sel, int) and 0 <= sel < len(rows):
@@ -129,6 +145,16 @@ def _disambiguate_place_name(place_name: str, state: lg_State) -> Optional[Dict]
                     {"g_unit": u, "g_unit_type": t} for u, t in zip(gu, gut)
                 ]
                 place_entry["place_data"] = r
+                
+                # Store coordinates for zoom functionality if requested
+                if store_coordinates and r.get('lat') is not None and r.get('lon') is not None:
+                    try:
+                        lat, lon = float(r['lat']), float(r['lon'])
+                        if 49 <= lat <= 61 and -8 <= lon <= 2:  # UK bounds check
+                            place_entry["selected_coordinates"] = {"lat": lat, "lon": lon}
+                    except (ValueError, TypeError):
+                        pass
+                
                 # Clear selection for next step
                 state["selection_idx"] = None
             else:
@@ -151,14 +177,17 @@ def _disambiguate_place_name(place_name: str, state: lg_State) -> Optional[Dict]
                         except (ValueError, TypeError):
                             pass
                 
-                interrupt({
+                interrupt_data = {
                     "message": f"More than one **{place_name}** - which do you mean?",
                     "options": _make_options(rows, kind="place"),
                     "place_coordinates": place_coordinates,
-                    "current_node": "PlaceInfo_node",
+                    "current_node": current_node,
                     "place_entry": place_entry,  # Store for continuation
                     "messages": serialize_messages(state.get("messages", []))
-                })
+                }
+                # Add any extra interrupt data from the caller
+                interrupt_data.update(extra_interrupt_data)
+                interrupt(interrupt_data)
                 return None  # Will resume after interrupt
     
     # Return the place entry with g_place and unit_rows resolved

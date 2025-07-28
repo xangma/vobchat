@@ -30,38 +30,28 @@ from vobchat.state_schema import (
     lg_State,
     get_selected_units,
 )
-from vobchat.utils.constants import UNIT_TYPES
 from .utils import _append_ai, serialize_messages
 
 logger = logging.getLogger(__name__)
 
 # -----------------------------------------------------------------------------
-# Helper - build button option dictionaries
+# Helper functions
 # -----------------------------------------------------------------------------
 
+def _collect_selected_place_coordinates(places: List[dict]) -> List[dict]:
+    """Extract selected place coordinates for zoom purposes."""
+    selected_place_coordinates = []
+    for place in places:
+        if place.get("selected_coordinates"):
+            coord = place["selected_coordinates"]
+            selected_place_coordinates.append({
+                "lat": coord["lat"],
+                "lon": coord["lon"], 
+                "name": place.get("name", ""),
+                "selected": True
+            })
+    return selected_place_coordinates
 
-def _make_options(rows: List[dict], *, kind: str) -> List[dict]:
-    if kind == "place":
-        return [
-            {
-                "option_type": "place",
-                "label": f"{r['g_name']}, {r['county_name']}",
-                "value": i,
-                "color": "#333",
-            }
-            for i, r in enumerate(rows)
-        ]
-    if kind == "unit":
-        return [
-            {
-                "option_type": "unit",
-                "label": UNIT_TYPES.get(r["g_unit_type"], {}).get("long_name", r["g_unit_type"]),
-                "value": r["g_unit_type"],
-                "color": UNIT_TYPES.get(r["g_unit_type"], {}).get("color", "#333"),
-            }
-            for r in rows
-        ]
-    return []
 
 # -----------------------------------------------------------------------------
 # Node - UpdatePolygonSelection_node
@@ -82,6 +72,10 @@ def update_polygon_selection(state: lg_State):
 
         if current_idx >= len(places):
             logger.info("update_polygon_selection: All places resolved, routing to agent_node")
+            
+            # Collect selected place coordinates for zoom
+            selected_place_coordinates = _collect_selected_place_coordinates(places)
+            
             return Command(goto="agent_node", update={
                 "units_needing_map_selection": [],
                 "places": places,
@@ -89,9 +83,14 @@ def update_polygon_selection(state: lg_State):
                 "map_update_request": {
                     "action": "update_map_selection",
                     "places": state.get("places", []),
+                    "selected_place_coordinates": selected_place_coordinates
                 }
             })
 
+        # Collect selected place coordinates for zoom (including partially processed places)
+        places_list = state.get("places", []) or []
+        selected_place_coordinates = _collect_selected_place_coordinates(places_list)
+        
         return Command(goto="resolve_place_and_unit", update={
             "units_needing_map_selection": [],
             "places": state.get("places", []),
@@ -100,6 +99,7 @@ def update_polygon_selection(state: lg_State):
             "map_update_request": {
                 "action": "update_map_selection",
                 "places": state.get("places"),
+                "selected_place_coordinates": selected_place_coordinates
             }
         })
 
@@ -150,8 +150,17 @@ def resolve_place_and_unit(state: lg_State):
 
     places = state.get("places", []) or []
     idx = state.get("current_place_index", 0) or 0
+    sel = state.get("selection_idx")
 
-    logger.info(f"resolve_place_and_unit: starting with idx={idx}, places={[p.get('name') for p in places]}")
+    logger.info(f"resolve_place_and_unit: starting with idx={idx}, places={[p.get('name') for p in places]}, selection_idx={sel}")
+    
+    # Debug: log all state keys to understand what we're getting
+    logger.info(f"resolve_place_and_unit: state keys: {list(state.keys())}")
+    
+    # Debug: log place details if we're processing a specific place
+    if idx < len(places):
+        place = places[idx]
+        logger.info(f"resolve_place_and_unit: current place {idx} details: name={place.get('name')}, g_place={place.get('g_place')}, g_unit={place.get('g_unit')}, candidate_rows_count={len(place.get('candidate_rows', []))}, unit_rows_count={len(place.get('unit_rows', []))}")
 
     # Skip past already‑resolved places
     while idx < len(places) and places[idx].get("g_unit") is not None:
@@ -164,77 +173,75 @@ def resolve_place_and_unit(state: lg_State):
         return Command(goto="update_polygon_selection", update={"current_place_index": idx})
 
     place = places[idx]
-    sel = state.get("selection_idx")
 
     logger.info(f"resolve_place_and_unit: processing place {idx} ({place.get('name')}), g_unit={place.get('g_unit')}, selection_idx={sel}")
 
     # ── STEP 1: choose the correct *place* (g_place + unit_rows) ───────────
     if place.get("g_place") is None:
-        rows = place.get("candidate_rows", [])
-        logger.info(f"resolve_place_and_unit: place {place.get('name')} has {len(rows)} candidate rows, g_place={place.get('g_place')}")
-        if not rows:
-            _append_ai(state, f"I couldn't find '{place['name']}'. Skipping...")
+        from .place_nodes import _disambiguate_place_name
+        
+        # Use the shared place disambiguation logic
+        # Temporarily store place in state for the disambiguation function
+        candidate_rows = place.get("candidate_rows")
+        # Don't pass empty list as None - let function fetch if needed
+        if candidate_rows == []:
+            candidate_rows = None
+            
+        temp_place_entry = {
+            "name": place.get("name"),
+            "candidate_rows": candidate_rows,
+            "g_place": place.get("g_place"),
+            "unit_rows": place.get("unit_rows")
+        }
+        state["place_entry"] = temp_place_entry
+        
+        try:
+            disambiguated_place = _disambiguate_place_name(
+                place.get("name", ""), 
+                state, 
+                current_node="resolve_place_and_unit",
+                store_coordinates=True,
+                current_place_index=idx,
+                places=places
+            )
+            
+            if disambiguated_place is None:
+                # Either no place found or disambiguation needed (interrupt triggered)
+                place_entry = state.get("place_entry")
+                if place_entry is None or not place_entry.get("candidate_rows"):
+                    # No place found
+                    _append_ai(state, f"I couldn't find '{place['name']}'. Skipping...")
+                    return Command(goto="agent_node", update={"current_place_index": idx + 1})
+                else:
+                    # Disambiguation in progress - interrupt triggered, state is preserved
+                    # Just return the current state, the interrupt has already been triggered
+                    return {}
+            
+            # Place was successfully disambiguated - update our place object
+            place.update({
+                "g_place": disambiguated_place.get("g_place"),
+                "unit_rows": disambiguated_place.get("unit_rows", []),
+                "selected_coordinates": disambiguated_place.get("selected_coordinates")
+            })
+            places[idx] = place
+            
+            # Add success message
+            place_data = disambiguated_place.get("place_data", {})
+            if place_data.get("county_name"):
+                _append_ai(state, f"Found **{place['name']}** in {place_data['county_name']}")
+            
+        except Exception as e:
+            # Don't catch GraphInterrupt - let it bubble up to LangGraph
+            from langgraph.errors import GraphInterrupt
+            if isinstance(e, GraphInterrupt):
+                raise  # Re-raise GraphInterrupt so LangGraph can handle it
+            
+            logger.error(f"Error in place disambiguation for {place.get('name')}: {e}", exc_info=True)
+            _append_ai(state, f"Sorry, I encountered an error looking up '{place['name']}'. Skipping...")
             return Command(goto="agent_node", update={"current_place_index": idx + 1})
-        if len(rows) == 1:
-            place["g_place"] = rows[0]["g_place"]
-            gu, gut = rows[0]["g_unit"], rows[0]["g_unit_type"]
-            if not isinstance(gu, list):
-                gu, gut = [gu], [gut]
-            place["unit_rows"] = [
-                {"g_unit": u, "g_unit_type": t} for u, t in zip(gu, gut)
-            ]
-            places[idx] = place  # Ensure place is updated in places array
-        else:
-            logger.info(f"resolve_place_and_unit: multiple candidates for {place.get('name')}, sel={sel}, type={type(sel)}")
-            if sel is not None and isinstance(sel, int) and 0 <= sel < len(rows):
-                logger.info(f"resolve_place_and_unit: user selected place option {sel} for {place.get('name')}")
-                r = rows[sel]
-                place["g_place"] = r["g_place"]
-                gu, gut = r["g_unit"], r["g_unit_type"]
-                if not isinstance(gu, list):
-                    gu, gut = [gu], [gut]
-                place["unit_rows"] = [
-                    {"g_unit": u, "g_unit_type": t} for u, t in zip(gu, gut)
-                ]
-                places[idx] = place  # Ensure place is updated in places array
-
-                # Continue to next step in same place (unit selection) or next place
-                return Command(goto="resolve_place_and_unit", update={
-                    "places": places,
-                    "current_place_index": idx,  # Keep processing same place for unit selection
-                    "selection_idx": None
-                })
-            else:
-                logger.info(f"resolve_place_and_unit: interrupting for place disambiguation of {place.get('name')} with {len(rows)} options")
-
-                # Add coordinate data for map display
-                place_coordinates = []
-                for j, r in enumerate(rows):
-                    if r.get('lat') is not None and r.get('lon') is not None:
-                        try:
-                            lat, lon = float(r['lat']), float(r['lon'])
-                            # Validate UK bounds
-                            if 49 <= lat <= 61 and -8 <= lon <= 2:
-                                place_coordinates.append({
-                                    "index": j,
-                                    "name": r['g_name'],
-                                    "county": r['county_name'],
-                                    "lat": lat,
-                                    "lon": lon,
-                                    "g_place": r['g_place']
-                                })
-                        except (ValueError, TypeError):
-                            pass
-
-                interrupt({
-                    "message": f"More than one **{place['name']}** - which do you mean?",
-                    "options": _make_options(rows, kind="place"),
-                    "place_coordinates": place_coordinates,  # Add coordinates for map markers
-                    "current_node": "resolve_place_and_unit",
-                    "current_place_index": idx,
-                    "places": places,  # Use updated places array
-                    "messages": serialize_messages(state.get("messages", []))
-                })
+        finally:
+            # Clean up temporary state
+            state.pop("place_entry", None)
 
 
     # ── STEP 2: choose the *unit type* ─────────────────────────────────────
@@ -259,9 +266,43 @@ def resolve_place_and_unit(state: lg_State):
                     logger.info(f"resolve_place_and_unit: unit type {sel} not found for {place.get('name')}")
                     sel = None  # force re‑ask
             if place.get("g_unit") is None:
+                # Create place coordinates for the current place to keep marker visible
+                place_coordinates = []
+                rows = place.get("candidate_rows", [])
+                
+                # Try to get coordinates from the place data
+                if rows and len(rows) > 0:
+                    # For single places that were auto-selected, we need to find the right row
+                    if len(rows) == 1 or place.get('g_place'):
+                        # Find the row that matches the selected g_place
+                        r = None
+                        if place.get('g_place'):
+                            r = next((row for row in rows if row['g_place'] == place['g_place']), rows[0])
+                        else:
+                            r = rows[0]
+                        
+                        if r and r.get('lat') is not None and r.get('lon') is not None:
+                            try:
+                                lat, lon = float(r['lat']), float(r['lon'])
+                                if 49 <= lat <= 61 and -8 <= lon <= 2:
+                                    place_coordinates.append({
+                                        "index": 0,
+                                        "name": place.get('name', r.get('g_name', '')),
+                                        "county": r.get('county_name', ''),
+                                        "lat": lat,
+                                        "lon": lon,
+                                        "g_place": place.get('g_place'),
+                                        "is_single": True,  # Single marker for unit selection
+                                        "needs_unit_selection": True
+                                    })
+                            except (ValueError, TypeError):
+                                pass
+                
+                from .place_nodes import _make_options
                 interrupt({
                     "message": f"Which geography for **{place['name']}**?",
                     "options": _make_options(units, kind="unit"),
+                    "place_coordinates": place_coordinates,  # Keep marker visible
                     "current_node": "resolve_place_and_unit",
                     "current_place_index": idx,
                     "places": places,  # Use updated places array
@@ -291,4 +332,6 @@ def resolve_place_and_unit(state: lg_State):
 
 
 def select_unit_on_map(state: lg_State):
+    """Legacy compatibility function - routes to update_polygon_selection."""
+    _ = state  # Unused but required by interface
     return Command(goto="update_polygon_selection")
