@@ -122,10 +122,10 @@ def create_map_layout(assets_folder):
                                     style=map_namespace("style_function"),
                                 ),
                                 # # Layer for place disambiguation markers
-                                # html.Div(
-                                #     id="place-disambiguation-markers",
-                                #     children=[],  # Will be populated dynamically with dl.Marker components
-                                # ),
+                                html.Div(
+                                    id="place-disambiguation-markers",
+                                    children=[],  # Will be populated dynamically with dl.Marker components
+                                ),
                             ],
                             center=[55.0, 9.0],
                             zoom=5,

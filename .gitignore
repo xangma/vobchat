@@ -24,6 +24,7 @@ polygons*
 *.log
 backend.log
 frontend.log
+test_intent_handling_results*
 
 # ====================
 # Project Specific

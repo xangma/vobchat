@@ -51,7 +51,7 @@ from vobchat.utils.redis_checkpoint import AsyncRedisSaver
 from vobchat.utils.redis_pool import redis_pool_manager
 from vobchat.nodes import (
     ShowState_node, ListThemes_node, Reset_node,
-    AddPlace_node, RemovePlace_node,
+    AddPlace_node, RemovePlace_node, PlaceInfo_node,
     AddTheme_node, RemoveTheme_node,
     DescribeTheme_node,
     ask_followup_node,
@@ -276,6 +276,7 @@ def create_workflow(lg_state: TypedDict):
     workflow.add_node("Reset_node", Reset_node)
     workflow.add_node("AddPlace_node", AddPlace_node)
     workflow.add_node("RemovePlace_node", RemovePlace_node)
+    workflow.add_node("PlaceInfo_node", PlaceInfo_node)
     workflow.add_node("AddTheme_node", AddTheme_node)
     workflow.add_node("RemoveTheme_node", RemoveTheme_node)
 

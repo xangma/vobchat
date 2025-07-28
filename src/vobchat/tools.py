@@ -557,4 +557,29 @@ def get_theme_text(theme_code: Annotated[str, "Theme code e.g. T_POP"]):
     if df.empty:
         return pd.DataFrame(columns=["ent_id", "labl", "text"]).to_json(orient='records', force_ascii=False, default_handler=str)
     return df.to_json(orient='records', force_ascii=False, default_handler=str)
+
+# ────────────────────────────────────────────────────────────────────────────
+# get key findings for a place
+# ────────────────────────────────────────────────────────────────────────────
+@tool
+def get_place_key_findings(g_unit: Annotated[int, "Unit identifier for the place"]):
+    """Return key findings for a place from g_unit_key_findings table."""
+    query = f"""
+        SELECT 
+            g_url, 
+            g_label, 
+            g_text 
+        FROM 
+            hgis.g_unit_key_findings 
+        WHERE 
+            g_unit = {g_unit} 
+        ORDER BY g_seq 
+        LIMIT 8;
+    """
+    dbtool = QuerySQLDataBaseTool(db=db)
+    res = dbtool.db._execute(query)
+    df = pd.DataFrame(res, columns=["g_url", "g_label", "g_text"])
+    if df.empty:
+        return pd.DataFrame(columns=["g_url", "g_label", "g_text"]).to_json(orient='records', force_ascii=False, default_handler=str)
+    return df.to_json(orient='records', force_ascii=False, default_handler=str)
 # ─────────────────────────────────────────────────────────────────────────────

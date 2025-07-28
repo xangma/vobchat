@@ -11,6 +11,7 @@ This package contains all the individual node implementations organized by funct
 from .place_nodes import (
     AddPlace_node,
     RemovePlace_node,
+    PlaceInfo_node,
     postcode_tool_call,
     multi_place_tool_call
 )
@@ -42,6 +43,7 @@ __all__ = [
     # Place nodes
     'AddPlace_node',
     'RemovePlace_node',
+    'PlaceInfo_node',
     'postcode_tool_call',
     'multi_place_tool_call',
     # Theme nodes

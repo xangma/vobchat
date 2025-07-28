@@ -20,6 +20,7 @@ class AssistantIntent(str, Enum):
     REMOVE_THEME = "RemoveTheme"
     SHOW_STATE = "ShowState"
     LIST_ALL_THEMES = "ListThemes"
+    PLACE_INFO = "PlaceInfo"  # general information about a place
     RESET = "Reset"
     CHAT = "Chat"  # free-form response - no state mutation
 
@@ -75,19 +76,32 @@ _INTENT_EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
 
         • If the user explicitly asks to add / include a place/s, use AddPlace and return {{"place": "<name>"}}.
         • IMPORTANT: Location queries like "Where's X?", "Show me X", "Find X" where X is a place name should use AddPlace with {{"place": "<name>"}}.
+        • For general place information requests like "Tell me about X", "What do you know about X", "Information about X", "Describe X" where X is a place name, use PlaceInfo with {{"place": "<name>"}}.
         • For "What about X?" queries, analyze the context:
             - If X appears to be asking for information/explanation about a concept, statistical category, or data theme, use DescribeTheme
-            - If X is clearly a geographic location (city, region, etc.), use AddPlace
+            - If X is clearly a geographic location (city, region, etc.) and asking for general information, use PlaceInfo
+            - If X is a geographic location and asking to add it to selection, use AddPlace
             - Consider the conversational context and what type of information the user is seeking
         • If they ask to remove a place/s, RemovePlace with {{"place": "<name>"}}.
-        • If they mention a postcode, treat it as AddPlace with {{"postcode": "<code>"}}.
+        • CRITICAL: If they mention a postcode (UK format like "SW1A 1AA", "M1 1AE", "OX1 3QD"), treat it as AddPlace with {{"place": "<code>", "postcode": "<code>"}}.
         • If they request a statistical topic, use AddTheme with {{"theme_query": "<words from user>"}}.
         • If they ask to change the theme, switch themes, or want different data categories, use AddTheme with {{"theme_query": "<words from user>"}}.
-        • IMPORTANT: "Change theme to X", "switch to X", "use X theme", "back to X", "set theme to X" are ALL AddTheme intents, NOT RemoveTheme.
-        • If they ask for "[theme] stats for [places]" or "show [theme] data for [places]", extract BOTH:
+        • IMPORTANT: "Change theme to X", "switch to X", "use X theme", "use X statistics", "back to X", "set theme to X" are ALL AddTheme intents, NOT RemoveTheme or ListThemes.
+        • CRITICAL: If the query contains "stats", "data", or "statistics" (with or without "for") and place names, you MUST extract:
             - AddPlace for EACH place mentioned separately: {{"place": "<place_name>"}}
             - AddTheme for the theme: {{"theme_query": "<theme_words>"}}
-        • IMPORTANT: Always look for place names/city names in requests, even if they ask for data or stats "for" those places. Extract each place as a separate AddPlace intent.
+        • IMPORTANT: Even simple queries like "stats for london" must extract BOTH AddPlace {{"place": "london"}} AND AddTheme (even if no specific theme is mentioned)
+        • This applies to ALL patterns including but not limited to:
+            - "[theme] stats for [places]"
+            - "get [theme] data for [places]"
+            - "please get [theme] statistics for [places]"
+            - "show [theme] stats for [places]"
+            - ANY variation with stats/data/statistics and place names
+            - "fetch [theme] data for [places]"
+            - "display [theme] statistics for [places]"
+        • CRITICAL: Always look for ALL place names/city names in requests, especially in patterns like "[THEME] [stats/data/statistics] for [PLACE1] and [PLACE2]". 
+        • CRITICAL: When you see "place1 and place2", extract BOTH as separate AddPlace intents: AddPlace {{"place": "place1"}}, AddPlace {{"place": "place2"}}
+        • CRITICAL: Extract each place as a separate AddPlace intent AND extract the theme as AddTheme.
         • DescribeTheme is ONLY for asking about theme definitions/descriptions, like "What is the Population theme?", "Explain Housing statistics", NOT for place queries.
         • RemoveTheme is ONLY for explicitly clearing/removing themes, like "remove the theme", "clear theme", "no theme". NOT for changing themes.
         • For state inspection requests ("what have I selected?", "show my current selection") use ShowState.
@@ -106,8 +120,26 @@ _INTENT_EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
         • "Find [VillageDelta]" →
         AddPlace {{"place": "VillageDelta"}}
 
+        • "SW1A 1AA" →
+        AddPlace {{"place": "SW1A 1AA", "postcode": "SW1A 1AA"}}
+
+        • "show data for M1 1AE" →
+        AddPlace {{"place": "M1 1AE", "postcode": "M1 1AE"}}, AddTheme {{"theme_query": "data"}}
+
+        • "population stats for OX1 3QD" →
+        AddPlace {{"place": "OX1 3QD", "postcode": "OX1 3QD"}}, AddTheme {{"theme_query": "population"}}
+
         • "What about [RegionOmega]?" →
         AddPlace {{"place": "RegionOmega"}}
+
+        • "Tell me about [TownX]" →
+        PlaceInfo {{"place": "TownX"}}
+
+        • "What do you know about [CityDelta]?" →
+        PlaceInfo {{"place": "CityDelta"}}
+
+        • "Information about [VillageGamma]" →
+        PlaceInfo {{"place": "VillageGamma"}}
 
         • "The place, [TownX]" →
         AddPlace {{"place": "TownX"}}
@@ -115,8 +147,35 @@ _INTENT_EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
         • "Please show [ThemeOne] stats for [CityBeta] and [CityGamma]" →
         AddPlace {{"place": "CityBeta"}}, AddPlace {{"place": "CityGamma"}}, AddTheme {{"theme_query": "ThemeOne"}}
 
+        • "please get population stats for portsmouth and newport" →
+        AddPlace {{"place": "portsmouth"}}, AddPlace {{"place": "newport"}}, AddTheme {{"theme_query": "population"}}
+
         • "[ThemeTwo] data for [MetroOne]" →
         AddPlace {{"place": "MetroOne"}}, AddTheme {{"theme_query": "ThemeTwo"}}
+
+        • "[ThemeThree] stats for [CityDelta] and [CityEpsilon]" →
+        AddPlace {{"place": "CityDelta"}}, AddPlace {{"place": "CityEpsilon"}}, AddTheme {{"theme_query": "ThemeThree"}}
+
+        • "population stats for portsmouth and newport" →
+        AddPlace {{"place": "portsmouth"}}, AddPlace {{"place": "newport"}}, AddTheme {{"theme_query": "population"}}
+
+        • "education data for birmingham and leeds" →
+        AddPlace {{"place": "birmingham"}}, AddPlace {{"place": "leeds"}}, AddTheme {{"theme_query": "education"}}
+
+        • "fetch education data for aberdeen and inverness" →
+        AddPlace {{"place": "aberdeen"}}, AddPlace {{"place": "inverness"}}, AddTheme {{"theme_query": "education"}}
+
+        • "stats for london" →
+        AddPlace {{"place": "london"}}, AddTheme {{"theme_query": "stats"}}
+
+        • "use employment statistics" →
+        AddTheme {{"theme_query": "employment statistics"}}
+
+        • "housing stats for my selected places and also add birmingham" →
+        AddPlace {{"place": "birmingham"}}, AddTheme {{"theme_query": "housing"}}
+
+        • "housing statistics for london" →
+        AddPlace {{"place": "london"}}, AddTheme {{"theme_query": "housing"}}
 
         • "Add [MunicipalityAlpha] and [MunicipalityBeta]" →
         AddPlace {{"place": "MunicipalityAlpha"}}, AddPlace {{"place": "MunicipalityBeta"}}
@@ -173,53 +232,8 @@ _intent_extraction_chain = _INTENT_EXTRACT_PROMPT | _intent_llm.with_structured_
 
 def extract_intent(user_text: str, messages: list[AnyMessage]) -> AssistantIntentPayload:
     """
-    Call the LLM, read the raw text, then parse / validate it with Pydantic.
-    If the model doesn't give valid JSON we fall back to the Chat intent.
+    Extract intents using specialized subagents for better accuracy.
     """
-
-    # 1. Use the structured output chain to get direct Pydantic object
-    try:
-        history_snippet = "\n".join(str(m.content) for m in messages[:-1])   # Convert to string and tune N
-
-        # 2. get the LLM's reply using structured output chain
-        logger.info(f"Extracting intent for user text: '{user_text}'")
-
-        try:
-            # CRITICAL: Use structured output chain to avoid JSON parsing issues
-            import time
-            start_time = time.time()
-            logger.info("Starting LLM intent extraction using structured output chain")
-
-            # Invoke the chain directly with the input parameters
-            intent_payload = _intent_extraction_chain.invoke({
-                "intent_list": intent_list,
-                "history": history_snippet,
-                "text": user_text,
-            })
-
-            end_time = time.time()
-            logger.info(f"LLM intent extraction completed in {end_time - start_time:.2f}s")
-
-            # Ensure we got a proper AssistantIntentPayload object
-            if isinstance(intent_payload, AssistantIntentPayload):
-                logger.info(f"Extracted intents: {[intent.intent.value for intent in intent_payload.intents]}")
-                logger.info(f"Full intent payload: {intent_payload.model_dump()}")
-                return intent_payload
-            else:
-                logger.warning(f"Structured output returned unexpected type: {type(intent_payload)}")
-                # Fallback to Chat intent
-                return AssistantIntentPayload(
-                    intents=[SingleIntent(intent=AssistantIntent.CHAT, arguments={"text": "I'm having trouble understanding. Could you please rephrase your request?"})],
-                )
-        except Exception as llm_error:
-            logger.error(f"LLM invocation failed: {llm_error}")
-            # Fallback to Chat intent if LLM fails
-            return AssistantIntentPayload(
-                intents=[SingleIntent(intent=AssistantIntent.CHAT, arguments={"text": f"I'm having trouble processing your request: {user_text}. Could you please try rephrasing?"})],
-            )
-    except Exception as prompt_error:
-        logger.error(f"Error building prompt: {prompt_error}")
-        # Fallback to Chat intent if prompt building fails
-        return AssistantIntentPayload(
-            intents=[SingleIntent(intent=AssistantIntent.CHAT, arguments={"text": "I'm having trouble understanding. Could you please rephrase your request?"})],
-        )
+    from .intent_subagents import extract_intent_with_subagents
+    logger.info("Using subagent approach for intent extraction")
+    return extract_intent_with_subagents(user_text, messages)

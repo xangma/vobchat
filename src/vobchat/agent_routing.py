@@ -123,7 +123,7 @@ def agent_node(state: lg_State):
                 # When multiple intents are detected, prioritize certain intents over others
                 all_intents = extracted_payload_obj.intents
 
-                # Priority order: AddPlace > AddTheme > DescribeTheme > other intents > Chat
+                # Priority order: AddPlace > AddTheme > DescribeTheme > PlaceInfo > other intents > Chat
                 priority_order = [
                     AssistantIntent.ADD_PLACE,
                     AssistantIntent.REMOVE_PLACE,
@@ -131,6 +131,7 @@ def agent_node(state: lg_State):
                     AssistantIntent.REMOVE_THEME,
                     AssistantIntent.SHOW_STATE,
                     AssistantIntent.DESCRIBE_THEME,  # Moved higher - specific theme descriptions should override general lists
+                    AssistantIntent.PLACE_INFO,
                     AssistantIntent.LIST_ALL_THEMES,
                     AssistantIntent.RESET,
                     AssistantIntent.CHAT
