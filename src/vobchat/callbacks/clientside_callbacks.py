@@ -62,6 +62,13 @@ def register_simple_clientside_callbacks(app: Dash):
                 new_state.places = [];
                 new_toggle_text = "Hide unselected polygons";
                 state_changed = true;
+
+                // Clear any pending chat option buttons when selections are reset
+                try {
+                    if (window.simpleSSE && typeof window.simpleSSE.clearButtons === 'function') {
+                        window.simpleSSE.clearButtons();
+                    }
+                } catch (e) { /* no-op */ }
             }
             // Handle Unit Filters
             else if (triggered_id.includes('unit-filter')) {
@@ -146,6 +153,13 @@ def register_simple_clientside_callbacks(app: Dash):
                             const result = window.pureMapState.userDeselectPolygon(fid);
                             console.log('Map click: pureMapState deselect result:', result);
                         }
+
+                        // Clear any pending chat option buttons if user deselects the polygon
+                        try {
+                            if (window.simpleSSE && typeof window.simpleSSE.clearButtons === 'function') {
+                                window.simpleSSE.clearButtons();
+                            }
+                        } catch (e) { /* no-op */ }
                     } else {
                         // Add polygon
                         add_trigger = {
