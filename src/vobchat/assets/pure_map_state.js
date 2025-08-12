@@ -37,7 +37,8 @@ class PureMapState {
 
             console.log('PureMapState: User selected polygon:', polygonIdStr, 'type:', unitType);
             this._updateMapDisplay();
-            this._zoomToPolygons([polygonIdStr]); // Zoom to the selected polygon
+            // Perform immediate local zoom for responsive UX; SSE will skip if recent zoom detected
+            this._zoomToPolygons([polygonIdStr]);
             this._notifyWorkflow('polygon_selected', { polygonId: polygonIdStr, unitType });
 
             return true; // Selection added
@@ -277,9 +278,7 @@ class PureMapState {
     }
 
     _workflowZoomToSelection() {
-        if (this.userState.selectedPolygons.length > 0) {
-            this._zoomToPolygons(this.userState.selectedPolygons);
-        }
+        // Zoom responsibility is handled by SSE-driven map_update_request.
     }
 
     // === INTERNAL HELPERS ===
@@ -305,7 +304,7 @@ class PureMapState {
                         window.polygonManagement.refreshLayerStyles(layer, this.userState.selectedPolygons);
                     }
                 }
-                map.fire('moveend');
+                // Do not manually fire moveend; it triggers unwanted auto-loads
 
                 // Also update the map-state store for consistency with other UI components
                 const mapStateStore = document.querySelector('#map-state');
@@ -347,6 +346,12 @@ class PureMapState {
 
           if (map && window.polygonManagement && window.polygonManagement.zoomTo) {
                 console.log('PureMapState: Zooming to polygons:', polygonIds);
+              // Record a recent local zoom so SSE can avoid duplicate zoom
+              try {
+                  window._lastLocalZoomTs = Date.now();
+                  window._lastLocalZoomIds = (polygonIds || []).map(String);
+                  window._zoomSource = 'pureMapState';
+              } catch (e) { /* ignore */ }
               window.polygonManagement.zoomTo(map, polygonIds);
             } else {
             console.error('PureMapState: Map or polygonManagement.zoomTo not available');

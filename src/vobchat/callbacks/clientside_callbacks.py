@@ -492,11 +492,11 @@ def register_simple_clientside_callbacks(app: Dash):
             console.log("SSE callback triggered with thread ID:", thread_id, "and status:", sse_status);
 
             // Handle SSE connection status that includes workflow input
-            if (sse_status && sse_status.connect_sse && sse_status.thread_id && window.simpleSSE) {
+            if (sse_status && sse_status.connect_sse && sse_status.thread_id) {
                 console.log("SSE: Connecting with workflow input:", sse_status.workflow_input);
                 
                 // Clear disambiguation mode if requested
-                if (sse_status.clear_disambiguation_mode && window.simpleSSE.clearDisambiguationMode) {
+                if (sse_status.clear_disambiguation_mode && window.simpleSSE?.clearDisambiguationMode) {
                     console.log("SSE: Clearing disambiguation mode");
                     window.simpleSSE.clearDisambiguationMode();
                 }

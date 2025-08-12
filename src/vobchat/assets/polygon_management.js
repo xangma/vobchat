@@ -77,7 +77,20 @@
     lastZoomEnd: 0,
     programmaticZoomInProgress: false,
     programmaticZoomAnimating: false,
-    geojsonLayerReady: false
+    geojsonLayerReady: false,
+    suppressedMoveendCount: 0,
+    suppressedThisZoomCount: 0,
+    zoomSource: null,
+    // instrumentation
+    zoomSessionId: null,
+    zoomSessionsStarted: 0,
+    zoomSessionsCompleted: 0,
+    zoomendProgrammaticCount: 0,
+    zoomendUserCount: 0,
+    moveendProcessedCount: 0,
+    fetchByIdsCalls: 0,
+    updateByBoundsCalls: 0,
+    refreshStylesCalls: 0
   };
 
   /**
@@ -143,6 +156,8 @@
     const ctx = { hideout: { selected: sel } };
     const styleFn = layer.options?.style || window.map_leaflet?.style_function;
     if (!styleFn) { ERR('No style function found to refresh layer styles'); return; }
+    flags.refreshStylesCalls += 1;
+    LOG(`refreshLayerStyles (#${flags.refreshStylesCalls}) — selected=${sel.length}`);
     Object.values(layer._layers).forEach(l => l.feature && l.setStyle(styleFn(l.feature, ctx)));
   };
 
@@ -162,25 +177,43 @@
     /* zoomend */
     map.on('zoomend', () => {
       LOG('zoomend');
-      if (flags.programmaticZoomAnimating) {
+      if (flags.programmaticZoomAnimating || flags.programmaticZoomInProgress) {
+        // End of animation: keep InProgress true until the following moveend,
+        // so that moveend gets suppressed once.
         flags.programmaticZoomAnimating = false;
-        flags.programmaticZoomInProgress = false;
+        flags.zoomendProgrammaticCount += 1;
+        LOG(`zoomend (programmatic) — session=${flags.zoomSessionId} source=${flags.zoomSource} count=${flags.zoomendProgrammaticCount}; awaiting moveend to clear suppression`);
         // Notify Dash cleanup callback via hidden store
         window.dash_clientside?.set_props?.('zoom-cleanup-trigger-store', {
           data: { ts: Date.now(), zoom_completed: true }
         });
         return; // swallow event
       }
-      if (!flags.programmaticZoomInProgress) {
-        flags.lastZoomEnd = Date.now();
-        window.dash_clientside?.set_props?.('map-moveend-trigger', { data: Date.now() });
-      }
+      // User-driven zoom end: trigger a moveend processing tick
+      flags.zoomendUserCount += 1;
+      flags.lastZoomEnd = Date.now();
+      window.dash_clientside?.set_props?.('map-moveend-trigger', { data: Date.now() });
     });
 
     /* moveend (debounced) */
     map.on('moveend', debounce(() => {
+      // Suppress the first moveend after a programmatic zoom, then clear flag
+      if (flags.programmaticZoomAnimating || flags.programmaticZoomInProgress) {
+        flags.suppressedMoveendCount += 1;
+        flags.suppressedThisZoomCount += 1;
+        LOG(`moveend (suppressed during programmatic zoom) — session=${flags.zoomSessionId} source=${flags.zoomSource} thisZoom=${flags.suppressedThisZoomCount} total=${flags.suppressedMoveendCount}`);
+        flags.programmaticZoomInProgress = false;
+        flags.programmaticZoomAnimating = false;
+        flags.zoomSessionsCompleted += 1;
+        LOG(`programmatic zoom suppression cleared — session=${flags.zoomSessionId} source=${flags.zoomSource} suppressedThisZoom=${flags.suppressedThisZoomCount} sessions started=${flags.zoomSessionsStarted} completed=${flags.zoomSessionsCompleted}`);
+        flags.zoomSource = null;
+        flags.suppressedThisZoomCount = 0;
+        flags.zoomSessionId = null;
+        return;
+      }
       LOG('moveend');
-      // if (flags.programmaticZoomAnimating || flags.programmaticZoomInProgress) return;
+      flags.moveendProcessedCount += 1;
+      LOG(`moveend processed (#${flags.moveendProcessedCount})`);
       window.dash_clientside?.set_props?.('map-moveend-trigger', { data: Date.now() });
     }));
 
@@ -192,6 +225,7 @@
      ─────────────────────────────────────────────────────── */
 
   const fetchPolygonsByBounds = (unitTypes, bounds, cachedIds, yearRange) => {
+    LOG(`fetchPolygonsByBounds — unitTypes=${unitTypes.join(',')} cachedIds=${cachedIds.length} yearRange=${yearRange ? yearRange.min+'-'+yearRange.max : 'none'}`);
     if (!unitTypes.length) return Promise.reject('No unitTypes supplied');
     const [sw, ne] = [bounds.getSouthWest(), bounds.getNorthEast()];
     const boundsObj = { minX: sw.lng, minY: sw.lat, maxX: ne.lng, maxY: ne.lat };
@@ -238,6 +272,7 @@
       fetchPromise = fetch(url, { headers: { Accept: 'application/json' } });
     }
 
+    const startedAt = Date.now();
     const p = fetchPromise
       .then(r => r.ok ? r.json() : r.text().then(t => Promise.reject(`${r.status} ${t}`)))
       .then(data => {
@@ -247,6 +282,7 @@
           const t = f.properties?.g_unit_type;
           if (t) (cache.featuresByUnitType[t] ||= new Set()).add(f.id);
         });
+        LOG(`fetchPolygonsByBounds: received ${data.features.length} features in ${Date.now()-startedAt}ms`);
         return data;
       })
       .finally(() => delete cache.pendingRequests[cacheKey]);
@@ -256,10 +292,13 @@
   };
 
   const fetchPolygonsByIds = (map, mapState, unitType, ids, yearRange) => {
+    flags.fetchByIdsCalls += 1;
+    LOG(`fetchPolygonsByIds call #${flags.fetchByIdsCalls} — unitType=${unitType} ids=${ids?.length}`);
     if (!ids.length) return Promise.resolve({ type: 'FeatureCollection', features: [] });
 
     const missing = ids.filter(id => !cache.featureById[id]);
     const existing = ids.filter(id => cache.featureById[id]).map(id => cache.featureById[id]);
+    LOG(`fetchPolygonsByIds: have=${ids.length - missing.length} missing=${missing.length}`);
 
     const fetchPromise = !missing.length ? Promise.resolve({ features: [] }) : (() => {
       const url = new URL('/api/polygons/ids', window.location.origin);
@@ -276,12 +315,33 @@
         cache.featureById[f.id] = f;
         (cache.featuresByUnitType[f.properties?.g_unit_type] ||= new Set()).add(f.id);
       });
-      const all = [...existing, ...features];
+      // Combine existing-cached and newly fetched, de-duplicate by ID
+      const combined = [...existing, ...features];
+      const byId = Object.create(null);
+      combined.forEach(f => { if (f && f.id != null) byId[String(f.id)] = f; });
+      const uniqueFeatures = Object.values(byId);
+
       const layer = findGeoJSONLayer(map);
-      if (layer) layer.addData({ type: 'FeatureCollection', features: all });
+      if (layer) {
+        // Remove any existing layer entries for the IDs we are about to add
+        const idsToReplace = new Set(uniqueFeatures.map(f => String(f.id)));
+        if (layer._layers) {
+          Object.values(layer._layers).forEach(l => {
+            if (l?.feature?.id != null && idsToReplace.has(String(l.feature.id))) {
+              layer.removeLayer(l);
+            }
+          });
+        }
+
+        // Add unique features
+        if (uniqueFeatures.length) {
+          layer.addData({ type: 'FeatureCollection', features: uniqueFeatures });
+        }
+      }
       const selectedPolygons = getSelectedPolygonsFromPlaces(mapState);
       refreshLayerStyles(layer, selectedPolygons);
-      return { type: 'FeatureCollection', features: all };
+      LOG(`fetchPolygonsByIds: added=${uniqueFeatures.length} layerSize=${Object.keys(layer?._layers || {}).length}`);
+      return { type: 'FeatureCollection', features: uniqueFeatures };
     });
   };
 
@@ -290,6 +350,9 @@
      ─────────────────────────────────────────────────────── */
 
   const updateMapWithBounds = (map, unitTypes, bounds, mapState, yearRange) => {
+    flags.updateByBoundsCalls += 1;
+    const key = getBoundsKey(bounds);
+    LOG(`updateMapWithBounds call #${flags.updateByBoundsCalls} — unitTypes=${unitTypes.join(',')} bounds=${key}`);
     const layer = findGeoJSONLayer(map);
     if (!layer) return Promise.reject('GeoJSON layer not ready');
 
@@ -307,6 +370,7 @@
         layer.clearLayers();
         if (toDisplay.length) layer.addData({ type: 'FeatureCollection', features: toDisplay });
         refreshLayerStyles(layer, selected);
+        LOG(`updateMapWithBounds: displayed=${toDisplay.length} selected=${selected.length} show_unselected=${showUnselected}`);
         return { type: 'FeatureCollection', features: toDisplay };
       });
   };
@@ -331,6 +395,24 @@
     });
     if (!count || !bounds.isValid()) return;
 
+    // Mark programmatic zoom to suppress moveend-triggered auto-loads
+    const newSessionId = `${Date.now()}-${Math.floor(Math.random()*10000)}`;
+    flags.zoomSessionId = newSessionId;
+    flags.zoomSessionsStarted += 1;
+    // Capture and clear an external source tag if set
+    try {
+      if (typeof window !== 'undefined' && window._zoomSource) {
+        flags.zoomSource = window._zoomSource;
+        window._zoomSource = null;
+      } else {
+        flags.zoomSource = flags.zoomSource || 'unknown';
+      }
+    } catch (e) {
+      flags.zoomSource = 'unknown';
+    }
+    flags.suppressedThisZoomCount = 0;
+    LOG(`zoomTo: starting programmatic zoom — session=${newSessionId} source=${flags.zoomSource} ids=${ids?.length ?? 'all'}`);
+    flags.programmaticZoomInProgress = true;
     flags.programmaticZoomAnimating = true;
     map.fitBounds(bounds, { padding: ZOOM_PADDING, maxZoom: MAX_ZOOM, animate: true, duration: 0.5 });
   };

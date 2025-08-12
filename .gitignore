@@ -11,6 +11,7 @@ __pycache__/
 *.db
 vobchat.egg-info/
 src/instance/users.db
+src/file_system_backend/
 
 # ====================
 # Cache / Temp / Logs

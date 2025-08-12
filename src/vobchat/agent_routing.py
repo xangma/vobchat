@@ -30,8 +30,39 @@ def agent_node(state: lg_State):
     last_msg = state.get("messages", [])[-1] if state.get("messages") else None
     has_new_human_message = last_msg and isinstance(last_msg, HumanMessage)
 
-    # CRITICAL: Check if there are more places to process before any intent processing
-    # This ensures multi-place workflows continue properly
+    # Priority 1: Check for pre-set intent from Command update (e.g., map click)
+    # Process explicit intents (AddPlace/RemovePlace/etc.) BEFORE resuming multi-place/theme flow.
+    # BUT only if there's no new human message to process
+    pre_set_payload = state.get("last_intent_payload")
+    if pre_set_payload and pre_set_payload.get("intent") and not has_new_human_message:
+        try:
+            intent_val = pre_set_payload["intent"]
+            final_intent = AssistantIntent(intent_val)
+            final_args = pre_set_payload.get("arguments", {})
+            payload_to_route = pre_set_payload
+            logging.info(f"agent_node: Using pre-set intent '{final_intent.value}' from Command/State.")
+            target_node = f"{final_intent.value}_node"
+            logging.info(f"agent_node: Routing to target node: {target_node}")
+            # Ensure the payload used for the update is the one we determined needed routing
+            # CRITICAL: Include last_intent_payload in Command update so target nodes can access it
+            update_for_command = {
+                "intent_queue": state.get("intent_queue", []), # Pass cleaned queue (cleaning happened earlier)
+                # CRITICAL: Preserve last_intent_payload for target nodes that need it (like DescribeTheme_node)
+                "last_intent_payload": payload_to_route,
+            }
+
+            # CRITICAL: DON'T clear last_intent_payload here - let the target node clear it after processing
+            # If we clear it in the Command update, the target node won't see the arguments
+            logger.info(f"agent_node: Routing to {target_node} with payload intact - target node will clear after processing")
+
+            return Command(goto=target_node, update=update_for_command)
+
+        except ValueError:
+            logging.warning(f"agent_node: Invalid intent '{pre_set_payload.get('intent')}' in last_intent_payload.")
+            state["last_intent_payload"] = None # Clear invalid payload
+
+    # CRITICAL: Check if there are more places to process (after handling pre-set intents)
+    # This ensures user clicks for RemovePlace/AddPlace are honored immediately.
     num_places = len(state.get("places", []) or [])
     current_index = state.get("current_place_index", 0) or 0
     if num_places > 0 and current_index < num_places:
@@ -68,36 +99,6 @@ def agent_node(state: lg_State):
             else:
                 logging.info(f"agent_node: All places processed ({current_index}/{num_places}), routing to theme selection")
                 return Command(goto="resolve_theme")
-
-    # Priority 1: Check for pre-set intent from Command update (e.g., map click)
-    # BUT only if there's no new human message to process
-    pre_set_payload = state.get("last_intent_payload")
-    if pre_set_payload and pre_set_payload.get("intent") and not has_new_human_message:
-        try:
-            intent_val = pre_set_payload["intent"]
-            final_intent = AssistantIntent(intent_val)
-            final_args = pre_set_payload.get("arguments", {})
-            payload_to_route = pre_set_payload
-            logging.info(f"agent_node: Using pre-set intent '{final_intent.value}' from Command/State.")
-            target_node = f"{final_intent.value}_node"
-            logging.info(f"agent_node: Routing to target node: {target_node}")
-            # Ensure the payload used for the update is the one we determined needed routing
-            # CRITICAL: Include last_intent_payload in Command update so target nodes can access it
-            update_for_command = {
-                "intent_queue": state.get("intent_queue", []), # Pass cleaned queue (cleaning happened earlier)
-                # CRITICAL: Preserve last_intent_payload for target nodes that need it (like DescribeTheme_node)
-                "last_intent_payload": payload_to_route,
-            }
-
-            # CRITICAL: DON'T clear last_intent_payload here - let the target node clear it after processing
-            # If we clear it in the Command update, the target node won't see the arguments
-            logger.info(f"agent_node: Routing to {target_node} with payload intact - target node will clear after processing")
-
-            return Command(goto=target_node, update=update_for_command)
-
-        except ValueError:
-            logging.warning(f"agent_node: Invalid intent '{pre_set_payload.get('intent')}' in last_intent_payload.")
-            state["last_intent_payload"] = None # Clear invalid payload
     # Priority 2: Check for fresh Human input (prioritized over stale payloads)
     if not final_intent and has_new_human_message:
         user_text = cast(str, last_msg.content).strip() if last_msg else ""

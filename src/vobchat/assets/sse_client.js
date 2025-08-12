@@ -8,6 +8,7 @@ class SimpleSSEClient {
         this.isConnected = false;
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 3;
+        this.lastPlacesSig = null;
 
         console.log('Simple SSE Client initialized');
     }
@@ -156,7 +157,7 @@ class SimpleSSEClient {
             return;
         }
 
-        // Handle messages array to update chat display
+        // Handle messages array to update chat display (deduped)
         if (state.messages && Array.isArray(state.messages)) {
             this.updateChatDisplay(state.messages);
         }
@@ -174,7 +175,7 @@ class SimpleSSEClient {
             console.log('SSE: Processing info marker request:', state.map_update_request);
             this.handleInfoMarkerRequest(state.map_update_request);
         } else if (state.places && Array.isArray(state.places)) {
-            // Use places as single source of truth
+            // Use places as single source of truth, but avoid redundant updates
             this.updateMapSelection(state.places);
         }
 
@@ -427,6 +428,14 @@ class SimpleSSEClient {
     updateMapSelection(places) {
         console.log('SSE: Updating map selection with places:', places);
 
+        // De-duplicate by skipping when places signature unchanged
+        const sig = this._placesSignature(places);
+        if (this.lastPlacesSig === sig) {
+            console.log('SSE: Places unchanged, skipping map selection update');
+            return;
+        }
+        this.lastPlacesSig = sig;
+
         // Use pure map state if available, otherwise fall back to dash store
         if (window.pureMapState) {
             window.pureMapState.executeWorkflowCommand({
@@ -458,6 +467,19 @@ class SimpleSSEClient {
                     }
                 });
             }
+        }
+    }
+
+    // Internal: stable signature for places to avoid redundant updates
+    _placesSignature(places) {
+        try {
+            const keyParts = (places || [])
+                .filter(p => p && p.g_unit !== null && p.g_unit !== undefined)
+                .map(p => `${String(p.g_unit)}:${p.g_unit_type || ''}`)
+                .sort();
+            return keyParts.join('|');
+        } catch (e) {
+            return String(Date.now());
         }
     }
 
@@ -618,14 +640,23 @@ class SimpleSSEClient {
             const unitTypes = this.getSelectedUnitTypes({places: request.places});
             console.log('SSE: Extracted units from map update request:', units, 'unit types:', unitTypes);
 
-            // Always sync the selected polygons using places as single source of truth
-            // This handles both adding polygons and clearing them (when empty)
-            window.pureMapState.executeWorkflowCommand({
-                type: 'sync_state',
-                state: {
-                    places: request.places
-                }
-            });
+            // Sync the selected polygons using places as single source of truth
+            // Only if selection actually differs from current map state
+            const currentSelected = (window.pureMapState?.getSelectedPolygons?.() || []).map(String);
+            const requestedSelected = (units || []).map(String);
+            const sameSelection = JSON.stringify([...currentSelected].sort()) === JSON.stringify([...requestedSelected].sort());
+            if (!sameSelection) {
+                window.pureMapState.executeWorkflowCommand({
+                    type: 'sync_state',
+                    state: {
+                        places: request.places
+                    }
+                });
+            } else {
+                console.log('SSE: Selection unchanged, skipping sync_state');
+            }
+            // Align dedupe signature with the request places
+            this.lastPlacesSig = this._placesSignature(request.places);
 
             // Check if we have selected place coordinates to include in zoom
             const selectedPlaceCoords = request.selected_place_coordinates || [];
@@ -863,86 +894,130 @@ class SimpleSSEClient {
 
             console.log('SSE: Calling fetchPolygonsByIds with:', {map, mapState, unitType, unitStrings});
 
-            // Fetch the polygon data first (using the correct parameter signature)
-            window.polygonManagement.fetchPolygonsByIds(map, mapState, unitType, unitStrings, null).then((result) => {
-                console.log('SSE: Polygons fetched from API, result:', result);
-                console.log('SSE: Features returned:', result.features?.map(f => f.id));
-                console.log('SSE: Now zooming to them');
-
-                // Find the GeoJSON layer that should now contain our polygons
-                const layer = window.polygonManagement.findGeoJSONLayer ?
-                    window.polygonManagement.findGeoJSONLayer(map) : null;
-
-                // Debug: Check what's actually on the layer
-                if (layer && layer._layers) {
-                    const layerIds = [];
-                    Object.values(layer._layers).forEach(l => {
-                        if (l.feature && l.feature.id) {
-                            layerIds.push(String(l.feature.id));
-                        }
-                    });
-                    console.log('SSE: Layer currently contains IDs:', layerIds);
-                    console.log('SSE: We want to zoom to IDs:', unitStrings);
-                    const missingIds = unitStrings.filter(id => !layerIds.includes(id));
-                    if (missingIds.length > 0) {
-                        console.warn('SSE: Missing polygon IDs on layer:', missingIds);
+            // If all requested polygons are already on the layer, skip fetching
+            const existingLayer = window.polygonManagement.findGeoJSONLayer ?
+                window.polygonManagement.findGeoJSONLayer(map) : null;
+            let allPresent = false;
+            if (existingLayer && existingLayer._layers) {
+                const layerIds = [];
+                Object.values(existingLayer._layers).forEach(l => {
+                    if (l.feature && l.feature.id) {
+                        layerIds.push(String(l.feature.id));
                     }
+                });
+                const missingIds = unitStrings.filter(id => !layerIds.includes(id));
+                allPresent = missingIds.length === 0;
+                if (allPresent) {
+                    console.log('SSE: All requested polygons already on layer; skipping fetch');
+                } else {
+                    console.warn('SSE: Missing polygon IDs on layer, will fetch:', missingIds);
                 }
+            }
 
+            const afterEnsurePolygons = (layer) => {
                 if (layer && polygonManagement.zoomTo) {
-                    console.log('SSE: Using zoomTo with layer and unit strings:', unitStrings);
-                    console.log('SSE: Including place coordinates in zoom:', includePlaceCoordinates);
+                    // If a recent local zoom for the same set of IDs occurred, skip SSE zoom to avoid double-zoom
+                    const recentLocalZoom = (function() {
+                        try {
+                            const tsOk = typeof window._lastLocalZoomTs === 'number' && (Date.now() - window._lastLocalZoomTs) < 1500;
+                            const sameIds = Array.isArray(window._lastLocalZoomIds) &&
+                                window._lastLocalZoomIds.slice().sort().join(',') === unitStrings.slice().sort().join(',');
+                            return tsOk && sameIds;
+                        } catch (e) { return false; }
+                    })();
 
-                    // Try combined zoom first if we have place coordinates
-                    let zoomApplied = false;
-                    if (includePlaceCoordinates && includePlaceCoordinates.length > 0) {
-                        console.log('SSE: Creating custom zoom bounds with place coordinates');
-                        zoomApplied = this.calculateCombinedZoomBounds(map, layer, unitStrings, includePlaceCoordinates);
-                    }
-                    
-                    // Fallback to original polygon zoom if combined zoom wasn't applied
-                    if (!zoomApplied) {
-                        console.log('SSE: Using standard polygon zoom');
-                        polygonManagement.zoomTo(map, unitStrings, layer);
+                    let zoomWasPerformed = false;
+                    if (!recentLocalZoom) {
+                        console.log('SSE: Considering zoom with units:', unitStrings, 'and place coords:', includePlaceCoordinates);
+
+                        // Try combined zoom first if we have place coordinates
+                        let zoomApplied = false;
+                        if (includePlaceCoordinates && includePlaceCoordinates.length > 0) {
+                            console.log('SSE: Creating custom zoom bounds with place coordinates');
+                            zoomApplied = this.calculateCombinedZoomBounds(map, layer, unitStrings, includePlaceCoordinates);
+                        }
+                        if (zoomApplied) {
+                            zoomWasPerformed = true;
+                        } else {
+                            console.log('SSE: Using standard polygon zoom');
+                            try { window._zoomSource = 'sse'; } catch (e) {}
+                            polygonManagement.zoomTo(map, unitStrings, layer);
+                            zoomWasPerformed = true;
+                        }
+                    } else {
+                        console.log('SSE: Skipping zoom (recent local zoom already applied)');
                     }
 
-                    // Only update unit types if we actually have units to zoom to
-                    console.log('SSE: Zoom initiated for units:', unitStrings);
+                    // Only update unit types if they differ from current
+                    if (zoomWasPerformed) {
+                        console.log('SSE: Zoom initiated for units:', unitStrings);
+                    } else {
+                        console.log('SSE: No zoom performed (units already centered)');
+                    }
                     if (unitTypes.length > 0 && unitStrings.length > 0) {
                         const uniqueUnitTypes = [...new Set(unitTypes)];
-                        console.log('SSE: Now switching to unit types:', uniqueUnitTypes);
-
-                        // Add delay to ensure zoom completes before unit type change
-                        setTimeout(() => {
-                            window.pureMapState.userSetUnitTypes(uniqueUnitTypes, false);
-                        }, 500);
+                        const currentUnitTypes = (window.pureMapState?.getUnitTypes?.() || []).slice().sort().join(',');
+                        const requestedUnitTypes = uniqueUnitTypes.slice().sort().join(',');
+                        if (currentUnitTypes !== requestedUnitTypes) {
+                            console.log('SSE: Now switching to unit types:', uniqueUnitTypes);
+                            setTimeout(() => {
+                                window.pureMapState.userSetUnitTypes(uniqueUnitTypes, false);
+                            }, 500);
+                        } else {
+                            console.log('SSE: Unit types unchanged, skipping update');
+                        }
                     } else {
                         console.log('SSE: No units to zoom to, skipping unit type update');
                     }
                 } else {
                     console.log('SSE: No layer or zoom function available, just updating unit types');
-                    // Fallback: just update unit types
                     if (unitTypes.length > 0) {
                         const uniqueUnitTypes = [...new Set(unitTypes)];
-                        window.pureMapState.userSetUnitTypes(uniqueUnitTypes, false);
+                        const currentUnitTypes = (window.pureMapState?.getUnitTypes?.() || []).slice().sort().join(',');
+                        const requestedUnitTypes = uniqueUnitTypes.slice().sort().join(',');
+                        if (currentUnitTypes !== requestedUnitTypes) {
+                            window.pureMapState.userSetUnitTypes(uniqueUnitTypes, false);
+                        }
                     }
                 }
-            }).catch(err => {
-                console.error('SSE: Failed to fetch polygons:', err);
-                // Fallback: try to zoom anyway and update unit types
-                window.pureMapState.executeWorkflowCommand({
-                    type: 'zoom_to_selection'
+            };
+
+            if (allPresent) {
+                afterEnsurePolygons(existingLayer);
+            } else {
+                // Fetch the polygon data first (using the correct parameter signature)
+                window.polygonManagement.fetchPolygonsByIds(map, mapState, unitType, unitStrings, null).then((result) => {
+                    console.log('SSE: Polygons fetched from API, result:', result);
+                    console.log('SSE: Features returned:', result.features?.map(f => f.id));
+                    console.log('SSE: Now zooming to them');
+                    const layer = window.polygonManagement.findGeoJSONLayer ?
+                        window.polygonManagement.findGeoJSONLayer(map) : null;
+                    afterEnsurePolygons(layer);
+                }).catch(err => {
+                    console.error('SSE: Failed to fetch polygons:', err);
+                    // Fallback: try to zoom anyway and update unit types
+                    window.pureMapState.executeWorkflowCommand({ type: 'zoom_to_selection' });
+                    if (unitTypes.length > 0) {
+                        const uniqueUnitTypes = [...new Set(unitTypes)];
+                        const currentUnitTypes = (window.pureMapState?.getUnitTypes?.() || []).slice().sort().join(',');
+                        const requestedUnitTypes = uniqueUnitTypes.slice().sort().join(',');
+                        if (currentUnitTypes !== requestedUnitTypes) {
+                            window.pureMapState.userSetUnitTypes(uniqueUnitTypes, false);
+                        }
+                    }
                 });
-                if (unitTypes.length > 0) {
-                    const uniqueUnitTypes = [...new Set(unitTypes)];
-                    window.pureMapState.userSetUnitTypes(uniqueUnitTypes, false);
-                }
-            });
+            }
         } else if (unitTypes.length > 0) {
             // No polygon fetching available, just update unit types
             const uniqueUnitTypes = [...new Set(unitTypes)];
-            console.log('SSE: No polygon management available, just updating unit types:', uniqueUnitTypes);
-            window.pureMapState.userSetUnitTypes(uniqueUnitTypes, false);
+            const currentUnitTypes = (window.pureMapState?.getUnitTypes?.() || []).slice().sort().join(',');
+            const requestedUnitTypes = uniqueUnitTypes.slice().sort().join(',');
+            if (currentUnitTypes !== requestedUnitTypes) {
+                console.log('SSE: No polygon management available, just updating unit types:', uniqueUnitTypes);
+                window.pureMapState.userSetUnitTypes(uniqueUnitTypes, false);
+            } else {
+                console.log('SSE: Unit types unchanged, skipping update');
+            }
         }
     }
 
@@ -1040,7 +1115,8 @@ class SimpleSSEClient {
         }
     }
 
-}
+    }
+
 
 // Create global instance
 window.simpleSSE = new SimpleSSEClient();
