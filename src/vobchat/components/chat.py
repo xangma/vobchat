@@ -38,23 +38,35 @@ def create_chat_layout():
         html.Div(
             style={"display": "flex", "flexDirection": "column", "height": "calc(100% - 40px)"},
             children=[
-                # Chat display (scrollable history rendered by SSE)
+                # Scrollable history and options (no overlay spinner)
                 html.Div(
-                    id="chat-display",
                     style={
                         "flex": "1 1 auto",
-                        "overflowY": "auto",
-                        "marginBottom": "10px",
-                        "border": "1px solid #dee2e6",
-                        "borderRadius": "5px",
-                        "padding": "10px"
-                    }
-                ),
+                        "display": "flex",
+                        "flexDirection": "column",
+                        "position": "relative",
+                        "minHeight": "0"
+                    },
+                    children=[
+                        # Chat display (scrollable history rendered by SSE)
+                        html.Div(
+                            id="chat-display",
+                            style={
+                                "flex": "1 1 auto",
+                                "overflowY": "auto",
+                                "marginBottom": "10px",
+                                "border": "1px solid #dee2e6",
+                                "borderRadius": "5px",
+                                "padding": "10px"
+                            }
+                        ),
 
-                # Transient options container for contextual buttons
-                html.Div(
-                    id="options-container",
-                    style={"marginBottom": "10px"}
+                        # Transient options container for contextual buttons
+                        html.Div(
+                            id="options-container",
+                            style={"marginBottom": "10px"}
+                        )
+                    ]
                 ),
 
                 # Fixed input area (never scrolls off screen)

@@ -238,6 +238,12 @@ class WorkflowSSEAdapter:
             logger.debug("Checkpoint scan failed: %s", exc)
 
         # --------------------------------------------------------------
+        # Proactively signal that the assistant is working
+        try:
+            await simple_sse_manager.state(thread_id, {"llm_busy": True})
+        except Exception:
+            logger.debug("Could not send initial llm_busy state")
+        llm_busy = True
         # Stream the graph
         # --------------------------------------------------------------
 
@@ -251,14 +257,38 @@ class WorkflowSSEAdapter:
                         ui_state["messages"] = serialize_messages(ui_state["messages"])
                     await simple_sse_manager.state(thread_id, ui_state)
 
+                    # Clear busy flag only when an AI message appears (not just echoing the human)
+                    if llm_busy and ui_state.get("messages"):
+                        try:
+                            msgs = ui_state["messages"]
+                            if isinstance(msgs, list) and any(isinstance(m, dict) and m.get("_type") == "ai" for m in msgs):
+                                await simple_sse_manager.state(thread_id, {"llm_busy": False})
+                                llm_busy = False
+                        except Exception:
+                            logger.debug("Could not update llm_busy False after AI message")
+
             # ----------------------------------------------------------
             # Final interrupt (if any) ---------------------------------
             st = await self.wf.aget_state(cfg)
             if st and st.tasks and st.tasks[-1].interrupts:
+                # Not waiting on the assistant any more – ensure busy flag cleared
+                if llm_busy:
+                    try:
+                        await simple_sse_manager.state(thread_id, {"llm_busy": False})
+                        llm_busy = False
+                    except Exception:
+                        logger.debug("Could not clear llm_busy before interrupt")
                 await simple_sse_manager.interrupt(thread_id, st.tasks[-1].interrupts[0].value)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Workflow run failed for %s", thread_id)
             await simple_sse_manager.error(thread_id, str(exc))
+        finally:
+            # If nothing triggered a clear, make sure to drop busy flag at end
+            if llm_busy:
+                try:
+                    await simple_sse_manager.state(thread_id, {"llm_busy": False})
+                except Exception:
+                    logger.debug("Could not clear llm_busy in finally")
 
 
 def create_simple_workflow_adapter(compiled_workflow):

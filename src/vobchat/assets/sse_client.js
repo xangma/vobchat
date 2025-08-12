@@ -9,6 +9,7 @@ class SimpleSSEClient {
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 3;
         this.lastPlacesSig = null;
+        this.llmBusy = false; // server-driven busy flag for thinking indicator
 
         console.log('Simple SSE Client initialized');
     }
@@ -26,6 +27,7 @@ class SimpleSSEClient {
             this.clearChatDisplay();
             this.clearButtons();
             this.hideVisualization();
+            this.hideThinkingIndicator?.();
         }
 
         // Build SSE URL with correct prefix
@@ -106,6 +108,7 @@ class SimpleSSEClient {
         this.eventSource.onerror = () => {
             console.error('SSE: Connection error');
             this.isConnected = false;
+            this.hideThinkingIndicator();
             this.attemptReconnect();
         };
     }
@@ -117,6 +120,7 @@ class SimpleSSEClient {
         }
         this.isConnected = false;
         this.threadId = null;
+        this.hideThinkingIndicator();
     }
 
     attemptReconnect() {
@@ -157,6 +161,16 @@ class SimpleSSEClient {
             return;
         }
 
+        // Handle explicit busy flag from server (drives thinking indicator)
+        if (Object.prototype.hasOwnProperty.call(state, 'llm_busy')) {
+            this.llmBusy = !!state.llm_busy;
+            if (this.llmBusy) {
+                this.showThinkingIndicator();
+            } else {
+                this.hideThinkingIndicator();
+            }
+        }
+
         // Handle messages array to update chat display (deduped)
         if (state.messages && Array.isArray(state.messages)) {
             this.updateChatDisplay(state.messages);
@@ -183,6 +197,8 @@ class SimpleSSEClient {
         if (state.units_needing_map_selection && Array.isArray(state.units_needing_map_selection) && state.units_needing_map_selection.length > 0) {
             console.log('SSE: Units needing map selection:', state.units_needing_map_selection);
             this.handleUnitsNeedingSelection(state.units_needing_map_selection, state.places);
+            // We're now waiting for user input, not the LLM
+            this.hideThinkingIndicator();
         }
 
         // Update stores via Dash (minimal, targeted updates only)
@@ -225,6 +241,8 @@ class SimpleSSEClient {
     // Simple interrupt handling - show buttons and handle state updates
     handleInterrupt(interruptData) {
         console.log('SSE: Received interrupt:', interruptData);
+        // Interrupt means waiting for user input; hide thinking indicator
+        this.hideThinkingIndicator();
 
         // Store current_node and full interrupt data for when buttons are clicked
         this.currentNode = interruptData.current_node || null;
@@ -405,6 +423,7 @@ class SimpleSSEClient {
     handleError(error) {
         console.error('SSE: Received error:', error);
         this.handleMessage(`Error: ${error}`);
+        this.hideThinkingIndicator();
     }
 
     // Helper: Update visualization panel
@@ -1108,6 +1127,11 @@ class SimpleSSEClient {
             }
         }
 
+        // If the assistant is busy, append a temporary thinking bubble
+        if (this.llmBusy) {
+            this.appendThinkingMessage(chatDisplay);
+        }
+
         // Re-enable send button after update
         const sendButton = document.getElementById('send-button');
         if (sendButton) {
@@ -1115,6 +1139,58 @@ class SimpleSSEClient {
         }
     }
 
+    // Inline thinking indicator helpers
+    appendThinkingMessage(chatDisplay) {
+        try {
+            let messageDiv = document.getElementById('ai-thinking');
+            if (messageDiv && messageDiv.parentNode) {
+                // Remove to reinsert at the desired position
+                messageDiv.parentNode.removeChild(messageDiv);
+            }
+            if (!messageDiv) {
+                messageDiv = document.createElement('div');
+                messageDiv.className = 'speech-bubble ai-bubble';
+                messageDiv.id = 'ai-thinking';
+                const spinner = document.createElement('span');
+                spinner.className = 'spinner-border spinner-border-sm text-primary me-2';
+                spinner.setAttribute('role', 'status');
+                spinner.setAttribute('aria-hidden', 'true');
+                const text = document.createElement('span');
+                text.textContent = 'Thinking…';
+                text.className = 'text-muted';
+                messageDiv.appendChild(spinner);
+                messageDiv.appendChild(text);
+            }
+
+            // With #chat-display using flex-direction: column-reverse,
+            // inserting as the FIRST child will render it just BELOW
+            // the newest message visually.
+            const first = chatDisplay.firstChild;
+            if (first) {
+                chatDisplay.insertBefore(messageDiv, first);
+            } else {
+                chatDisplay.appendChild(messageDiv);
+            }
+            chatDisplay.scrollTop = chatDisplay.scrollHeight;
+        } catch (e) { /* no-op */ }
+    }
+
+    showThinkingIndicator() {
+        try {
+            const chatDisplay = document.getElementById('chat-display');
+            if (!chatDisplay) return;
+            this.appendThinkingMessage(chatDisplay);
+        } catch (e) { /* no-op */ }
+    }
+
+    hideThinkingIndicator() {
+        try {
+            const el = document.getElementById('ai-thinking');
+            if (el && el.parentNode) {
+                el.parentNode.removeChild(el);
+            }
+        } catch (e) { /* no-op */ }
+    }
     }
 
 
