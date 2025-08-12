@@ -305,7 +305,12 @@ def AddTheme_node(state: lg_State) -> dict | Command:
 
 
 def ListThemes_node(state: lg_State):
-    """List themes - automatically shows themes for selected places if any, otherwise all themes."""
+    """List themes relevant to the current selection or the full catalogue.
+
+    If units are selected, lists themes available for those units; otherwise
+    lists all known themes. Does not interrupt; prints a formatted list into
+    the conversation and returns updated messages.
+    """
     sel_units = get_selected_units(state)
 
     # Get themes based on context - if there are selected places, show themes for those
@@ -337,6 +342,7 @@ def ListThemes_node(state: lg_State):
 
 
 def RemoveTheme_node(state: lg_State):
+    """Clear the currently-selected theme, if any, and acknowledge."""
     if not state.get("selected_theme"):
         _append_ai(state, "No theme is currently selected.")
         return {"messages": state["messages"]}
@@ -353,6 +359,12 @@ def RemoveTheme_node(state: lg_State):
 
 
 def DescribeTheme_node(state: lg_State):
+    """Show a short, cleaned description for the given or selected theme.
+
+    If an explicit theme is supplied via intent arguments it is resolved; else
+    the currently selected theme is described. Falls back to a helpful prompt
+    if nothing can be determined.
+    """
     payload = state.get("last_intent_payload", {})
     query = (payload.get("arguments", {}).get("theme") or "").strip()
 

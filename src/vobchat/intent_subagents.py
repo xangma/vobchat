@@ -1,6 +1,12 @@
-"""
-Intent extraction using specialized subagents.
-Each subagent focuses on a specific aspect of intent extraction for better accuracy.
+"""Intent extraction using specialized subagents.
+
+This module breaks the problem into three focused extractors:
+- Place extraction: names and postcodes
+- Theme extraction: statistical categories and theme-like phrases
+- Action extraction: high-level action classification (add/remove/list/etc.)
+
+An orchestrator combines these signals into the canonical `AssistantIntent`
+payload consumed by the workflow router.
 """
 
 from enum import Enum
@@ -18,7 +24,12 @@ from .intent_handling import AssistantIntent, SingleIntent, AssistantIntentPaylo
 logger = logging.getLogger(__name__)
 
 def _get_theme_labels() -> List[str]:
-    """Get theme labels from database for dynamic prompt inclusion."""
+    """Return theme labels for dynamic prompt inclusion.
+
+    Returns:
+        list[str]: A curated list of labels, falling back to common examples if
+        the database lookup fails.
+    """
     try:
         from .tools import get_all_themes
         themes_json = get_all_themes.invoke({})  # Use invoke instead of direct call
@@ -106,7 +117,7 @@ class ThemeExtractionResult(BaseModel):
     themes: List[ThemeReference] = Field(default_factory=list)
 
 def _create_theme_extraction_prompt():
-    """Create theme extraction prompt with dynamic theme list."""
+    """Create the theme extraction prompt augmented with current labels."""
     theme_labels = _get_theme_labels()
     theme_examples = ", ".join(theme_labels[:10])  # Use first 10 themes as examples
     
@@ -250,8 +261,15 @@ _action_extraction_chain = _ACTION_EXTRACTION_PROMPT | _subagent_llm.with_struct
 # =====================================================================
 
 def extract_intent_with_subagents(user_text: str, messages: List) -> AssistantIntentPayload:
-    """
-    Extract intents using specialized subagents.
+    """Extract intents using place/theme/action subagents and combine results.
+
+    Args:
+        user_text: The raw user utterance to classify.
+        messages: Recent conversation history (not currently used by subagents).
+
+    Returns:
+        AssistantIntentPayload: Combined, de-duplicated intents with minimal
+        arguments suitable for workflow routing.
     """
     try:
         logger.info(f"Extracting intent with subagents for: '{user_text}'")
@@ -289,8 +307,14 @@ def _combine_subagent_results(
     actions: ActionExtractionResult,
     user_text: str
 ) -> List[SingleIntent]:
-    """
-    Combine subagent results into final intent list.
+    """Combine subagent results into the final list of SingleIntent.
+
+    Preference order is driven by the primary action; place intents are listed
+    before theme intents when adding, and safe fallbacks are provided for
+    remove/list/reset/info/chat.
+
+    Returns:
+        list[SingleIntent]: Canonical intent list for the router.
     """
     intents = []
     

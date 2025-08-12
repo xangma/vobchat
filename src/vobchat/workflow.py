@@ -1,4 +1,25 @@
-# app/workflow.py
+"""LangGraph workflow definition for VobChat.
+
+This module builds and compiles the LangGraph StateGraph that powers the chat
+workflow. It wires together:
+
+- Agent routing for interpreting user intent and delegating to nodes
+- Place and unit resolution (via nodes in ``vobchat.nodes``)
+- Theme selection and dynamic theme lookup
+- Map selection updates and optional interrupts for UI interactions
+
+Key concepts:
+- State: typed by ``lg_State`` (see ``vobchat.state_schema``) and persisted using
+  a Redis checkpointer when compiled by the app.
+- Nodes: pure functions that operate on the state and optionally return a
+  ``Command`` to route to the next node or interrupt.
+- Start node: a router that decides whether to resume a node, process a
+  newly-arrived user message, or continue place/unit resolution.
+
+This file focuses on defining the graph and helpful utilities (e.g., theme
+prompt and cache). It does not expose HTTP routes or SSE streaming; see
+``app.py`` and ``workflow_sse_adapter.py`` for those concerns.
+"""
 
 # -------------------------------
 # Import standard libraries and type hints
@@ -77,8 +98,8 @@ logger = logging.getLogger(__name__)
 # CHAINS AND PYDANTIC MODELS FOR STRUCTURED OUTPUT
 # ----------------------------------------------------------------------------------------
 
-# Define a Pydantic model to structure the information extracted from the user's initial query.
-# Ensures the LLM returns data in a predictable format.
+# Define a Pydantic model to structure information extracted from user text.
+# Ensures the LLM returns data in a predictable, validated format.
 class UserQuery(BaseModel):
     # `places`: Mandatory list of place names identified.
     places: List[str] = Field(
@@ -101,8 +122,8 @@ class UserQuery(BaseModel):
     max_year: Optional[int] = Field(
         default=None, description="The end year for the statistics"
     )
-# Create a prompt template for the LLM to guide the extraction process based on the UserQuery model.
-# The extraction prompt instructs the model to extract lists specifically.
+# Create a prompt template for the LLM to extract the UserQuery fields.
+# The prompt explicitly requests lists for places/counties when present.
 initial_query_prompt = ChatPromptTemplate.from_messages([
     (
         "system",
@@ -113,24 +134,32 @@ initial_query_prompt = ChatPromptTemplate.from_messages([
     ("user", "{text}")  # Placeholder for the user's input message
 ])
 
-# Create a LangChain "chain" that combines the prompt and the LLM.
-# `.with_structured_output(UserQuery)` forces the LLM to return a JSON object matching the UserQuery model.
-# NOTE: This will be created inside create_workflow function where model is defined
+# The actual LangChain chain is created inside ``create_workflow`` once the
+# model is instantiated. ``with_structured_output(UserQuery)`` ensures a JSON
+# object matching the schema.
 
 # -------------------------------
 # Dynamic theme retrieval with caching
 # -------------------------------
-_themes_cache = None
+_themes_cache = None  # Lazily populated mapping: theme_code -> label
 
 def get_themes_dict():
-    """Get themes as a dictionary, with caching for performance."""
+    """Return current theme dictionary from cache, loading from DB on first use.
+
+    Returns:
+        dict[str, str]: Mapping of theme codes to user-facing labels.
+    """
     global _themes_cache
     if _themes_cache is None:
         _load_themes_from_db()
     return _themes_cache
 
 def _load_themes_from_db():
-    """Load themes from database into cache."""
+    """Load themes from database into the local cache.
+
+    Falls back to a minimal set if DB access fails so the workflow remains
+    functional in degraded environments (e.g., tests without DB).
+    """
     global _themes_cache
     try:
         themes_json = get_all_themes("")  # Empty string parameter as required by the function
@@ -147,7 +176,7 @@ def _load_themes_from_db():
         }
 
 def refresh_themes_cache():
-    """Force refresh of themes cache from database."""
+    """Force-refresh the theme cache by reloading from the database."""
     global _themes_cache
     _themes_cache = None
     return get_themes_dict()
@@ -161,7 +190,14 @@ class ThemeDecision(BaseModel):
                             description="The selected theme code from available themes, e.g. T_POP")
 
 def build_theme_prompt(themes=None):
-    """Build the theme selection prompt with current themes."""
+    """Build the theme-selection prompt with the current theme catalog.
+
+    Args:
+        themes: Optional mapping overriding the cached theme list.
+
+    Returns:
+        ChatPromptTemplate: A prompt asking the model to pick a single theme code.
+    """
     if themes is None:
         themes = get_themes_dict()
     if not themes:
@@ -186,27 +222,35 @@ def build_theme_prompt(themes=None):
         )
     ])
 
-# Build the theme chain dynamically when needed
 def get_theme_chain(model, themes=None):
-    """Get the theme selection chain with current themes."""
+    """Create the theme-selection chain binding the prompt to a model.
+
+    Args:
+        model: Chat model implementing ``with_structured_output``.
+        themes: Optional mapping overriding the cached theme list.
+
+    Returns:
+        Runnable: A runnable that yields ``ThemeDecision``.
+    """
     return build_theme_prompt(themes) | model.with_structured_output(schema=ThemeDecision)
 
 # ----------------------------------------------------------------------------------------
 # WORKFLOW DEFINITION
 # ----------------------------------------------------------------------------------------
 def create_workflow(lg_state: TypedDict):
-    """
-    Constructs and compiles the LangGraph StateGraph.
-    - Defines all the nodes.
-    - Defines the edges (transitions) between nodes, including conditional edges based on router functions.
-    - Compiles the graph with a persistent checkpointer (AsyncRedisSaver).
-    - Optionally generates and saves visual diagrams of the graph (ASCII, PNG).
+    """Construct the LangGraph StateGraph and wire node transitions.
+
+    The compiled graph is consumed by the app at startup and executed per
+    thread. This function focuses on:
+    - Adding all node functions (agent, place/unit resolution, theme, map)
+    - Defining edges between nodes, including the start router
+    - Preparing any model and helper utilities needed by the nodes
 
     Args:
-        lg_state (TypedDict): The TypedDict class defining the workflow's state structure (lg_State).
+        lg_state: The ``TypedDict`` describing the workflow state shape.
 
     Returns:
-        CompiledStateGraph: The compiled LangGraph workflow instance ready for execution.
+        CompiledStateGraph: A compiled workflow ready to run.
     """
     logger.info("Creating workflow graph...")
 
@@ -224,8 +268,7 @@ def create_workflow(lg_state: TypedDict):
     logger.debug("Initializing memory saver for checkpointing...")
     memory = MemorySaver() # This instance isn't actually used later, AsyncRedisSaver is.
 
-    # Initialize the language model (ChatOllama in this case)
-    # Specifies the model name and the API endpoint for the Ollama service.
+    # Initialize the language model (ChatOllama) and endpoint settings.
     logger.info("Initializing language model...")
     import os
     ollama_host = os.getenv("OLLAMA_HOST", "localhost")
@@ -233,9 +276,9 @@ def create_workflow(lg_state: TypedDict):
     base_url = f"http://{ollama_host}:{ollama_port}/"
 
     model = ChatOllama(
-        model="deepseek-r1-wt:latest",  # The specific Ollama model to use
+        model="deepseek-r1-wt:latest",  # Keep in sync with intent_handling.py
         base_url=base_url,  # URL of the Ollama API server
-        # default_options={"format": "json"},``
+        # default_options={"format": "json"},
         # base_url="https://148.197.150.162/ollama_api/",  # URL of the Ollama API server
         # client_kwargs={"verify": False}  # Disables SSL verification if needed (use cautiously)
     )
@@ -297,9 +340,22 @@ def create_workflow(lg_state: TypedDict):
 
     # --- Define Edges (Workflow Logic) ---
 
-    # Create a new start node that handles the start routing logic
+    # Create a dedicated start router node. It determines whether we should
+    # resume a partially-completed node, handle a newly-arrived human message
+    # (route to the agent), or continue the place/unit resolution flow.
     def start_node(state: lg_State) -> dict | Command:
-        """Initial node that decides where to route based on state."""
+        """Lightweight router that chooses the next node based on state.
+
+        Priority order:
+        1) If a new human message is present, go to ``agent_node`` for intent
+           extraction and routing.
+        2) If we received a new Add/RemovePlace intent, route to ``agent_node``
+           to process it immediately.
+        3) If resuming a node that expects a ``selection_idx`` from the UI,
+           continue that node.
+        4) If already waiting for user input at a node, stay there.
+        5) Otherwise start fresh at ``agent_node``.
+        """
         current_node = state.get("current_node")
         selection_idx = state.get("selection_idx")
         last_intent_payload = state.get("last_intent_payload") or {}
@@ -307,8 +363,7 @@ def create_workflow(lg_state: TypedDict):
 
         logger.info(f"=== URGENT DEBUG: start_node CALLED - current_node={current_node}, selection_idx={selection_idx}, intent={intent} ===")
 
-        # Check if workflow_input contains an interrupt_message from frontend
-        # This allows interrupt messages to be saved to state when workflow resumes
+        # Frontend may have provided an interrupt message; append and clear it
         interrupt_message = state.get("interrupt_message")
         if interrupt_message:
             from vobchat.nodes.utils import _append_ai
@@ -321,8 +376,8 @@ def create_workflow(lg_state: TypedDict):
         if selection_idx is not None:
             logger.info(f"=== URGENT DEBUG: start_node - selection_idx={selection_idx} was passed, likely from button click ===")
 
-        # PRIORITY 1: Check if there's a new user message that needs intent processing
-        # This MUST come before checking old intent payloads to avoid stale intent loops
+        # PRIORITY 1: Check for a new human message that needs intent processing
+        # This MUST precede checks of any prior intent payloads to avoid loops
         messages = state.get("messages", [])
         has_new_user_message = False
         if messages and len(messages) > 0:
@@ -336,20 +391,21 @@ def create_workflow(lg_state: TypedDict):
         logger.info(f"=== URGENT DEBUG: start_node message detection - messages_count={len(messages) if messages else 0}, has_new_user_message={has_new_user_message} ===")
 
         # If there's a new user message, always route to agent_node for intent extraction
-        # This takes priority over any stale intent payloads from Redis checkpoints
         if has_new_user_message:
             logger.info(f"=== URGENT DEBUG: start_node ROUTING to agent_node (new user message detected) ===")
             logging.info(f"start_node: New user message detected, routing to agent_node for intent extraction")
             return Command(goto="agent_node")
 
-        # PRIORITY 2: Check for new intent payload (map clicks, etc.) before resuming from stale nodes
-        # This prevents resuming from stale resolve_theme when user reselects a polygon
+        # PRIORITY 2: Check for new intent payloads (e.g., map clicks) before
+        # resuming a stale node. This prevents resuming ``resolve_theme`` when
+        # the user reselects a polygon.
         if intent in ["AddPlace", "RemovePlace"]:
             logger.info(f"=== URGENT DEBUG: start_node PROCESSING {intent} INTENT - routing to agent_node ===")
             logging.info(f"start_node: Processing {intent} intent, routing to agent_node")
             return Command(goto="agent_node")
 
-        # PRIORITY 3: If we have a current_node and selection_idx (button click), but no new intent, resume from that node
+        # PRIORITY 3: If we have a current_node and selection_idx (button click),
+        # but no new intent, resume from that node
         if current_node and selection_idx is not None:
             logger.info(f"=== URGENT DEBUG: start_node RESUMING from {current_node} (no new intent) ===")
             logging.info(f"start_node: Resuming from current_node={current_node} with selection_idx={selection_idx}")
@@ -361,7 +417,8 @@ def create_workflow(lg_state: TypedDict):
                 })
             return Command(goto=current_node)
 
-        # PRIORITY 4: If we have a current_node but no selection_idx, we're waiting for user input - don't restart
+        # PRIORITY 4: If we have a current_node but no selection_idx, we're
+        # waiting for user input — do not restart
         if current_node:
             logger.info(f"=== URGENT DEBUG: start_node WAITING for user input at {current_node} ===")
             logging.info(f"start_node: Waiting for user input at current_node={current_node}, not restarting workflow")

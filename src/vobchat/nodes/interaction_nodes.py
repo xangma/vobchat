@@ -1,4 +1,10 @@
-"""User interaction nodes: ask_followup."""
+"""User interaction nodes: ask_followup.
+
+Provides a generic clarification step when the router cannot map a message to a
+specific intent. Uses an interrupt to present quick-action buttons and resumes
+with ``selection_idx`` when the user clicks, or allows the user to type a new
+message which is then routed by the LLM as usual.
+"""
 from __future__ import annotations
 from typing import List
 from langgraph.types import interrupt
@@ -31,6 +37,13 @@ def ask_followup_node(state: lg_State) -> dict | Command:
 
     The quick-action list is deliberately short and generic - add / change them
     as you like.
+
+    Returns:
+        dict | Command: On first entry or when re-issuing buttons, returns an
+        empty dict after ``interrupt`` (front-end shows options). When a button
+        is selected, returns a ``Command`` that routes to ``agent_node`` with a
+        minimal ``last_intent_payload``. For invalid selection indices, returns
+        a dict with updated messages prompting the user again.
     """
 
     already_waiting = (

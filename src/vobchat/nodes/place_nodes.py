@@ -1,16 +1,22 @@
-# place_nodes.py – streamlined place‑handling for LangGraph
-# ============================================================
-# Exports four nodes:
-#   • **AddPlace_node**         – add one or more places / polygons
-#   • **RemovePlace_node**      – remove a place / polygon
-#   • **postcode_tool_call**    – lookup places by UK‑style postcode
-#   • **multi_place_tool_call** – DB lookup for every queued place name
-#
-# Utility assumptions:
-#   _append_ai(), get_selected_units(), add_place_to_state(),
-#   remove_place_from_state(), find_units_by_postcode.invoke(),
-#   find_places_by_name.invoke(), interrupt(), Command.
-# ============================================================
+"""Place-handling nodes for LangGraph.
+
+Exports nodes that add/remove places, resolve postcodes and place names, and
+provide informational text about places. These nodes update the single source
+of truth in ``state['places']`` and coordinate with disambiguation helpers to
+ask the user when multiple matches are possible.
+
+Exported nodes:
+- AddPlace_node: queue one or more places/polygons for resolution
+- RemovePlace_node: remove a place by name or polygon id; trims cached cubes
+- postcode_tool_call: resolve a UK-style postcode to one or more units
+- multi_place_tool_call: DB lookup for each queued place needing candidates
+- PlaceInfo_node: show a location overview and add a temporary info marker
+
+Utilities expected from the wider app: ``_append_ai``, ``get_selected_units``,
+``add_place_to_state``, ``remove_place_from_state``,
+``find_units_by_postcode.invoke()``, ``find_places_by_name.invoke()``,
+``get_place_information.invoke()``, ``interrupt``, and ``Command``.
+"""
 
 from __future__ import annotations
 
@@ -296,6 +302,14 @@ def _filter_cubes(state: lg_State, remaining_units: List[int]):
 
 
 def AddPlace_node(state: lg_State) -> Dict[str, Union[str, list, dict]] | Command:
+    """Queue one or more places for resolution and kick off lookup.
+
+    Reads arguments from ``last_intent_payload`` supporting names, optional
+    ``polygon_id`` and ``unit_type``. Appends provisional entries to
+    ``state['places']`` and routes to ``multi_place_tool_call`` to fetch
+    candidate rows. Returns a ``Command`` with minimal updates including
+    messages so that any prompts are preserved.
+    """
     args = (state.get("last_intent_payload") or {}).get("arguments", {})
 
     # 1️⃣  Harvest user parameters ------------------------------------------------
@@ -354,6 +368,11 @@ def AddPlace_node(state: lg_State) -> Dict[str, Union[str, list, dict]] | Comman
 
 
 def RemovePlace_node(state: lg_State) -> Dict[str, Union[str, list, dict]] | Command:
+    """Remove a place by name or polygon id and update caches.
+
+    Also prunes ``selected_cubes`` to match remaining units, then routes to
+    ``multi_place_tool_call`` so place lookups remain in a consistent state.
+    """
     args = (state.get("last_intent_payload") or {}).get("arguments", {})
     target_raw: Optional[str] = args.get("place")
 
@@ -400,6 +419,12 @@ def RemovePlace_node(state: lg_State) -> Dict[str, Union[str, list, dict]] | Com
 
 
 def postcode_tool_call(state: lg_State):
+    """Resolve a UK-style postcode to units and add them as places.
+
+    On success, appends one or more places with their resolved ``g_unit`` and
+    type label, and clears ``extracted_postcode``. Leaves visualization control
+    to later steps (no interrupt here).
+    """
     pcode = state.get("extracted_postcode")
     if not pcode:
         _append_ai(state, "I couldn’t find a postcode to search for.")
@@ -444,7 +469,11 @@ def postcode_tool_call(state: lg_State):
 
 
 def multi_place_tool_call(state: lg_State):
-    """DB lookup for each place without a resolved g_unit."""
+    """DB lookup for each place lacking candidates or a resolved ``g_unit``.
+
+    For each pending place, calls the DB tool to populate ``candidate_rows``
+    so that downstream disambiguation can proceed without blocking.
+    """
 
     places = state.get("places", [])
     for entry in places:
@@ -471,7 +500,13 @@ def multi_place_tool_call(state: lg_State):
 # -----------------------------------------------------------------------------
 
 def PlaceInfo_node(state: lg_State) -> Dict[str, Any]:
-    """Provide general information about a place, matching the original Vision of Britain place page display."""
+    """Provide an overview of a place and show a temporary info marker.
+
+    Uses the same name disambiguation helper to identify a specific place and
+    then fetch enriched descriptive text and modern context for display. This
+    does not add to the ``places`` selection; instead it may request the UI to
+    show a one-off info marker via ``map_update_request``.
+    """
     args = (state.get("last_intent_payload") or {}).get("arguments", {})
     place_name = args.get("place")
     

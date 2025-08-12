@@ -1,3 +1,18 @@
+"""Agent routing node that turns intents into graph transitions.
+
+This module exposes `agent_node`, a LangGraph node that serves as the single
+entry point for message-driven routing. It decides what to do next by checking,
+in priority order:
+- Pre-set `last_intent_payload` from UI actions (e.g., map clicks)
+- Continuation of place/unit resolution if there are unresolved places
+- A new human message, which is classified via subagent-based intent extraction
+- Pending items on the `intent_queue`
+- Fallbacks such as proceeding to cube retrieval or ending the turn
+
+The node returns either a `Command` to jump to another node with a focused
+state update, or a minimal dict to continue without a jump.
+"""
+
 from typing import cast, Optional
 
 from langchain_core.messages import HumanMessage, AIMessage
@@ -13,6 +28,26 @@ logger = logging.getLogger(__name__)
 #   agent_node - single entry point for routing
 # ---------------------------------------------------------------------------
 def agent_node(state: lg_State):
+    """Route to the next workflow step based on state and new input.
+
+    Args:
+        state: The current workflow state (TypedDict), including messages,
+            last_intent_payload, intent_queue, places, and routing metadata.
+
+    Returns:
+        dict | Command: Either a minimal state update (continue current path) or
+        a `Command` specifying `goto` and a targeted `update` for the next node.
+
+    Priority summary:
+        1) Pre-set `last_intent_payload` with no new human message → route to
+           the corresponding intent node.
+        2) Unresolved places with no active disambiguation → resume
+           `resolve_place_and_unit`.
+        3) New human message → extract intents via subagents, route the highest
+           priority, queue leftovers.
+        4) Otherwise, pop from `intent_queue` and route; or proceed to
+           `find_cubes_node` if theme+units are present; else return state.
+    """
     # logging.debug(f"agent_node entered. State snapshot: {state}")
     logging.info("agent_node: Starting intent routing process.")
     # For brevity, log only keys or specific interesting values

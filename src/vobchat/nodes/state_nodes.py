@@ -1,4 +1,9 @@
-"""State management nodes: ShowState and Reset."""
+"""State management nodes: ShowState and Reset.
+
+These nodes summarize the current selection and reset the conversation state.
+They do not interrupt; instead they return minimal state updates or a Command
+that resets key fields and routes to ``START``.
+"""
 from __future__ import annotations
 from typing import List
 import pandas as pd
@@ -10,7 +15,12 @@ import logging
 logger = logging.getLogger(__name__)
 
 def ShowState_node(state: lg_State) -> dict:
-    """Display the current state of selections to the user."""
+    """Display the current state of selections to the user.
+
+    Returns:
+        dict: Minimal updates including the appended AI message (via
+        ``messages``) and a cleared ``last_intent_payload`` to avoid loops.
+    """
     summary: List[str] = []
 
     g_units = get_selected_units(state)
@@ -41,7 +51,13 @@ def ShowState_node(state: lg_State) -> dict:
     }
 
 def Reset_node(state: lg_State) -> Command:
-    """Reset all state to start fresh."""
+    """Reset all state to start fresh.
+
+    Returns:
+        Command: A ``Command`` with ``goto='START'`` and a focused ``update``
+        payload resetting core fields (places, theme, cubes, filters, etc.)
+        without replacing the entire state dict.
+    """
     # _append_ai(state, "Starting over - previous selections cleared.")
     # Get fresh state (selection_idx already set to None in _initial_state)
     reset_state = _initial_state()

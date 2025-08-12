@@ -1,3 +1,12 @@
+"""Intent routing schema and LLM-based extraction.
+
+Defines the canonical `AssistantIntent` enum, the structured payload returned by
+the intent extractor, and the chain/prompt used to classify user input. The
+`extract_intent` entry point delegates to the subagent-based extractor in
+`intent_subagents.py` for better robustness, but keeps the original prompt and
+structured-output chain available for reference or fallback.
+"""
+
 from enum import Enum
 from typing import Optional, List, Dict, Any
 from langchain_core.messages import AIMessage
@@ -13,6 +22,7 @@ logger = logging.getLogger(__name__)
 # -------------------------------------------------------------------------------------
 
 class AssistantIntent(str, Enum):
+    """Canonical intents that the agent routes inside the graph."""
     DESCRIBE_THEME = "DescribeTheme"
     ADD_PLACE = "AddPlace"
     REMOVE_PLACE = "RemovePlace"
@@ -31,14 +41,18 @@ class AssistantIntent(str, Enum):
 
 # One payload per intent …
 class SingleIntent(BaseModel):
-    intent: AssistantIntent = Field(..., description="Name of the intent recognised in the user utterance.")
+    """A single intent with optional arguments extracted from a message."""
+    intent: AssistantIntent = Field(..., description="The recognized intent name.")
     arguments: Dict[str, Any] = Field(
         default_factory=dict,
         description="For AddPlace either {'place': str} or {'places': list[str]}",
    )
 class AssistantIntentPayload(BaseModel):
-    """Minimal contract returned by agent-LLM before routing."""
-    """ Example: { "intent": "AddPlace", "arguments": {"place": "London"} } """
+    """Minimal contract returned by the intent extractor before routing.
+
+    Example:
+        {"intents": [{"intent": "AddPlace", "arguments": {"place": "London"}}]}
+    """
     intents: List[SingleIntent]
 
 
@@ -234,8 +248,15 @@ _intent_extraction_chain = _INTENT_EXTRACT_PROMPT | _intent_llm.with_structured_
 )
 
 def extract_intent(user_text: str, messages: list[AnyMessage]) -> AssistantIntentPayload:
-    """
-    Extract intents using specialized subagents for better accuracy.
+    """Extract intents from `user_text` using specialized subagents.
+
+    Args:
+        user_text: The latest user utterance to classify.
+        messages: Recent conversation history (may be used by subagents).
+
+    Returns:
+        AssistantIntentPayload: One or more intents with minimal arguments ready
+        for workflow routing.
     """
     from .intent_subagents import extract_intent_with_subagents
     logger.info("Using subagent approach for intent extraction")

@@ -1,3 +1,16 @@
+"""SSE adapter for streaming LangGraph workflow state to the browser.
+
+This module provides a thin, async bridge between the compiled LangGraph
+workflow and the Server-Sent Events (SSE) hub. Its responsibilities are to:
+- run a workflow for a given ``thread_id``
+- stream minimally filtered state deltas to the UI
+- toggle a lightweight ``llm_busy`` flag while the model is working
+- emit interrupts (if any) when the graph finishes an async step
+
+It deliberately avoids owning business logic; nodes and the graph encode the
+behavior. The adapter focuses on transport and small UX niceties only.
+"""
+
 # # Simple Workflow SSE Adapter - Clean rewrite
 # # Single responsibility: Execute workflow and stream events
 
@@ -185,7 +198,11 @@ _UI_KEYS = {
 simple_sse_manager = get_sse_manager()
 
 def serialize_messages(messages):
-    """Convert LangChain message objects to JSON-serializable format."""
+    """Convert LangChain messages into JSON-serializable dictionaries.
+
+    Only the subset of fields needed by the front-end chat UI is emitted. This
+    avoids leaking backend-only metadata and keeps the payload small.
+    """
     serialized = []
     for msg in messages:
         if isinstance(msg, AIMessage):
@@ -210,7 +227,11 @@ def serialize_messages(messages):
     return serialized
 
 class WorkflowSSEAdapter:
-    """Run *compiled_workflow* and push updates to clients via SSE_HUB."""
+    """Run a compiled workflow and push updates to clients via the SSE hub.
+
+    Each thread_id maintains a small set of streamed AI message IDs to skip
+    duplicates that may be present after checkpoint restoration.
+    """
 
     def __init__(self, compiled_workflow):
         self.wf = compiled_workflow
@@ -221,6 +242,20 @@ class WorkflowSSEAdapter:
     # ------------------------------------------------------------------
 
     async def run(self, thread_id: str, initial_input: Optional[dict] = None) -> None:
+        """Execute the workflow and stream deltas for a given thread.
+
+        Args:
+            thread_id: Logical conversation/workflow identifier.
+            initial_input: Optional first input to the graph (often ``None`` as
+                the graph pulls from checkpointed state).
+
+        Behavior:
+            - Proactively sets ``llm_busy=True``; cleared on first AI message or
+              at the end of execution.
+            - Streams only whitelisted state keys (see ``_UI_KEYS``) to reduce
+              payload size and UI churn; message objects are serialized.
+            - Emits the final interrupt payload (if present) when the run ends.
+        """
         cfg = {"configurable": {"thread_id": thread_id,
                                 "checkpoint_ns": "", "checkpoint_id": None}}
         self._streamed.setdefault(thread_id, set())

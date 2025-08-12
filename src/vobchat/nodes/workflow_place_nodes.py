@@ -1,22 +1,23 @@
-# workflow_place_nodes.py - drive the *place‑resolution* mini‑workflow
-# ====================================================================
-# Four public nodes:
-#   • **UpdatePolygonSelection_node**
-#   • **RequestMapSelection_node**
-#   • **ResolvePlaceAndUnit_node**
-#   • **SelectUnitOnMap_node** (thin legacy shim - optional)
-#
-# The orchestration logic is deliberately simple:
-#     1. Resolve one place at a time → ResolvePlaceAndUnit_node (may interrupt)
-#     2. When a place becomes fully‑resolved (we have g_unit) its polygon must
-#        exist in *selected_polygons*; UpdatePolygonSelection_node figures out
-#        what’s missing and either
-#           a) asks the front‑end to highlight via RequestMapSelection_node, or
-#           b) continues straight to ResolvePlaceAndUnit_node for the next place.
-#
-# Each interrupt carries **only** the canonical  *places* array so the front‑end
-# is always in sync.
-# ====================================================================
+"""Place resolution mini-workflow nodes.
+
+This module hosts the nodes that resolve user-specified places into canonical
+graph identifiers and unit types, and keeps the map selection synchronized:
+
+- ``update_polygon_selection``: ensure polygons reflect resolved places and
+  request UI updates; returns a ``Command`` to continue routing.
+- ``resolve_place_and_unit``: disambiguate a single place (name → g_place,
+  then unit type → g_unit), potentially interrupting to ask the user.
+- ``select_unit_on_map``: legacy shim that routes to ``update_polygon_selection``.
+
+Orchestration pattern:
+    1) Resolve one place at a time in ``resolve_place_and_unit`` (may interrupt)
+    2) When a place becomes fully resolved (has ``g_unit``), ensure its polygon
+       appears in the UI via ``update_polygon_selection`` and either prompt the
+       user or proceed to the next place.
+
+Interrupts carry only the canonical ``places`` array to keep front-end and
+backend views synchronized.
+"""
 
 from __future__ import annotations
 
@@ -59,7 +60,13 @@ def _collect_selected_place_coordinates(places: List[dict]) -> List[dict]:
 
 
 def update_polygon_selection(state: lg_State):
-    """Send map update request to sync frontend with current places."""
+    """Send a map update request so the UI reflects the current places.
+
+    The function computes whether all places are resolved; if yes, it routes
+    back to the agent. Otherwise it continues to place/unit resolution. In both
+    cases it includes a ``map_update_request`` payload that the front-end can
+    use to highlight or zoom to selected coordinates.
+    """
 
     workflow_units = get_selected_units(state)
 
@@ -146,7 +153,12 @@ def update_polygon_selection(state: lg_State):
 
 
 def resolve_place_and_unit(state: lg_State):
-    """Disambiguate **one** place per call - name then unit type."""
+    """Disambiguate exactly one place per call: name first, then unit type.
+
+    Resolution is split into two steps, each of which may trigger an interrupt
+    to collect a selection from the user. On success, updates the working
+    ``places`` list in state and advances the ``current_place_index``.
+    """
 
     places = state.get("places", []) or []
     idx = state.get("current_place_index", 0) or 0
@@ -301,6 +313,6 @@ def resolve_place_and_unit(state: lg_State):
 
 
 def select_unit_on_map(state: lg_State):
-    """Legacy compatibility function - routes to update_polygon_selection."""
+    """Legacy compatibility shim that routes to ``update_polygon_selection``."""
     _ = state  # Unused but required by interface
     return Command(goto="update_polygon_selection")

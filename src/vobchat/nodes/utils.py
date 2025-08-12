@@ -11,7 +11,14 @@ import logging
 logger = logging.getLogger(__name__)
 
 def make_json_safe(obj: Any) -> Any:
-    """Convert an object to be JSON-safe by handling NaN, inf, and other problematic values."""
+    """Return a JSON-safe version of ``obj``.
+
+    Replaces NaN/Inf with None and recursively normalizes lists and dicts.
+
+    Returns:
+        Any: A structure that can be serialized by ``json.dumps`` without
+        raising due to NaN/Inf or nested unsupported values.
+    """
     if isinstance(obj, float):
         if math.isnan(obj) or math.isinf(obj):
             return None
@@ -22,12 +29,17 @@ def make_json_safe(obj: Any) -> Any:
     return obj
 
 def safe_json_dumps(obj: Any, **kwargs) -> str:
-    """JSON dumps with NaN/inf handling."""
+    """Serialize to JSON after normalizing problematic numeric values.
+
+    Returns:
+        str: JSON string with NaN/Inf coerced to null and nested containers
+        normalized for serialization.
+    """
     safe_obj = make_json_safe(obj)
     return json.dumps(safe_obj, **kwargs)
 
 def clean_database_text(text: str) -> str:
-    """Clean up text from database that has hard line breaks, tabs, and mixed HTML/text formatting.
+    """Clean database text with hard wraps, tabs, and mixed HTML/text.
     
     The Vision of Britain database contains text with:
     - Hard line breaks in the middle of sentences (from fixed-width formatting)
@@ -40,7 +52,7 @@ def clean_database_text(text: str) -> str:
         text: Raw text from database
         
     Returns:
-        Cleaned text with proper paragraph breaks and no hard line wrapping
+        str: Cleaned text with proper paragraph breaks and no hard wrapping.
     """
     import re
     
@@ -74,7 +86,11 @@ def clean_database_text(text: str) -> str:
 
 
 def serialize_messages(messages):
-    """Convert LangChain message objects to JSON-serializable format."""
+    """Convert LangChain message objects to JSON-serializable dicts.
+
+    Returns:
+        list[dict]: Minimal message records for front-end consumption.
+    """
     serialized = []
     for msg in messages:
         if isinstance(msg, AIMessage):
@@ -99,7 +115,11 @@ def serialize_messages(messages):
     return serialized
 
 def _append_ai(state: lg_State, text: str):
-    """Append an AI message to the state with streaming metadata."""
+    """Append an AI message to the state with streaming metadata.
+
+    Returns:
+        None: Mutates ``state['messages']`` in place with a streamable message.
+    """
     # Mark user-facing messages as streamable
     # Add a unique ID to each message to prevent duplicate streaming
     message = AIMessage(
@@ -112,7 +132,7 @@ def _append_ai(state: lg_State, text: str):
     state.setdefault("messages", []).append(message)
 
 def _has_message_content(state: lg_State, search_content: str) -> bool:
-    """Check if any existing message contains the specified content."""
+    """Return True if any message contains the specified content (case-insensitive)."""
     messages = state.get("messages", [])
     search_lower = search_content.lower().strip()
 
@@ -134,7 +154,11 @@ def _has_message_content(state: lg_State, search_content: str) -> bool:
 #     return state
 
 def _initial_state() -> Dict:
-    """Return a fresh lg_State dict that clears ALL state fields."""
+    """Return a fresh lg_State dict that clears ALL state fields.
+
+    Returns:
+        dict: New state with canonical keys initialized to empty/None values.
+    """
     return {
         # conversation
         "messages": [],
@@ -179,7 +203,11 @@ def _initial_state() -> Dict:
     }
 
 def _clean_duplicate_intents_from_queue(state: lg_State):
-    """Remove duplicate intents from the intent queue to prevent infinite loops."""
+    """Remove duplicate intents from the intent queue to prevent loops.
+
+    Returns:
+        None: Updates the queue in place if duplicates are detected.
+    """
     intent_queue = state.get("intent_queue", [])
     if not intent_queue:
         return
