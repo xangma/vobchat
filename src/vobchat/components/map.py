@@ -1,4 +1,19 @@
-# layout.py
+"""
+Map panel layout using Dash Leaflet.
+
+This component provides the core geospatial UI:
+- A set of unit-type filter buttons (ids of pattern {'type': 'unit-filter', 'unit': <key>})
+- A conditional year-range slider for time-filterable unit types
+- A Leaflet map with a GeoJSON overlay layer that receives polygon features
+  and uses the layer "hideout.selected" array for styling selected polygons
+- A placeholder Div "place-disambiguation-markers" for dynamically created
+  dl.Marker components when the workflow requests place disambiguation
+- Two map overlay buttons for toggling unselected polygons and resetting selection
+
+The styling function is registered to Dash assets via dash_extensions Namespace
+so it is available as a JS function referenced by the GeoJSON layer.
+"""
+
 import dash_bootstrap_components as dbc
 import dash_leaflet as dl
 from dash import html, dcc
@@ -44,14 +59,24 @@ function(feature, context) {{
 
 
 def create_map_layout(assets_folder):
-    """
-    Creates the layout that uses Dash Leaflet instead of Plotly.
+    """Create the map panel layout with Dash Leaflet.
+
+    Parameters
+    - assets_folder: path passed from app initialization so the JS style
+      function can be emitted into the assets pipeline via Namespace.dump.
+
+    Returns a vertical flex container with filter controls and a map. The
+    GeoJSON overlay uses the registered style function to render selected vs
+    unselected polygons based on its "hideout.selected" list. The map and
+    its controls are referenced by clientside callbacks and the SSE client.
     """
 
     map_namespace = Namespace("map_leaflet")
     map_namespace.add(style_function, "style_function")
     map_namespace.dump(assets_folder=assets_folder)
 
+    # Create unit-type filter buttons; their style and labels are updated
+    # client-side based on selection counts and active unit types
     buttons = []
 
     for k, v in UNIT_TYPES.items():

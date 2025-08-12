@@ -1,3 +1,25 @@
+"""
+Application entrypoint and layout assembly.
+
+This module wires together the simplified SSE architecture and the three core
+panels (Chat, Visualization, Map). It exposes two HTTP endpoints used by the
+client-side SSE code:
+
+- `{DASH_PREFIX}/sse/<thread_id>` (GET): Server-Sent Events stream. Each client
+  connects once per thread and receives state_update, interrupt, and error
+  events.
+- `{DASH_PREFIX}/workflow/<thread_id>` (POST): Advance the LangGraph workflow
+  using a payload produced by user actions (chat send, option click, map select).
+
+Layout highlights:
+- Chat panel (left): chat history, options container, and input controls.
+- Visualization panel (middle): hidden by default; shows graphs when data exists.
+- Map panel (right): Dash Leaflet map with polygon layer and controls.
+
+Authentication is enforced for all app URLs except Dash/static asset paths,
+SSE, and workflow endpoints so the login page can render.
+"""
+
 # Simple App - Clean rewrite with simplified SSE architecture
 import logging, os
 from dash_extensions.enrich import DashProxy, CycleBreakerTransform #ServersideOutputTransform
@@ -42,10 +64,10 @@ DASH_PREFIX = os.getenv("DASH_URL_BASE", "/app").rstrip("/")
 
 
 def register_simple_sse_routes(server, workflow_adapter):
-    """
-    Two endpoints:
-      • /app/sse/<thread_id>       (GET)  – pure SSE stream, never blocks
-      • /app/workflow/<thread_id>  (POST) – advance the LangGraph workflow
+    """Register lightweight SSE endpoints used by the client.
+
+    Exposes a long-lived streaming endpoint and a POST endpoint that advances
+    the workflow and streams results back to the open SSE connection.
     """
 
     # ------------------------------------------------------------------ #
@@ -172,12 +194,12 @@ def create_app():
     # App layout
     app.layout = html.Div([
         create_stores(),
-        # Include SSE client script and new pure map state manager
+        # Include pure map state manager and SSE client (loaded from assets)
         html.Script(src=f"{DASH_PREFIX}/assets/pure_map_state.js"),
         html.Script(src=f"{DASH_PREFIX}/assets/sse_client.js"),
         html.Div(className="resizable-container", children=[
             html.Div(className="resizable-horizontal", style={"display": "flex", "width": "100%", "height": "100%"}, children=[
-                # 1. Chat panel on the left
+                # 1. Chat panel on the left: conversation + options + input
                 html.Div(className="resizable-panel", id="chat-panel", children=[
                     create_chat_layout()
                 ], style={"flex": "0 0 30%"}),  # Initial width 30%
@@ -186,7 +208,7 @@ def create_app():
                 html.Div(className="resize-handle-horizontal",
                          id="resize-handle-1"),
 
-                # 2. Visualization panel in the middle
+                # 2. Visualization panel in the middle (hidden until data is available)
                 html.Div(className="resizable-panel", id="visualization-panel-container", children=[
                     # Wrap the viz component to control its container's visibility/style
                     create_visualization_layout()
@@ -199,7 +221,7 @@ def create_app():
                          # Initially shown (or controlled by callback)
                          style={"display": "flex"}),
 
-                # 3. Map panel on the right
+                # 3. Map panel on the right: Dash Leaflet map + controls
                 html.Div(className="resizable-panel", id="map-panel", children=[
                     create_map_layout(assets_folder)
                     # Initial width 30% (flex-grow: 1 allows it to take remaining space initially)

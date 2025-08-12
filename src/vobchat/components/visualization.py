@@ -1,16 +1,36 @@
-# app/components/visualization.py
+"""
+Visualization panel layout.
+
+This component hosts the time-series or aggregated data visualizations that
+are rendered as part of the assistant’s responses. The panel defaults to
+hidden; the SSE client toggles visibility and populates cube selections.
+
+Key elements/IDs:
+- "visualization-area": main container toggled by SSE state updates
+- "cube-selector": Dropdown for choosing which series/cubes to plot
+- "data-plot": Plotly Graph area for the selected data
+- "clear-plot-button": Button to clear selections/graph
+
+The surrounding app code and callbacks handle wiring the data into this panel.
+"""
+
 from dash import dcc, html
 import dash_bootstrap_components as dbc
 
 def create_visualization_layout():
+    """Create the data visualization panel layout.
+
+    Returns an initially hidden, full-height container with a controls row
+    and a flexible Plotly graph area. Visibility is managed client-side
+    when cube data is available or explicitly hidden by state.
+    """
     return html.Div([
         html.Div(
             id="visualization-area",
             style={"height": "100%", "display": "none", "flexDirection": "column"},
-            # Add data attribute to track visibility state
+            # Track if the panel was previously hidden
             **{'data-was-hidden': 'true'},
             children=[
-                # Control panel will be added by JavaScript
                 html.H3("Data Visualization", className="mb-3"),
                 
                 # Main content area with flex layout
