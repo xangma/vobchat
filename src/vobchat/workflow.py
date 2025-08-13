@@ -277,7 +277,7 @@ def create_workflow(lg_state: TypedDict):
     _OLLAMA_SUBPATH = os.getenv("OLLAMA_SUBPATH", "")
     _OLLAMA_USE_SSL = os.getenv("OLLAMA_USE_SSL", "true").lower() == "true"
     protocol = "https" if _OLLAMA_USE_SSL else "http"
-    _BASE_URL = f"{protocol}://{_OLLAMA_HOST}:{_OLLAMA_PORT}/{_OLLAMA_SUBPATH}"
+    _BASE_URL = f"{protocol}://{_OLLAMA_HOST}:{_OLLAMA_PORT}/{_OLLAMA_SUBPATH}/"
 
     model = ChatOllama(
         model="deepseek-r1-wt:latest",  # Keep in sync with intent_handling.py
