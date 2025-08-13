@@ -71,9 +71,9 @@ def create_map_layout(assets_folder):
     its controls are referenced by clientside callbacks and the SSE client.
     """
 
+    # Use pre-bundled JS in assets (map_leaflet.js) rather than writing at runtime.
+    # This avoids permission issues when src is bind-mounted in Docker.
     map_namespace = Namespace("map_leaflet")
-    map_namespace.add(style_function, "style_function")
-    map_namespace.dump(assets_folder=assets_folder)
 
     # Create unit-type filter buttons; their style and labels are updated
     # client-side based on selection counts and active unit types
