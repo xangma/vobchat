@@ -44,13 +44,14 @@ def _get_theme_labels() -> List[str]:
 _MODEL_NAME = "deepseek-r1-wt:latest"
 _OLLAMA_HOST = os.getenv("OLLAMA_HOST", "localhost")
 _OLLAMA_PORT = os.getenv("OLLAMA_PORT", "11434")
-_BASE_URL = f"http://{_OLLAMA_HOST}:{_OLLAMA_PORT}/"
+_BASE_URL = f"https://{_OLLAMA_HOST}:{_OLLAMA_PORT}/"
 
 # Shared LLM instance for all subagents
 _subagent_llm = ChatOllama(
     model=_MODEL_NAME,
     base_url=_BASE_URL,
-    temperature=0.0
+    # temperature=0.0
+    client_kwargs={"verify": False}
 )
 
 # =====================================================================

@@ -65,14 +65,15 @@ import os
 _MODEL_NAME = "deepseek-r1-wt:latest"  # keep in sync with workflow.py
 _OLLAMA_HOST = os.getenv("OLLAMA_HOST", "localhost")
 _OLLAMA_PORT = os.getenv("OLLAMA_PORT", "11434")
-_BASE_URL = f"http://{_OLLAMA_HOST}:{_OLLAMA_PORT}/"
+_BASE_URL = f"https://{_OLLAMA_HOST}:{_OLLAMA_PORT}/"
 
 # CRITICAL: Use a separate non-streaming LLM instance for intent extraction
 # This prevents the JSON parsing from getting stuck in streaming mode
 _intent_llm = ChatOllama(
     model=_MODEL_NAME,
     base_url=_BASE_URL,
-    temperature=0.0
+    # temperature=0.0,
+    client_kwargs={"verify": False}
 )
 
 intent_list = ", \n".join([f"{intent.value}" for intent in AssistantIntent])
