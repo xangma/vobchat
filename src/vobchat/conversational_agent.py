@@ -145,8 +145,7 @@ def _make_llm() -> ChatOllama:
 
     model = os.getenv("VOBCHAT_LLM_MODEL", "deepseek-r1-wt:latest")
     logger.debug(
-        "conversational_agent: initializing LLM",
-        extra={"base_url": _BASE_URL, "model": model}
+        f"conversational_agent: initializing LLM - base_url={_BASE_URL}, model={model}",
     )
     return ChatOllama(model=model, base_url=_BASE_URL, client_kwargs={"verify": False})
 
