@@ -139,8 +139,7 @@ def _make_llm() -> ChatOllama:
     host = os.getenv("OLLAMA_HOST", "localhost")
     port = os.getenv("OLLAMA_PORT", "11434")
     base_url = f"https://{host}:{port}/"
-    model = os.getenv("VOBCHAT_LLM_MODEL", "deepseek-r1-wt:latest",
-                      client_kwargs={"verify": False})
+    model = os.getenv("VOBCHAT_LLM_MODEL", "deepseek-r1-wt:latest")
     logger.debug(
         "conversational_agent: initializing LLM",
         extra={"base_url": base_url, "model": model}
