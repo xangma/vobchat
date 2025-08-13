@@ -199,6 +199,8 @@ def create_app():
     # App layout
     app.layout = html.Div([
         create_stores(),
+        # Expose the Dash base prefix to client JS so assets can build URLs
+        html.Script(children=f"window.DASH_PREFIX = '{DASH_PREFIX}';"),
         # Include pure map state manager and SSE client (loaded from assets)
         html.Script(src=f"{DASH_PREFIX}/assets/pure_map_state.js"),
         html.Script(src=f"{DASH_PREFIX}/assets/sse_client.js"),

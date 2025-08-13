@@ -32,7 +32,13 @@ class SimpleSSEClient {
         }
 
         // Build SSE URL with correct prefix
-        let url = `/app/sse/${threadId}`;
+        const joinPath = (base, path) => {
+            base = base || "";
+            if (base.endsWith('/')) base = base.slice(0, -1);
+            return `${base}${path}`;
+        };
+        const BASE_PREFIX = (typeof window !== 'undefined' && window.DASH_PREFIX) ? window.DASH_PREFIX : '';
+        let url = joinPath(BASE_PREFIX, `/sse/${threadId}`);
 
         this.eventSource = new EventSource(url);
 
@@ -47,7 +53,7 @@ class SimpleSSEClient {
           }
           if (!this.threadId) return;
 
-          return fetch(`/app/workflow/${this.threadId}`, {
+          return fetch(joinPath(BASE_PREFIX, `/workflow/${this.threadId}`), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ workflow_input: input })
