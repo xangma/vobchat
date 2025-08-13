@@ -5,10 +5,10 @@ This module wires together the simplified SSE architecture and the three core
 panels (Chat, Visualization, Map). It exposes two HTTP endpoints used by the
 client-side SSE code:
 
-- `{DASH_PREFIX}/sse/<thread_id>` (GET): Server-Sent Events stream. Each client
+- `{base}/sse/<thread_id>` (GET): Server-Sent Events stream. Each client
   connects once per thread and receives state_update, interrupt, and error
   events.
-- `{DASH_PREFIX}/workflow/<thread_id>` (POST): Advance the LangGraph workflow
+- `{base}/workflow/<thread_id>` (POST): Advance the LangGraph workflow
   using a payload produced by user actions (chat send, option click, map select).
 
 Layout highlights:
@@ -60,12 +60,10 @@ logger = logging.getLogger(__name__)
 background_callback_manager = None
 simple_sse_manager = get_sse_manager()
 
-# Normalize base path; treat "/" as root (empty prefix for routing)
-_base = os.getenv("DASH_URL_BASE", "/app").strip()
-if _base in {"", "/"}:
-    DASH_PREFIX = ""  # root
-else:
-    DASH_PREFIX = _base.rstrip("/")
+# Normalize base path per Dash's url_base_pathname env var
+from vobchat.config import get_dash_base_paths
+ROUTE_PREFIX, URL_BASE_PATHNAME = get_dash_base_paths()
+logger.info("Dash base path configured: url_base_pathname=%s route_prefix=%s", URL_BASE_PATHNAME, ROUTE_PREFIX or "<root>")
 
 
 def register_simple_sse_routes(server, workflow_adapter):
@@ -78,7 +76,7 @@ def register_simple_sse_routes(server, workflow_adapter):
     # ------------------------------------------------------------------ #
     # 1. STREAM                                                          #
     # ------------------------------------------------------------------ #
-    @server.get(f"{DASH_PREFIX}/sse/<thread_id>")
+    @server.get(f"{ROUTE_PREFIX}/sse/<thread_id>")
     def sse_stream(thread_id):
         """Hold the EventSource connection open and push events."""
         import queue
@@ -122,7 +120,7 @@ def register_simple_sse_routes(server, workflow_adapter):
     # ------------------------------------------------------------------ #
     # 2. WORKFLOW ADVANCE  (sync version)                                #
     # ------------------------------------------------------------------ #
-    @server.route(f"{DASH_PREFIX}/workflow/<thread_id>", methods=["POST"])
+    @server.route(f"{ROUTE_PREFIX}/workflow/<thread_id>", methods=["POST"])
     def workflow_continue(thread_id: str):
         """
         Synchronous handler: accept the button-click payload, enqueue the
@@ -159,7 +157,7 @@ def create_app():
         transforms=[CycleBreakerTransform()],
         external_stylesheets=[dbc.themes.BOOTSTRAP],
         assets_folder=str(pathlib.Path(__file__).parent / "assets"),
-        url_base_pathname=f"{DASH_PREFIX}/"
+        url_base_pathname=URL_BASE_PATHNAME
     )
 
     # Configure Flask server
@@ -199,11 +197,11 @@ def create_app():
     # App layout
     app.layout = html.Div([
         create_stores(),
-        # Expose the Dash base prefix to client JS so assets can build URLs
-        html.Script(children=f"window.DASH_PREFIX = '{DASH_PREFIX}';"),
+        # Expose the Dash base path to client JS (normalized with trailing slash)
+        html.Script(children=f"window.DASH_URL_BASE_PATHNAME = '{URL_BASE_PATHNAME}';"),
         # Include pure map state manager and SSE client (loaded from assets)
-        html.Script(src=f"{DASH_PREFIX}/assets/pure_map_state.js"),
-        html.Script(src=f"{DASH_PREFIX}/assets/sse_client.js"),
+        html.Script(src=f"{URL_BASE_PATHNAME}assets/pure_map_state.js"),
+        html.Script(src=f"{URL_BASE_PATHNAME}assets/sse_client.js"),
         html.Div(className="resizable-container", children=[
             html.Div(className="resizable-horizontal", style={"display": "flex", "width": "100%", "height": "100%"}, children=[
                 # 1. Chat panel on the left: conversation + options + input
@@ -258,21 +256,21 @@ def create_app():
     def protect_dash():
         """
         Redirect unauthenticated users away from every URL that begins
-        with /app … except the static/_dash asset endpoints that Dash
+        with / … except the static/_dash asset endpoints that Dash
         needs while the login page is showing.
         """
         path = request.path
 
-        if not path.startswith(DASH_PREFIX):
+        if not path.startswith(ROUTE_PREFIX):
             return  # not a Dash URL → ignore
 
         # Allow the pieces Dash needs to render its blank page assets
         safe_subpaths = ("/_dash", "/assets", "/_favicon", "/_reload", "/sse", "/workflow")
-        if any(path.startswith(f"{DASH_PREFIX}{p}") for p in safe_subpaths):
+        if any(path.startswith(f"{ROUTE_PREFIX}{p}") for p in safe_subpaths):
             return
 
-        # Special handling when serving at root (DASH_PREFIX == "")
-        if DASH_PREFIX == "":
+        # Special handling when serving at root (ROUTE_PREFIX == "")
+        if ROUTE_PREFIX == "":
             # Always allow login page
             if path == "/login":
                 return

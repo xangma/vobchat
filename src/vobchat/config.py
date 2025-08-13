@@ -102,3 +102,38 @@ def get_db(config):
 def close_db(db):
     if hasattr(db, 'tunnel'):
         db.tunnel.stop()
+
+
+def get_dash_base_paths():
+    """
+    Compute Dash base paths from environment, following Dash conventions.
+
+    Reads DASH_URL_BASE_PATHNAME (preferred) and normalizes it to start and end
+    with '/'. Returns a tuple of (route_prefix, url_base_pathname) where:
+      - route_prefix: '' for root, or '/base' (no trailing slash) for building
+        Flask route decorators and comparing request paths.
+      - url_base_pathname: '/' for root, or '/base/' for Dash's config.
+
+    For backward compatibility, if DASH_URL_BASE_PATHNAME is not set, this will
+    fall back to DASH_URL_BASE or DASH_PREFIX if present. These are deprecated.
+    """
+
+    base = (
+        os.getenv("DASH_URL_BASE_PATHNAME")
+        or "/"
+    )
+
+    base = (base or "").strip()
+
+    # Normalize to start and end with '/'
+    if base in {"", "/"}:
+        return "", "/"
+
+    if not base.startswith("/"):
+        base = "/" + base
+    if not base.endswith("/"):
+        base = base + "/"
+
+    url_base_pathname = base
+    route_prefix = base.rstrip("/")
+    return route_prefix, url_base_pathname

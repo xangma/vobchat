@@ -25,8 +25,7 @@ services:
 
       # Application settings
       - DASH_DEBUG=true
-      - DASH_PREFIX=${DASH_PREFIX:-/}
-      - DASH_URL_BASE=${DASH_URL_BASE:-/}
+      - DASH_URL_BASE_PATHNAME=${DASH_URL_BASE_PATHNAME:-/}
 
       # Authentication settings
       - SECRET_KEY=${SECRET_KEY:-dev-secret-key-change-in-production}

@@ -9,6 +9,7 @@ from vobchat.assets.loginpage import LOGIN_PAGE_NO_SIGNUP, SIGNUP_FORM_HTML
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy import String
 import os
+from vobchat.config import get_dash_base_paths
 
 db = SQLAlchemy()
 
@@ -55,8 +56,8 @@ def login_page():
     """Initial GET page shown to unauthenticated users."""
     # Use Flask-Login state to decide; avoids loops with stale session ids
     if current_user.is_authenticated:
-        DASH_PREFIX = os.getenv("DASH_URL_BASE", "/app").rstrip("/")
-        return redirect(DASH_PREFIX + "/")          # already logged in
+        route_prefix, url_base = get_dash_base_paths()
+        return redirect((route_prefix or "") + "/")          # already logged in
     return render_template_string(LOGIN_PAGE_NO_SIGNUP)
 
 # ---------- sign-up -------------------------------------------------
@@ -92,11 +93,11 @@ def login():
     user = db.session.scalar(db.select(User).filter_by(email=email))
     if user and user.verify_password(pwd):
         login_user(user)
-        DASH_PREFIX = os.getenv("DASH_URL_BASE", "/app").rstrip("/")
+        route_prefix, url_base = get_dash_base_paths()
         # Basic safety: only allow local relative redirects
         if next_url and next_url.startswith("/") and not next_url.startswith("//"):
             return redirect(next_url)
-        return redirect(DASH_PREFIX + "/")
+        return redirect((route_prefix or "") + "/")
 
     flash("Invalid credentials")
     return redirect(url_for(".login_page"))
