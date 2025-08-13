@@ -10,6 +10,7 @@ class SimpleSSEClient {
         this.maxReconnectAttempts = 3;
         this.lastPlacesSig = null;
         this.llmBusy = false; // server-driven busy flag for thinking indicator
+        this.currentOptions = null; // cache of currently visible UI options
 
         console.log('Simple SSE Client initialized');
     }
@@ -36,6 +37,14 @@ class SimpleSSEClient {
         this.eventSource = new EventSource(url);
 
         this.postWorkflowInput = (input) => {
+          // Attach UI options (if any) so backend state is aware of visible buttons
+          try {
+            if (this.currentOptions && Array.isArray(this.currentOptions) && this.currentOptions.length > 0) {
+                input = Object.assign({}, input, { options: this.currentOptions });
+            }
+          } catch (e) {
+            console.warn('SSE: Failed to attach current options to workflow input', e);
+          }
           if (!this.threadId) return;
 
           return fetch(`/app/workflow/${this.threadId}`, {
@@ -310,6 +319,8 @@ class SimpleSSEClient {
         // Show buttons if provided
         if (interruptData.options && Array.isArray(interruptData.options)) {
             this.showButtons(interruptData.options);
+            // Cache options so they can be sent back with subsequent messages
+            this.currentOptions = interruptData.options;
         } else {
             // Clear buttons if no options
             this.clearButtons();
@@ -597,7 +608,8 @@ class SimpleSSEClient {
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-                workflow_input: selectionInput
+                // Include current options so the backend can keep LLM aware
+                workflow_input: Object.assign({}, selectionInput, (this.currentOptions && this.currentOptions.length > 0 ? { options: this.currentOptions } : {}))
             })
         })
         .then(response => {
@@ -621,6 +633,8 @@ class SimpleSSEClient {
         if (container) {
             container.innerHTML = '';
         }
+        // Clear cached options when buttons are cleared
+        this.currentOptions = null;
     }
 
     // Helper: Clear chat display

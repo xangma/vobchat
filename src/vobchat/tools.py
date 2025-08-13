@@ -6,6 +6,7 @@ from langchain.tools import BaseTool, StructuredTool, tool
 from langchain_community.tools import QuerySQLDataBaseTool
 import pandas as pd
 from typing import List, Annotated, Dict
+import json
 from vobchat.config import load_config, get_db
 import io
 from vobchat.utils.constants import UNIT_TYPES
@@ -639,3 +640,182 @@ def get_place_key_findings(g_unit: Annotated[int, "Unit identifier for the place
         return pd.DataFrame(columns=["g_url", "g_label", "g_text"]).to_json(orient='records', force_ascii=False, default_handler=str)
     return df.to_json(orient='records', force_ascii=False, default_handler=str)
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Unit type information (definition page) – DB-backed to avoid hallucinations
+# ────────────────────────────────────────────────────────────────────────────
+@tool
+def get_unit_type_info(
+    unit_type: Annotated[str, "Unit type code (e.g., 'LG_DIST') or label (e.g., 'Local Government District')"]
+) -> str:
+    """Return structured details about a unit type (label, id, level, ADL feature type, descriptions, counts, relations, statuses).
+
+    Returns JSON with shape:
+      {
+        "identifier": str,
+        "label": str,
+        "level": int,
+        "level_label": str,
+        "adl_feature_type": str | null,
+        "description": str | null,
+        "full_description": str | null,
+        "unit_count": int,
+        "may_be_part_of": [{"unit_type": str, "label": str}],
+        "may_have_parts":  [{"unit_type": str, "label": str}],
+        "may_have_succeeded": [{"unit_type": str, "label": str}],
+        "may_have_preceded":  [{"unit_type": str, "label": str}],
+        "statuses": [{"code": str, "label": str}]
+      }
+    """
+    raw = (unit_type or "").strip()
+    if not raw:
+        return json.dumps({})
+    safe = raw.replace("'", "''")
+
+    dbtool = QuerySQLDataBaseTool(db=db)
+
+    base_query_by_code = f"""
+        SELECT t.g_unit_type, t.g_type_label, t.g_type_level, ll.g_label, l.g_adl_ft,
+               t.g_description, t.g_full_description, t.notes
+        FROM   g_unit_type t
+        JOIN   g_type_level l       ON l.g_type_level = t.g_type_level
+        JOIN   g_type_level_label ll ON ll.g_type_level = l.g_type_level
+        WHERE  t.g_unit_type = '{safe}'
+        LIMIT 1;
+    """
+    base_query_by_label = f"""
+        SELECT t.g_unit_type, t.g_type_label, t.g_type_level, ll.g_label, l.g_adl_ft,
+               t.g_description, t.g_full_description, t.notes
+        FROM   g_unit_type t
+        JOIN   g_type_level l       ON l.g_type_level = t.g_type_level
+        JOIN   g_type_level_label ll ON ll.g_type_level = l.g_type_level
+        WHERE  LOWER(t.g_type_label) = LOWER('{safe}')
+        LIMIT 1;
+    """
+
+    try:
+        res = dbtool.db._execute(base_query_by_code)
+        base_df = pd.DataFrame(res, columns=[
+            "g_unit_type","g_type_label","g_type_level","level_label","g_adl_ft",
+            "g_description","g_full_description","notes"
+        ])
+        if base_df.empty:
+            res = dbtool.db._execute(base_query_by_label)
+            base_df = pd.DataFrame(res, columns=[
+                "g_unit_type","g_type_label","g_type_level","level_label","g_adl_ft",
+                "g_description","g_full_description","notes"
+            ])
+        if base_df.empty:
+            return json.dumps({})
+        row = base_df.iloc[0]
+        code = str(row["g_unit_type"])  # canonical code
+    except Exception as e:
+        logger.error(f"[get_unit_type_info] Error fetching base info: {e}", exc_info=True)
+        return json.dumps({})
+
+    # Count units
+    try:
+        count_query = f"SELECT count(g_unit) as unit_count FROM g_unit WHERE g_unit_type = '{code}';"
+        res = dbtool.db._execute(count_query)
+        count_df = pd.DataFrame(res, columns=["unit_count"]) if res is not None else pd.DataFrame()
+        unit_count = int(count_df.iloc[0]["unit_count"]) if not count_df.empty else 0
+    except Exception as e:
+        logger.warning(f"[get_unit_type_info] Count query failed for {code}: {e}")
+        unit_count = 0
+
+    def rel_query(sql_tmpl_no_filter: str, sql_tmpl_with_filter: str, cols: List[str]) -> List[Dict[str, str]]:
+        try:
+            res = dbtool.db._execute(sql_tmpl_with_filter)
+            df  = pd.DataFrame(res, columns=cols)
+            if df.empty:
+                res = dbtool.db._execute(sql_tmpl_no_filter)
+                df  = pd.DataFrame(res, columns=cols)
+        except Exception:
+            try:
+                res = dbtool.db._execute(sql_tmpl_no_filter)
+                df  = pd.DataFrame(res, columns=cols)
+            except Exception:
+                df = pd.DataFrame(columns=cols)
+        out = []
+        for _, r in df.iterrows():
+            try:
+                out.append({"unit_type": str(r[cols[0]]), "label": str(r[cols[1]])})
+            except Exception:
+                continue
+        return out
+
+    above_no_filter = f"""
+        SELECT r.g_rel_unit_type, t.g_type_label
+        FROM   g_legal_rel r
+        JOIN   g_unit_type t ON t.g_unit_type = r.g_rel_unit_type
+        WHERE  r.g_rel_type = 'IsPartOf' AND r.g_unit_type = '{code}';
+    """
+    above_with_filter = f"""
+        SELECT r.g_rel_unit_type, t.g_type_label
+        FROM   g_legal_rel r
+        JOIN   g_unit_type t ON t.g_unit_type = r.g_rel_unit_type
+        WHERE  r.g_rel_type = 'IsPartOf' AND r.g_unit_type = '{code}'
+          AND  t.g_jurisdiction = 'GBHGIS';
+    """
+    above = rel_query(above_no_filter, above_with_filter, ["g_rel_unit_type","g_type_label"])
+
+    below_no_filter = f"""
+        SELECT r.g_unit_type, t.g_type_label
+        FROM   g_legal_rel r
+        JOIN   g_unit_type t ON t.g_unit_type = r.g_unit_type
+        WHERE  r.g_rel_type = 'IsPartOf' AND r.g_rel_unit_type = '{code}';
+    """
+    below_with_filter = f"""
+        SELECT r.g_unit_type, t.g_type_label
+        FROM   g_legal_rel r
+        JOIN   g_unit_type t ON t.g_unit_type = r.g_unit_type
+        WHERE  r.g_rel_type = 'IsPartOf' AND r.g_rel_unit_type = '{code}'
+          AND  t.g_jurisdiction = 'GBHGIS';
+    """
+    below = rel_query(below_no_filter, below_with_filter, ["g_unit_type","g_type_label"])
+
+    before_q = f"""
+        SELECT r.g_unit_type, t.g_type_label
+        FROM   g_legal_rel r
+        JOIN   g_unit_type t ON t.g_unit_type = r.g_unit_type
+        WHERE  r.g_rel_type = 'SucceededBy' AND r.g_rel_unit_type = '{code}';
+    """
+    before = rel_query(before_q, before_q, ["g_unit_type","g_type_label"])
+
+    after_q = f"""
+        SELECT r.g_rel_unit_type, t.g_type_label
+        FROM   g_legal_rel r
+        JOIN   g_unit_type t ON t.g_unit_type = r.g_rel_unit_type
+        WHERE  r.g_rel_type = 'SucceededBy' AND r.g_unit_type = '{code}';
+    """
+    after = rel_query(after_q, after_q, ["g_rel_unit_type","g_type_label"])
+
+    # Status values
+    try:
+        status_q = f"SELECT g_status, g_label FROM g_status_type WHERE g_unit_type = '{code}';"
+        res = dbtool.db._execute(status_q)
+        status_df = pd.DataFrame(res, columns=["g_status","g_label"]) if res is not None else pd.DataFrame()
+        statuses = []
+        for _, r in status_df.iterrows():
+            statuses.append({"code": str(r["g_status"]), "label": str(r["g_label"])})
+    except Exception as e:
+        logger.warning(f"[get_unit_type_info] Status query failed for {code}: {e}")
+        statuses = []
+
+    out = {
+        "identifier": code,
+        "label": str(row.get("g_type_label", "")),
+        "level": int(row.get("g_type_level")) if row.get("g_type_level") is not None else None,
+        "level_label": str(row.get("level_label")) if row.get("level_label") is not None else None,
+        "adl_feature_type": (str(row.get("g_adl_ft")) if row.get("g_adl_ft") is not None else None),
+        "description": (str(row.get("g_description")) if row.get("g_description") is not None else None),
+        "full_description": (str(row.get("g_full_description")) if row.get("g_full_description") is not None else None),
+        "unit_count": unit_count,
+        "may_be_part_of": above,
+        "may_have_parts": below,
+        "may_have_succeeded": before,
+        "may_have_preceded": after,
+        "statuses": statuses,
+    }
+    return json.dumps(out)

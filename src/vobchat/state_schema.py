@@ -160,3 +160,5 @@ class lg_State(TypedDict):
     _prompted_for_place: Optional[bool]
     show_visualization: Optional[bool]
     interrupt_message: Optional[str]  # Message from interrupt to be added to state on resume
+    # conversational memory (optional, used by conversational agent)
+    memory_summary: Optional[str]

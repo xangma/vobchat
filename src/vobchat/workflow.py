@@ -86,6 +86,7 @@ from vobchat.nodes import (
     resolve_place_and_unit
 )
 from vobchat.agent_routing import agent_node  # Main entry point for user interactions
+from vobchat.conversational_agent import conversational_agent_node  # Conversational agent (LLM-planned)
 from vobchat.intent_handling import AssistantIntent  # Enum for routing intents
 from vobchat.state_schema import lg_State, get_selected_units  # TypedDict for the workflow state
 
@@ -313,6 +314,8 @@ def create_workflow(lg_state: TypedDict):
     # workflow.add_node("request_map_selection", request_map_selection) # Dedicated interrupt node
     workflow.add_node("select_unit_on_map", select_unit_on_map) # Legacy node (kept for compatibility)
     workflow.add_node("find_cubes_node", find_cubes_node) # Retrieves final data cubes (interrupt)
+    # Conversational agent node (behind feature flag)
+    workflow.add_node("conversational_agent_node", conversational_agent_node)
 
     workflow.add_node("ShowState_node", ShowState_node)
     workflow.add_node("ListThemes_node", ListThemes_node)
@@ -392,9 +395,13 @@ def create_workflow(lg_state: TypedDict):
 
         # If there's a new user message, always route to agent_node for intent extraction
         if has_new_user_message:
-            logger.info(f"=== URGENT DEBUG: start_node ROUTING to agent_node (new user message detected) ===")
-            logging.info(f"start_node: New user message detected, routing to agent_node for intent extraction")
-            return Command(goto="agent_node")
+            import os
+            use_conv = os.getenv("CONVERSATIONAL_AGENT", "0").lower() in ("1", "true", "yes")
+            target = "conversational_agent_node" if use_conv else "agent_node"
+            logger.info(
+                f"start_node ROUTING to {target} (new user message detected; CONVERSATIONAL_AGENT={use_conv})"
+            )
+            return Command(goto=target)
 
         # PRIORITY 2: Check for new intent payloads (e.g., map clicks) before
         # resuming a stale node. This prevents resuming ``resolve_theme`` when
