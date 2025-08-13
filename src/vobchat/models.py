@@ -53,7 +53,8 @@ def load_user(user_id):
 @bp.route("/login", methods=["GET"])
 def login_page():
     """Initial GET page shown to unauthenticated users."""
-    if db.session.get(User, session.get("user_id", -1)):
+    # Use Flask-Login state to decide; avoids loops with stale session ids
+    if current_user.is_authenticated:
         DASH_PREFIX = os.getenv("DASH_URL_BASE", "/app").rstrip("/")
         return redirect(DASH_PREFIX + "/")          # already logged in
     return render_template_string(LOGIN_PAGE_NO_SIGNUP)
