@@ -60,7 +60,12 @@ logger = logging.getLogger(__name__)
 background_callback_manager = None
 simple_sse_manager = get_sse_manager()
 
-DASH_PREFIX = os.getenv("DASH_URL_BASE", "/app").rstrip("/")
+# Normalize base path; treat "/" as root (empty prefix for routing)
+_base = os.getenv("DASH_URL_BASE", "/app").strip()
+if _base in {"", "/"}:
+    DASH_PREFIX = ""  # root
+else:
+    DASH_PREFIX = _base.rstrip("/")
 
 
 def register_simple_sse_routes(server, workflow_adapter):
@@ -262,6 +267,12 @@ def create_app():
         # Allow the pieces Dash needs to render its blank page assets
         safe_subpaths = ("/_dash", "/assets", "/_favicon", "/_reload", "/sse", "/workflow")
         if any(path.startswith(f"{DASH_PREFIX}{p}") for p in safe_subpaths):
+            return
+
+        # If serving at root (DASH_PREFIX == ""), allow the auth login route
+        # (/login) and the bare root (/) to render for unauthenticated users;
+        # otherwise we create a redirect loop.
+        if DASH_PREFIX == "" and path in ("/", "/login"):
             return
 
         # Block everything else unless the user is logged in

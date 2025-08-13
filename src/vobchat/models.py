@@ -50,7 +50,7 @@ lm.login_view = "auth.login_page"
 def load_user(user_id):
     return db.session.get(User, int(user_id))
 
-@bp.route("/", methods=["GET"])
+@bp.route("/login", methods=["GET"])
 def login_page():
     """Initial GET page shown to unauthenticated users."""
     if db.session.get(User, session.get("user_id", -1)):
@@ -101,4 +101,4 @@ def login():
 @login_required
 def logout():
     logout_user()
-    return redirect("/")
+    return redirect(url_for("auth.login_page"))
