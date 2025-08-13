@@ -269,11 +269,17 @@ def create_app():
         if any(path.startswith(f"{DASH_PREFIX}{p}") for p in safe_subpaths):
             return
 
-        # If serving at root (DASH_PREFIX == ""), allow the auth login route
-        # (/login) and the bare root (/) to render for unauthenticated users;
-        # otherwise we create a redirect loop.
-        if DASH_PREFIX == "" and path in ("/", "/login"):
-            return
+        # Special handling when serving at root (DASH_PREFIX == "")
+        if DASH_PREFIX == "":
+            # Always allow login page
+            if path == "/login":
+                return
+            # For the bare root:
+            if path == "/":
+                if not current_user.is_authenticated:
+                    return redirect(url_for("auth.login_page", next=path))
+                else:
+                    return  # authenticated users can load the Dash root
 
         # Block everything else unless the user is logged in
         if not current_user.is_authenticated:

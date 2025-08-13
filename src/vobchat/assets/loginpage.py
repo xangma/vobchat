@@ -54,6 +54,7 @@ LOGIN_PAGE = f"""
               <label class="form-label">Password</label>
               <input class="form-control" type="password" name="password" required>
             </div>
+            <input type="hidden" name="next" value="{{ request.args.get('next','') }}">
             <button class="btn btn-primary w-100" type="submit">Sign in</button>
           </form>
 

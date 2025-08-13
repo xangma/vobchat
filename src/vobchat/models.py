@@ -86,11 +86,15 @@ def signup():
 def login():
     email = request.form.get("email", "").strip().lower()
     pwd   = request.form.get("password", "")
+    next_url = request.form.get("next") or request.args.get("next") or ""
 
     user = db.session.scalar(db.select(User).filter_by(email=email))
     if user and user.verify_password(pwd):
         login_user(user)
         DASH_PREFIX = os.getenv("DASH_URL_BASE", "/app").rstrip("/")
+        # Basic safety: only allow local relative redirects
+        if next_url and next_url.startswith("/") and not next_url.startswith("//"):
+            return redirect(next_url)
         return redirect(DASH_PREFIX + "/")
 
     flash("Invalid credentials")
