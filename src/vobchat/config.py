@@ -1,4 +1,11 @@
-# app/config.py
+"""
+Environment-first database configuration with optional database.ini.
+
+This removes the hard requirement on database.ini. Values are read from
+environment variables first, falling back to database.ini if present,
+and finally to sane defaults for local/dev and Docker setups.
+"""
+
 from sqlalchemy import exc as sa_exc
 from configparser import ConfigParser
 import os
@@ -6,31 +13,41 @@ from langchain_community.utilities import SQLDatabase
 from geoalchemy2 import Geometry
 import warnings
 
+# Feature flags
 localdb = True
 use_tunnel = False  # New flag for using SSH tunnel
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-def load_config(filename=os.path.join(BASE_DIR, "database.ini"), section='postgresql'):
+
+def _read_ini_if_present(filename: str, section: str) -> dict:
+    """Best-effort read of database.ini; returns {} if missing or invalid."""
     parser = ConfigParser()
-    parser.read(filename)
+    try:
+        parser.read(filename)
+        if parser.has_section(section):
+            return {k: v for k, v in parser.items(section)}
+    except Exception:
+        pass
+    return {}
 
-    config = {}
-    if parser.has_section(section):
-        params = parser.items(section)
-        for param in params:
-            config[param[0]] = param[1]
-        config['password'] = os.environ.get('VOB_PASS')
-    else:
-        raise Exception(f'Section {section} not found in {filename}')
 
-    if localdb:
-        # Docker environment variables override defaults
-        config['host'] = os.environ.get('DB_HOST', 'localhost')
-        config['user'] = os.environ.get('DB_USER', 'postgres')
-        config['password'] = os.environ.get('DB_PASSWORD', os.environ.get('POSTGRES_PASS'))
-        config['dbname'] = os.environ.get('DB_NAME', config.get('dbname', 'vobchat'))
-        config['port'] = int(os.environ.get('DB_PORT', '5432'))
+def load_config(filename=os.path.join(BASE_DIR, "database.ini"), section='postgresql'):
+    # Start with values from database.ini if present
+    config = _read_ini_if_present(filename, section)
+
+    # Overlay environment variables (env takes precedence)
+    config['host'] = os.environ.get('DB_HOST', config.get('host', 'localhost'))
+    config['user'] = os.environ.get('DB_USER', config.get('user', 'postgres'))
+    config['password'] = (
+        os.environ.get('DB_PASSWORD')
+        or os.environ.get('POSTGRES_PASS')
+        or os.environ.get('VOB_PASS')
+        or config.get('password', '')
+    )
+    config['dbname'] = os.environ.get('DB_NAME', config.get('dbname', 'vobchat'))
+    config['port'] = int(os.environ.get('DB_PORT', config.get('port', 5432)))
+    config['schema'] = os.environ.get('DB_SCHEMA', config.get('schema', 'hgis'))
 
     return config
 
@@ -39,7 +56,7 @@ def get_db(config):
     # If using an SSH tunnel
     if use_tunnel and not localdb:
         from sshtunnel import SSHTunnelForwarder
-        ssh_config = load_config(
+        ssh_config = _read_ini_if_present(
             filename=os.path.join(BASE_DIR, "database.ini"),
             section='sshtunnel'
         )
@@ -57,7 +74,8 @@ def get_db(config):
         config['host'] = 'localhost'
         config['port'] = tunnel.local_bind_port
     else:
-        config['port'] = 5432
+        # Respect port from config; default to 5432
+        config['port'] = int(config.get('port', 5432))
 
     # Add connection pool settings and timeouts for better reliability
     dburi = f"postgresql://{config['user']}:{config['password']}@{config['host']}:{config['port']}/{config['dbname']}?connect_timeout=10&application_name=vobchat"
