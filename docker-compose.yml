@@ -16,6 +16,8 @@ services:
       - DB_SCHEMA=${DB_SCHEMA}
       - OLLAMA_HOST=${OLLAMA_HOST}
       - OLLAMA_PORT=${OLLAMA_PORT}
+      - OLLAMA_SUBPATH=${OLLAMA_SUBPATH}
+      - OLLAMA_USE_SSL=${OLLAMA_USE_SSL}
 
       # Redis connection (internal to container)
       - REDIS_HOST=localhost

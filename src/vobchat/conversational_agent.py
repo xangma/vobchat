@@ -136,15 +136,19 @@ def _make_llm() -> ChatOllama:
     - OLLAMA_HOST / OLLAMA_PORT (endpoint)
     - VOBCHAT_LLM_MODEL (model name)
     """
-    host = os.getenv("OLLAMA_HOST", "localhost")
-    port = os.getenv("OLLAMA_PORT", "11434")
-    base_url = f"https://{host}:{port}/"
+    _OLLAMA_HOST = os.getenv("OLLAMA_HOST", "localhost")
+    _OLLAMA_PORT = os.getenv("OLLAMA_PORT", "11434")
+    _OLLAMA_SUBPATH = os.getenv("OLLAMA_SUBPATH", "")
+    _OLLAMA_USE_SSL = os.getenv("OLLAMA_USE_SSL", "true").lower() == "true"
+    protocol = "https" if _OLLAMA_USE_SSL else "http"
+    _BASE_URL = f"{protocol}://{_OLLAMA_HOST}:{_OLLAMA_PORT}/{_OLLAMA_SUBPATH}"
+
     model = os.getenv("VOBCHAT_LLM_MODEL", "deepseek-r1-wt:latest")
     logger.debug(
         "conversational_agent: initializing LLM",
-        extra={"base_url": base_url, "model": model}
+        extra={"base_url": _BASE_URL, "model": model}
     )
-    return ChatOllama(model=model, base_url=base_url, temperature=0.0)
+    return ChatOllama(model=model, base_url=_BASE_URL, client_kwargs={"verify": False})
 
 
 def _summarize_selection(state: lg_State) -> Dict[str, object]:

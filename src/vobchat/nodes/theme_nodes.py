@@ -22,13 +22,18 @@ logger = logging.getLogger(__name__)
 
 # Initialize LLM for theme matching
 import os
-ollama_host = os.getenv("OLLAMA_HOST", "localhost")
-ollama_port = os.getenv("OLLAMA_PORT", "11434")
-base_url = f"http://{ollama_host}:{ollama_port}/"
+_OLLAMA_HOST = os.getenv("OLLAMA_HOST", "localhost")
+_OLLAMA_PORT = os.getenv("OLLAMA_PORT", "11434")
+_OLLAMA_SUBPATH = os.getenv("OLLAMA_SUBPATH", "")
+_OLLAMA_USE_SSL = os.getenv("OLLAMA_USE_SSL", "true").lower() == "true"
+protocol = "https" if _OLLAMA_USE_SSL else "http"
+_BASE_URL = f"{protocol}://{_OLLAMA_HOST}:{_OLLAMA_PORT}/{_OLLAMA_SUBPATH}"
+
 
 model = ChatOllama(
     model="deepseek-r1-wt:latest",
-    base_url=base_url,
+    base_url=_BASE_URL,
+    client_kwargs={"verify": False}
 )
 
 class ThemeDecision(BaseModel):
