@@ -14,6 +14,12 @@ class SimpleSSEClient {
         // Use Dash's official url base path env exposure
         this.basePath = (typeof window !== 'undefined' && window.DASH_URL_BASE_PATHNAME) ? window.DASH_URL_BASE_PATHNAME : '/';
 
+        this.joinPath = (base, path) => {
+            base = base || "";
+            if (base.endsWith('/')) base = base.slice(0, -1);
+            return `${base}${path}`;
+        };
+
         console.log('Simple SSE Client initialized');
     }
 
@@ -33,14 +39,7 @@ class SimpleSSEClient {
             this.hideThinkingIndicator?.();
         }
 
-        // Build SSE URL with correct prefix
-        const joinPath = (base, path) => {
-            base = base || "";
-            if (base.endsWith('/')) base = base.slice(0, -1);
-            return `${base}${path}`;
-        };
-
-        let url = joinPath(this.basePath, `/sse/${threadId}`);
+        let url = this.joinPath(this.basePath, `/sse/${threadId}`);
 
         this.eventSource = new EventSource(url);
 
@@ -55,7 +54,7 @@ class SimpleSSEClient {
           }
           if (!this.threadId) return;
 
-          return fetch(joinPath(this.basePath, `/workflow/${this.threadId}`), {
+          return fetch(this.joinPath(this.basePath, `/workflow/${this.threadId}`), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ workflow_input: input })
@@ -610,7 +609,7 @@ class SimpleSSEClient {
         console.log('SSE: Sending selection via existing connection:', selectionInput);
 
         // Send selection data via POST request to continue workflow
-    fetch(joinPath(this.basePath, `/workflow/${this.threadId}`), {
+    fetch(this.joinPath(this.basePath, `/workflow/${this.threadId}`), {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',

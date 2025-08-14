@@ -272,6 +272,8 @@ def create_workflow(lg_state: TypedDict):
     # Initialize the language model (ChatOllama) and endpoint settings.
     logger.info("Initializing language model...")
     import os
+    _MODEL_NAME = os.getenv("VOBCHAT_LLM_MODEL", "deepseek-r1-wt:latest")
+    _MODEL_TEMP = os.getenv("VOBCHAT_LLM_TEMP", 0.7)
     _OLLAMA_HOST = os.getenv("OLLAMA_HOST", "localhost")
     _OLLAMA_PORT = os.getenv("OLLAMA_PORT", "11434")
     _OLLAMA_SUBPATH = os.getenv("OLLAMA_SUBPATH", "")
@@ -280,8 +282,9 @@ def create_workflow(lg_state: TypedDict):
     _BASE_URL = f"{protocol}://{_OLLAMA_HOST}:{_OLLAMA_PORT}/{_OLLAMA_SUBPATH}/"
 
     model = ChatOllama(
-        model="deepseek-r1-wt:latest",  # Keep in sync with intent_handling.py
+        model=_MODEL_NAME,  # Keep in sync with intent_handling.py
         base_url=_BASE_URL,  # URL of the Ollama API server
+        temperature=_MODEL_TEMP,
         # default_options={"format": "json"},
         # base_url="https://148.197.150.162/ollama_api/",  # URL of the Ollama API server
         client_kwargs={"verify": False}  # Disables SSL verification if needed (use cautiously)

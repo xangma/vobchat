@@ -19,7 +19,7 @@ Notes on logging:
 
 from __future__ import annotations
 
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Set
 import json
 from enum import Enum
 from pydantic import BaseModel, Field
@@ -52,6 +52,7 @@ class ActionName(str, Enum):
     FetchCubes = "FetchCubes"
     Chat = "Chat"
     UnitTypeInfo = "UnitTypeInfo"
+    DescribeTheme = "DescribeTheme"
 
 
 class PlannedAction(BaseModel):
@@ -92,21 +93,23 @@ Available actions (intents) you can propose in JSON:
 - RemoveTheme {{}}
 - ShowState {{}}
 - ListThemes {{}}
+- UnitTypeInfo {{unit_type: str}} (use when the user asks what a unit type is, e.g., "what is Local Government District" or "what is LG_DIST")
+- DescribeTheme {{theme_query: str}} (use when asked to explain/describe a theme)
 - PlaceInfo {{place: str}}
 - Reset {{}}
 - FetchCubes {{}}
 - Chat {{text: str}}  (use only when you just need to reply and not change state)
- - UnitTypeInfo {{unit_type: str}} (use when the user asks what a unit type is, e.g., "what is Local Government District" or "what is LG_DIST")
 
 Rules:
 - Prefer concrete actions over Chat when the user asks to do something.
 - If the place is ambiguous or a theme is unclear, ask one concise question in final_reply and propose no actions.
 - Use AddPlace for location queries like "where's X", "show me X", "find X".
 - For "stats/data/statistics for X", include AddPlace and AddTheme.
+- If the user asks what a unit type means (by code or label), propose UnitTypeInfo with that code/label in arguments.
+- If UI option buttons are visible (see CONTEXT → UI options), you may reference them and avoid proposing duplicate actions.
 - Return STRICT JSON matching the schema. Do not include code fences or extra text.
 - If the user asks about this app or what it does, DO NOT propose actions; return a concise explanation in final_reply.
- - If the user asks what a unit type means (by code or label), propose UnitTypeInfo with that code/label in arguments.
- - If UI option buttons are visible (see CONTEXT → UI options), you may reference them and avoid proposing duplicate actions.
+Return only valid JSON matching the schema; no explanation.
         """.strip(),
     ),
     (
@@ -116,9 +119,11 @@ CONTEXT
 - Selected places: {selected_places}
 - Selected theme: {selected_theme}
 - Selected units: {selected_units}
- - App overview: {app_overview}
- - UI options (if any):\n{ui_options}
- - UI option labels (if any): {ui_option_labels}
+- App overview: {app_overview}
+- UI options (if any):\n{ui_options}
+- UI option labels (if any): {ui_option_labels}
+- Recent conversation (last turns):\n{recent_conversation}
+ - Domain hints (if any):\n{domain_hints}
 
 USER_MESSAGE
 {user_text}
@@ -141,13 +146,14 @@ def _make_llm() -> ChatOllama:
     _OLLAMA_SUBPATH = os.getenv("OLLAMA_SUBPATH", "")
     _OLLAMA_USE_SSL = os.getenv("OLLAMA_USE_SSL", "true").lower() == "true"
     protocol = "https" if _OLLAMA_USE_SSL else "http"
-    _BASE_URL = f"{protocol}://{_OLLAMA_HOST}:{_OLLAMA_PORT}/{_OLLAMA_SUBPATH}/"
+    _BASE_URL = f"{protocol}://{_OLLAMA_HOST}:{_OLLAMA_PORT}/{_OLLAMA_SUBPATH}".strip("/")
 
-    model = os.getenv("VOBCHAT_LLM_MODEL", "deepseek-r1-wt:latest")
+    _MODEL_NAME = os.getenv("VOBCHAT_LLM_MODEL", "deepseek-r1-wt:latest")
+    _MODEL_TEMP = os.getenv("VOBCHAT_LLM_TEMP", 0.7)
     logger.debug(
-        f"conversational_agent: initializing LLM - base_url={_BASE_URL}, model={model}",
+        f"conversational_agent: initializing LLM - base_url={_BASE_URL}, model={_MODEL_NAME}",
     )
-    return ChatOllama(model=model, base_url=_BASE_URL, client_kwargs={"verify": False})
+    return ChatOllama(model=_MODEL_NAME, base_url=_BASE_URL, temperature=_MODEL_TEMP, client_kwargs={"verify": False})
 
 
 def _summarize_selection(state: lg_State) -> Dict[str, object]:
@@ -164,6 +170,88 @@ def _summarize_selection(state: lg_State) -> Dict[str, object]:
         "selected_theme": theme,
         "selected_units": len(units) if units else 0,
     }
+
+
+def _summarize_recent_conversation(state: lg_State, max_messages: int = 6, max_chars: int = 600) -> str:
+    """Return a short summary of the last few conversation turns.
+
+    Includes role and truncated content. Avoids dumping large or sensitive text.
+    """
+    messages = state.get("messages", []) or []
+    if not messages:
+        return "(none)"
+    recent = messages[-max_messages:]
+    lines: List[str] = []
+    for m in recent:
+        try:
+            role = getattr(m, "type", None) or getattr(m, "role", None) or "message"
+            content = (m.content or "").strip()
+            if len(content) > 200:
+                content = content[:200] + "…"
+            lines.append(f"{role}: {content}")
+        except Exception:
+            continue
+    text = "\n".join(lines)
+    if len(text) > max_chars:
+        text = text[-max_chars:]
+    return text if text else "(none)"
+
+
+# --------------------------------------------------------------------------------------
+# Hint providers (general mechanism)
+# --------------------------------------------------------------------------------------
+
+def _build_domain_hints(state: lg_State, user_text: str, max_chars: int = 800) -> str:
+    """Collect compact, domain-specific hint blocks for the planner.
+
+    This is a general mechanism: providers can look at state + user_text and
+    decide whether to emit a small hint (e.g., catalog labels).
+    """
+    providers = [
+        _theme_labels_hint,
+        # Additional providers can be added here.
+    ]
+    parts: List[str] = []
+    for prov in providers:
+        try:
+            h = prov(state, user_text)
+            if h:
+                parts.append(h)
+        except Exception:
+            continue
+    if not parts:
+        return "(none)"
+    text = "\n".join(parts)
+    if len(text) > max_chars:
+        text = text[:max_chars] + "…"
+    return text
+
+
+def _theme_labels_hint(state: lg_State, user_text: str, max_items: int = 20) -> Optional[str]:
+    """If the current turn is theme-explanatory, provide a compact themes list.
+
+    Trigger: user_text mentions both a theme intent and an explanatory verb
+    like "what is", "describe", or "explain".
+    """
+    txt = (user_text or "").lower()
+    trigger = (
+        ("theme" in txt or "themes" in txt)
+        and ("what is" in txt or "what's" in txt or "describe" in txt or "explain" in txt or "tell me about" in txt)
+    )
+    if not trigger:
+        return None
+    try:
+        # Lazy import to avoid heavy deps; get_all_themes returns JSON
+        from vobchat.tools import get_all_themes
+        import io, pandas as pd  # used locally to keep it simple
+        themes_json = get_all_themes("")
+        df = pd.read_json(io.StringIO(themes_json), orient="records")
+        if df.empty:
+            return None
+        labels = [str(x) for x in list(df["labl"])[:max_items]]
+        return "Themes: " + "; ".join(labels)
+    except Exception:
+        return None
 
 
 def _summarize_ui_options(state: lg_State) -> str:
@@ -234,6 +322,8 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
     ctx = _summarize_selection(state)
     ui_opts_summary = _summarize_ui_options(state)
     ui_option_labels = _list_ui_option_labels(state)
+    recent_conv = _summarize_recent_conversation(state)
+    domain_hints = _build_domain_hints(state, user_text)
     # Log a short snapshot for debugging (not the full user text)
     logger.info(
         "conversational_agent_node: planning for user input",
@@ -243,6 +333,7 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
             "ui_options_present": bool(state.get("options"))
         },
     )
+    # Always use the LLM planner to decide next steps.
     llm = _make_llm()
     chain = _PLANNER_PROMPT | llm.with_structured_output(schema=AssistantPlan)
 
@@ -256,12 +347,14 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
             "selection, map-based unit selection, and showing your current selection."
         )
         plan: AssistantPlan = chain.invoke({
+            "app_overview": app_overview,
             "selected_places": ctx["selected_places"],
             "selected_theme": ctx["selected_theme"],
             "selected_units": ctx["selected_units"],
-            "app_overview": app_overview,
             "ui_options": ui_opts_summary,
             "ui_option_labels": ui_option_labels,
+            "recent_conversation": recent_conv,
+            "domain_hints": domain_hints,
             "user_text": user_text,
         })
     except Exception as e:
@@ -295,11 +388,15 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
         logger.debug("conversational_agent_node: no actions and no reply → noop")
         return {}
 
-    # Convert actions to our queue format
+    # Normalize and validate actions, then convert to queue format
     queue: List[dict] = state.get("intent_queue", []) or []
-    payloads: List[dict] = []
-    for act in actions:
-        payloads.append({"intent": act.intent.value, "arguments": act.arguments or {}})
+    payloads = _normalize_and_validate_actions(actions, state)
+    if not payloads:
+        # Nothing actionable after normalization
+        if reply:
+            state["messages"].append(AIMessage(content=reply))
+            return {"messages": state["messages"], "last_intent_payload": state.get("last_intent_payload")}
+        return {}
 
     first = payloads[0]
     rest = payloads[1:]
@@ -310,11 +407,8 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
             extra={"queued_count": len(rest), "queue_len": len(queue)},
         )
 
-    # Map first action to target node
     intent = first.get("intent")
-    target_node = f"{intent}_node" if intent not in ("FetchCubes", "Chat") else (
-        "find_cubes_node" if intent == "FetchCubes" else None
-    )
+    target_node = _intent_to_node(intent)
 
     # Special handling for UnitTypeInfo: fetch from DB and reply directly
     if intent == "UnitTypeInfo":
@@ -419,3 +513,122 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
             "last_intent_payload": first,
         },
     )
+
+# --------------------------------------------------------------------------------------
+# Helpers: normalization and mapping
+# --------------------------------------------------------------------------------------
+
+def _intent_to_node(intent: Optional[str]) -> Optional[str]:
+    """Map an intent string to a workflow node name."""
+    if not intent:
+        return None
+    mapping = {
+        "AddPlace": "AddPlace_node",
+        "RemovePlace": "RemovePlace_node",
+        "AddTheme": "AddTheme_node",
+        "RemoveTheme": "RemoveTheme_node",
+        "ShowState": "ShowState_node",
+        "ListThemes": "ListThemes_node",
+        "PlaceInfo": "PlaceInfo_node",
+        "Reset": "Reset_node",
+        "FetchCubes": "find_cubes_node",
+        "Chat": None,
+        "UnitTypeInfo": None,  # handled inline
+        "DescribeTheme": "DescribeTheme_node",
+    }
+    return mapping.get(intent)
+
+
+def _allowed_args_for_intent(intent: str) -> Set[str]:
+    """Allowed argument keys per intent for basic validation and pruning."""
+    table = {
+        "AddPlace": {"place", "places", "postcode"},
+        "RemovePlace": {"place"},
+        "AddTheme": {"theme_query"},
+        "RemoveTheme": set(),
+        "ShowState": set(),
+        "ListThemes": set(),
+        "PlaceInfo": {"place"},
+        "Reset": set(),
+        "FetchCubes": set(),
+        "Chat": {"text"},
+        "UnitTypeInfo": {"unit_type"},
+        # Accept both keys; we'll normalize to 'theme' for the node contract
+        "DescribeTheme": {"theme", "theme_query"},
+    }
+    return table.get(intent, set())
+
+
+def _normalize_and_validate_actions(actions: List[PlannedAction], state: lg_State) -> List[dict]:
+    """Normalize the list of actions into payload dicts with basic validation.
+
+    - Expand AddPlace with "places" list into multiple AddPlace items
+    - Drop unknown intents
+    - Filter arguments to allowed keys
+    - Deduplicate actions
+    - Skip redundant AddPlace for already-selected places
+    """
+    selected_names = set([n.lower() for n in get_selected_place_names(state)])
+    seen: Set[Tuple[str, str]] = set()
+    payloads: List[dict] = []
+
+    for act in actions:
+        intent = act.intent.value if isinstance(act.intent, ActionName) else str(act.intent)
+        target = _intent_to_node(intent)
+        # Keep Chat and UnitTypeInfo even if target is None (handled specially)
+        if target is None and intent not in ("Chat", "UnitTypeInfo"):
+            # Unknown or not routable intent
+            continue
+        args = dict(act.arguments or {})
+        # Filter to allowed keys
+        allowed = _allowed_args_for_intent(intent)
+        args = {k: v for k, v in args.items() if k in allowed}
+
+        # Expand multi-place into separate actions
+        if intent == "AddPlace" and isinstance(args.get("places"), list):
+            places = [str(p).strip() for p in args.get("places") if str(p).strip()]
+            for p in places:
+                if p.lower() in selected_names:
+                    continue
+                key = (intent, json.dumps({"place": p}, sort_keys=True))
+                if key in seen:
+                    continue
+                seen.add(key)
+                payloads.append({"intent": intent, "arguments": {"place": p}})
+            # If we expanded places, also consider a trailing FetchCubes if present later
+            continue
+
+        # Normalize single AddPlace with explicit place/postcode
+        if intent == "AddPlace":
+            if "place" in args and isinstance(args["place"], str):
+                p = args["place"].strip()
+                if p and p.lower() in selected_names:
+                    continue
+                norm_args = {"place": p} if p else {}
+            elif "postcode" in args and isinstance(args["postcode"], str):
+                norm_args = {"postcode": args["postcode"].strip()}
+            else:
+                # Unusable AddPlace arg set
+                continue
+            key = (intent, json.dumps(norm_args, sort_keys=True))
+            if key in seen:
+                continue
+            seen.add(key)
+            payloads.append({"intent": intent, "arguments": norm_args})
+            continue
+
+        # Normalize DescribeTheme args to the node's expected key
+        if intent == "DescribeTheme":
+            if "theme" not in args and isinstance(args.get("theme_query"), str):
+                t = args.get("theme_query").strip()
+                if t:
+                    args = {"theme": t}
+
+        # Other intents: keep filtered args
+        key = (intent, json.dumps(args, sort_keys=True))
+        if key in seen:
+            continue
+        seen.add(key)
+        payloads.append({"intent": intent, "arguments": args})
+
+    return payloads
