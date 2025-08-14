@@ -1,4 +1,4 @@
-# app/configure_logging.py
+# src/vobchat/configure_logging.py
 import logging
 import io
 import json

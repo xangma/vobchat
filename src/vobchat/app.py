@@ -16,8 +16,8 @@ Layout highlights:
 - Visualization panel (middle): hidden by default; shows graphs when data exists.
 - Map panel (right): Dash Leaflet map with polygon layer and controls.
 
-Authentication is enforced for all app URLs except Dash/static asset paths,
-SSE, and workflow endpoints so the login page can render.
+Authentication is enforced for all app URLs except Dash/static asset paths
+and auth endpoints so the login page can render.
 """
 
 # Simple App - Clean rewrite with simplified SSE architecture
@@ -175,11 +175,11 @@ def create_app():
     # Initialize Flask extensions
     db.init_app(server)
     lm.init_app(server)
-    server.register_blueprint(auth_bp)
+    # Mount auth routes under the same base path so /login works behind subpaths
+    server.register_blueprint(auth_bp, url_prefix=ROUTE_PREFIX or "")
     register_commands(server)
 
-    # Configure logging
-    logging.basicConfig(level=logging.INFO)
+    # Logging is configured in vobchat.__init__ via configure_enhanced_logging()
     logger.info("Flask extensions initialized")
 
     # Skip date ranges loading - not needed for simplified version
@@ -265,7 +265,8 @@ def create_app():
             return  # not a Dash URL → ignore
 
         # Allow the pieces Dash needs to render its blank page assets
-        safe_subpaths = ("/_dash", "/assets", "/_favicon", "/_reload", "/sse", "/workflow")
+        # Allow only explicit auth endpoint: login. Everything else requires auth.
+        safe_subpaths = ("/login",)
         if any(path.startswith(f"{ROUTE_PREFIX}{p}") for p in safe_subpaths):
             return
 

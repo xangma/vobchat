@@ -58,7 +58,9 @@ def login_page():
     if current_user.is_authenticated:
         route_prefix, url_base = get_dash_base_paths()
         return redirect((route_prefix or "") + "/")          # already logged in
-    return render_template_string(LOGIN_PAGE_NO_SIGNUP)
+    # Pass the Dash base path so links/actions work behind subpaths
+    route_prefix, url_base = get_dash_base_paths()
+    return render_template_string(LOGIN_PAGE_NO_SIGNUP, base=url_base)
 
 # ---------- sign-up -------------------------------------------------
 @bp.route("/signup", methods=["GET", "POST"])

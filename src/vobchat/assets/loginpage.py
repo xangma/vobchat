@@ -45,7 +45,7 @@ LOGIN_PAGE = f"""
           </p>
 
           <!-- login form -->
-          <form class="vstack gap-3" method="post" action="/login">
+          <form class="vstack gap-3" method="post" action="{{{{ base }}}}login">
             <div>
               <label class="form-label">E-mail</label>
               <input class="form-control" name="email" required>
@@ -60,9 +60,9 @@ LOGIN_PAGE = f"""
 
           <!-- links -->
           <div class="text-center pt-3">
-            <a href="/signup">Create account</a>
+            <a href="{{{{ base }}}}signup">Create account</a>
             &ensp;|&ensp;
-            <a href="/signingoogle">Sign in with&nbsp;Google</a>
+            <a href="{{{{ base }}}}signingoogle">Sign in with&nbsp;Google</a>
           </div>
 
         </div>
@@ -80,16 +80,16 @@ LOGIN_PAGE = f"""
 """
 
 LOGIN_PAGE_NO_SIGNUP = LOGIN_PAGE.replace(
-    '<a href="/signup">Create account</a> &ensp;|&ensp;', ''
+    '<a href="{{{{ base }}}}signup">Create account</a> &ensp;|&ensp;', ''
 )
 
 SIGNUP_FORM_HTML = LOGIN_PAGE.replace(
     "Log in", "Sign up"
 ).replace(
-    'action="/login"', 'action="/signup"'
+    'action="{{{{ base }}}}login"', 'action="{{{{ base }}}}signup"'
 ).replace(
     '<button class="btn btn-primary w-100" type="submit">Sign in</button>',
     '<button class="btn btn-success w-100" type="submit">Create account</button>'
 ).replace(
-    '<a href="/signup">Create account</a>', ''
+    '<a href="{{{{ base }}}}signup">Create account</a>', ''
 )
