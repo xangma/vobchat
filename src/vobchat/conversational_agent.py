@@ -209,7 +209,10 @@ def _build_domain_hints(state: lg_State, user_text: str, max_chars: int = 800) -
     """
     providers = [
         _theme_labels_hint,
-        # Additional providers can be added here.
+        _unit_type_labels_hint,
+        _place_candidates_hint,
+        _unit_type_candidates_hint,
+        _ready_to_fetch_hint,
     ]
     parts: List[str] = []
     for prov in providers:
@@ -250,6 +253,106 @@ def _theme_labels_hint(state: lg_State, user_text: str, max_items: int = 20) -> 
             return None
         labels = [str(x) for x in list(df["labl"])[:max_items]]
         return "Themes: " + "; ".join(labels)
+    except Exception:
+        return None
+
+
+def _unit_type_labels_hint(state: lg_State, user_text: str, max_items: int = 12) -> Optional[str]:
+    """Provide a compact list of unit type labels when relevant.
+
+    Uses human-readable names only (no internal codes) as these are not user-relevant.
+    Trigger words: unit type, geography type, constituency, ward, district, parish, borough.
+    """
+    txt = (user_text or "").lower()
+    triggers = [
+        "unit type", "geography type", "constituency", "ward", "district", "parish", "borough",
+    ]
+    if not any(t in txt for t in triggers):
+        return None
+    try:
+        # Pull labels from constants; avoid exposing codes
+        from vobchat.utils.constants import UNIT_TYPES  # dict[code] -> {long_name, color, ...}
+        labels = [v.get("long_name") or k for k, v in UNIT_TYPES.items()]
+        labels = [str(x) for x in labels if x]
+        if not labels:
+            return None
+        labels = labels[:max_items]
+        return "Geography types: " + "; ".join(labels)
+    except Exception:
+        return None
+
+
+def _place_candidates_hint(state: lg_State, user_text: str, max_items: int = 10) -> Optional[str]:
+    """Surface current place candidates from options if present.
+
+    Looks for option_type == 'place' in state.options and emits a one-line list.
+    """
+    opts = state.get("options") or []
+    if not opts:
+        return None
+    places = [o for o in opts if o.get("option_type") == "place"]
+    if not places:
+        return None
+    labels = []
+    for o in places[:max_items]:
+        lab = (o.get("label") or "").strip()
+        if lab:
+            labels.append(lab)
+    return ("Place candidates: " + "; ".join(labels)) if labels else None
+
+
+def _unit_type_candidates_hint(state: lg_State, user_text: str, max_items: int = 8) -> Optional[str]:
+    """Surface current unit-type choices from options if present.
+
+    Looks for option_type == 'unit' in state.options and emits their labels only.
+    """
+    opts = state.get("options") or []
+    if not opts:
+        return None
+    units = [o for o in opts if o.get("option_type") == "unit"]
+    if not units:
+        return None
+    labels = []
+    for o in units[:max_items]:
+        lab = (o.get("label") or "").strip()
+        if lab:
+            labels.append(lab)
+    return ("Geography choices: " + "; ".join(labels)) if labels else None
+
+
+def _ready_to_fetch_hint(state: lg_State) -> Optional[str]:
+    """Hint when both theme and at least one unit are present.
+
+    Parses selected_theme to extract the label when possible.
+    """
+    try:
+        units = get_selected_units(state)
+        if not units:
+            return None
+        theme_json = state.get("selected_theme")
+        if not theme_json:
+            return None
+        import json as _json, io as _io, pandas as _pd
+        # selected_theme is JSON records; extract label if available
+        try:
+            df = _pd.read_json(_io.StringIO(theme_json), orient="records")
+            theme_label = str(df.iloc[0]["labl"]) if not df.empty else None
+        except Exception:
+            # Fallback: try to parse as list/dict
+            try:
+                data = _json.loads(theme_json)
+                if isinstance(data, list) and data:
+                    theme_label = str(data[0].get("labl") or data[0].get("label") or "(theme)")
+                elif isinstance(data, dict):
+                    theme_label = str(data.get("labl") or data.get("label") or "(theme)")
+                else:
+                    theme_label = None
+            except Exception:
+                theme_label = None
+        units_count = len(units)
+        if theme_label:
+            return f"Ready to fetch: theme={theme_label}; units={units_count}"
+        return f"Ready to fetch: units={units_count}"
     except Exception:
         return None
 
@@ -324,13 +427,17 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
     ui_option_labels = _list_ui_option_labels(state)
     recent_conv = _summarize_recent_conversation(state)
     domain_hints = _build_domain_hints(state, user_text)
+    recent_conv = _summarize_recent_conversation(state)
+    domain_hints = _build_domain_hints(state, user_text)
     # Log a short snapshot for debugging (not the full user text)
     logger.info(
         "conversational_agent_node: planning for user input",
         extra={
             "user_text_preview": user_text[:120],
             "ctx": ctx,
-            "ui_options_present": bool(state.get("options"))
+            "ui_options_present": bool(state.get("options")),
+            "recent_conv_present": bool(recent_conv and recent_conv != "(none)"),
+            "domain_hints_len": len(domain_hints) if isinstance(domain_hints, str) else 0,
         },
     )
     # Always use the LLM planner to decide next steps.
@@ -375,6 +482,22 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
         },
     )
 
+    # Log planned actions (sanitized arguments)
+    try:
+        planned_actions_log = [
+            {
+                "intent": (a.intent.value if isinstance(a.intent, ActionName) else str(a.intent)),
+                "arguments": _sanitize_for_log(a.arguments or {}),
+            }
+            for a in actions
+        ]
+        logger.info({
+            "event": "planner_actions",
+            "actions": planned_actions_log,
+        })
+    except Exception:
+        pass
+
     if not actions:
         if reply:
             # Append natural reply
@@ -391,6 +514,18 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
     # Normalize and validate actions, then convert to queue format
     queue: List[dict] = state.get("intent_queue", []) or []
     payloads = _normalize_and_validate_actions(actions, state)
+    # Log normalized actions (sanitized)
+    try:
+        norm_log = [
+            {"intent": p.get("intent"), "arguments": _sanitize_for_log(p.get("arguments", {}))}
+            for p in payloads
+        ]
+        logger.info({
+            "event": "normalized_actions",
+            "actions": norm_log,
+        })
+    except Exception:
+        pass
     if not payloads:
         # Nothing actionable after normalization
         if reply:
@@ -569,8 +704,12 @@ def _normalize_and_validate_actions(actions: List[PlannedAction], state: lg_Stat
     - Skip redundant AddPlace for already-selected places
     """
     selected_names = set([n.lower() for n in get_selected_place_names(state)])
-    seen: Set[Tuple[str, str]] = set()
+    from typing import Tuple as _Tuple
+    seen: Set[_Tuple[str, str]] = set()
     payloads: List[dict] = []
+    saw_add_place = False
+    saw_add_theme = False
+    saw_fetch = False
 
     for act in actions:
         intent = act.intent.value if isinstance(act.intent, ActionName) else str(act.intent)
@@ -595,6 +734,7 @@ def _normalize_and_validate_actions(actions: List[PlannedAction], state: lg_Stat
                     continue
                 seen.add(key)
                 payloads.append({"intent": intent, "arguments": {"place": p}})
+                saw_add_place = True
             # If we expanded places, also consider a trailing FetchCubes if present later
             continue
 
@@ -615,6 +755,7 @@ def _normalize_and_validate_actions(actions: List[PlannedAction], state: lg_Stat
                 continue
             seen.add(key)
             payloads.append({"intent": intent, "arguments": norm_args})
+            saw_add_place = True
             continue
 
         # Normalize DescribeTheme args to the node's expected key
@@ -630,5 +771,66 @@ def _normalize_and_validate_actions(actions: List[PlannedAction], state: lg_Stat
             continue
         seen.add(key)
         payloads.append({"intent": intent, "arguments": args})
+        if intent == "AddTheme":
+            saw_add_theme = True
+        elif intent == "FetchCubes":
+            saw_fetch = True
 
-    return payloads
+    # If the user is selecting a theme (and either adding places now or already has units), ensure we fetch cubes at the end
+    try:
+        has_units = bool(get_selected_units(state))
+    except Exception:
+        has_units = False
+    if saw_add_theme and (saw_add_place or has_units) and not saw_fetch:
+        payloads.append({"intent": "FetchCubes", "arguments": {}})
+
+    # Order actions to a sensible priority, keeping relative order within same priority
+    return _order_payloads(payloads)
+
+
+def _order_payloads(payloads: List[dict]) -> List[dict]:
+    """Return a new list ordered by intent priority with stable grouping.
+
+    General priority: AddPlace, RemovePlace, AddTheme, RemoveTheme, DescribeTheme,
+    PlaceInfo, ListThemes, ShowState, Reset, FetchCubes, Chat.
+    """
+    priority = {
+        "AddPlace": 10,
+        "RemovePlace": 20,
+        "AddTheme": 30,
+        "RemoveTheme": 40,
+        "DescribeTheme": 50,
+        "PlaceInfo": 60,
+        "ListThemes": 70,
+        "ShowState": 80,
+        "Reset": 90,
+        "FetchCubes": 100,
+        "Chat": 110,
+    }
+    # Stable sort by priority then original index, then unwrap
+    indexed = list(enumerate(payloads))
+    indexed.sort(key=lambda iv: (priority.get(iv[1].get("intent"), 999), iv[0]))
+    ordered = [p for _, p in indexed]
+    return ordered
+
+
+def _sanitize_for_log(value, max_len: int = 120):
+    """Best-effort sanitizer to keep logs concise and safe."""
+    try:
+        if isinstance(value, str):
+            v = value.strip()
+            return (v[:max_len] + "…") if len(v) > max_len else v
+        if isinstance(value, (int, float, bool)) or value is None:
+            return value
+        if isinstance(value, list):
+            return [_sanitize_for_log(v, max_len=max_len//2) for v in value[:10]]
+        if isinstance(value, dict):
+            return {str(k): _sanitize_for_log(v, max_len=max_len//2) for k, v in list(value.items())[:10]}
+        s = str(value)
+        return (s[:max_len] + "…") if len(s) > max_len else s
+    except Exception:
+        try:
+            s = str(value)
+            return (s[:max_len] + "…") if len(s) > max_len else s
+        except Exception:
+            return "(unloggable)"
