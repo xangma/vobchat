@@ -32,6 +32,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.types import Command
 
 from .state_schema import lg_State, get_selected_place_names, get_selected_units
+from .intent_handling import extract_intent, AssistantIntent  # reuse subagent-based extraction
 
 logger = logging.getLogger(__name__)
 
@@ -444,59 +445,82 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
     llm = _make_llm()
     chain = _PLANNER_PROMPT | llm.with_structured_output(schema=AssistantPlan)
 
-    logger.info("conversational_agent_node: requesting plan from LLM")
+    # Phase A: Use subagent-based extraction to build a deterministic intent skeleton
     try:
-        # Provide a concise app overview to help the model answer meta questions
-        app_overview = (
-            "VobChat is a conversational app (Dash + Flask) that helps you "
-            "select places and a statistics theme, then fetch and visualize "
-            "relevant data cubes. It supports UK place/postcode lookup, theme "
-            "selection, map-based unit selection, and showing your current selection."
-        )
-        plan: AssistantPlan = chain.invoke({
-            "app_overview": app_overview,
-            "selected_places": ctx["selected_places"],
-            "selected_theme": ctx["selected_theme"],
-            "selected_units": ctx["selected_units"],
-            "ui_options": ui_opts_summary,
-            "ui_option_labels": ui_option_labels,
-            "recent_conversation": recent_conv,
-            "domain_hints": domain_hints,
-            "user_text": user_text,
-        })
+        extracted = extract_intent(user_text, state.get("messages", []))
     except Exception as e:
-        logger.warning(f"conversational_agent_node: plan extraction failed → {e}")
-        # Fallback: do nothing this turn
-        return {}
+        logger.warning(f"conversational_agent_node: subagent extraction failed → {e}")
+        extracted = None
 
-    actions = plan.actions or []
-    reply = (plan.final_reply or "").strip() if plan.final_reply else None
+    actions: List[PlannedAction] = []
+    reply = None
+    if extracted and getattr(extracted, "intents", None):
+        # Translate extracted intents to PlannedAction deterministically
+        for intent_obj in extracted.intents:
+            try:
+                name = intent_obj.intent.value if hasattr(intent_obj.intent, "value") else str(intent_obj.intent)
+                args = dict(intent_obj.arguments or {})
+                if name not in ActionName.__members__.values():
+                    # Map AssistantIntent names to ActionName where identical
+                    pass
+                # Normalize DescribeTheme arg key to theme_query for consistency
+                if name == AssistantIntent.DESCRIBE_THEME.value and "theme" in args and "theme_query" not in args:
+                    args = {**args, "theme_query": args.get("theme")}
+                # Build PlannedAction if the intent exists in our ActionName enum
+                if name in [a.value for a in ActionName]:
+                    actions.append(PlannedAction(intent=ActionName(name), arguments=args))
+            except Exception:
+                continue
 
-    # Log the plan outline without dumping full content
-    logger.info(
-        "conversational_agent_node: received plan",
-        extra={
-            "actions_count": len(actions),
-            "first_action": actions[0].intent.value if actions else None,
-            "reply_present": bool(reply),
-        },
-    )
-
-    # Log planned actions (sanitized arguments)
-    try:
-        planned_actions_log = [
-            {
-                "intent": (a.intent.value if isinstance(a.intent, ActionName) else str(a.intent)),
-                "arguments": _sanitize_for_log(a.arguments or {}),
-            }
-            for a in actions
-        ]
-        logger.info({
-            "event": "planner_actions",
-            "actions": planned_actions_log,
-        })
-    except Exception:
-        pass
+        logger.info(
+            "conversational_agent_node: built actions from subagent extraction",
+            extra={"count": len(actions), "intents": [a.intent.value for a in actions]},
+        )
+    else:
+        # Phase A fallback to planner LLM only when no structured intents were extracted
+        logger.info("conversational_agent_node: no subagent intents → requesting plan from LLM")
+        try:
+            app_overview = (
+                "VobChat is a conversational app (Dash + Flask) that helps you "
+                "select places and a statistics theme, then fetch and visualize "
+                "relevant data cubes. It supports UK place/postcode lookup, theme "
+                "selection, map-based unit selection, and showing your current selection."
+            )
+            plan: AssistantPlan = chain.invoke({
+                "app_overview": app_overview,
+                "selected_places": ctx["selected_places"],
+                "selected_theme": ctx["selected_theme"],
+                "selected_units": ctx["selected_units"],
+                "ui_options": ui_opts_summary,
+                "ui_option_labels": ui_option_labels,
+                "recent_conversation": recent_conv,
+                "domain_hints": domain_hints,
+                "user_text": user_text,
+            })
+            actions = plan.actions or []
+            reply = (plan.final_reply or "").strip() if plan.final_reply else None
+            logger.info(
+                "conversational_agent_node: received plan",
+                extra={
+                    "actions_count": len(actions),
+                    "first_action": actions[0].intent.value if actions else None,
+                    "reply_present": bool(reply),
+                },
+            )
+            try:
+                planned_actions_log = [
+                    {
+                        "intent": (a.intent.value if isinstance(a.intent, ActionName) else str(a.intent)),
+                        "arguments": _sanitize_for_log(a.arguments or {}),
+                    }
+                    for a in actions
+                ]
+                logger.info({"event": "planner_actions", "actions": planned_actions_log})
+            except Exception:
+                pass
+        except Exception as e:
+            logger.warning(f"conversational_agent_node: plan extraction failed → {e}")
+            return {}
 
     if not actions:
         if reply:
@@ -713,11 +737,11 @@ def _allowed_args_for_intent(intent: str) -> Set[str]:
 def _normalize_and_validate_actions(actions: List[PlannedAction], state: lg_State) -> List[dict]:
     """Normalize the list of actions into payload dicts with basic validation.
 
-    - Expand AddPlace with "places" list into multiple AddPlace items
+    - Group all AddPlace actions into a single payload with "places": [str]
+      (except AddPlace with a postcode, which remains separate)
     - Drop unknown intents
     - Filter arguments to allowed keys
-    - Deduplicate actions
-    - Skip redundant AddPlace for already-selected places
+    - Deduplicate actions and skip already-selected places
     """
     selected_names = set([n.lower() for n in get_selected_place_names(state)])
     from typing import Tuple as _Tuple
@@ -726,6 +750,10 @@ def _normalize_and_validate_actions(actions: List[PlannedAction], state: lg_Stat
     saw_add_place = False
     saw_add_theme = False
     saw_fetch = False
+
+    # Collect multiple AddPlace items into a single grouped payload
+    collected_places: List[str] = []
+    collected_places_lc: Set[str] = set()
 
     for act in actions:
         intent = act.intent.value if isinstance(act.intent, ActionName) else str(act.intent)
@@ -739,39 +767,38 @@ def _normalize_and_validate_actions(actions: List[PlannedAction], state: lg_Stat
         allowed = _allowed_args_for_intent(intent)
         args = {k: v for k, v in args.items() if k in allowed}
 
-        # Expand multi-place into separate actions
-        if intent == "AddPlace" and isinstance(args.get("places"), list):
-            places = [str(p).strip() for p in args.get("places") if str(p).strip()]
-            for p in places:
-                if p.lower() in selected_names:
-                    continue
-                key = (intent, json.dumps({"place": p}, sort_keys=True))
+        # Handle AddPlace intents by collecting names to group resolution
+        if intent == "AddPlace":
+            # Prefer grouping of place names; handle postcodes as individual payloads
+            if isinstance(args.get("places"), list):
+                places = [str(p).strip() for p in args.get("places") if str(p).strip()]
+                for p in places:
+                    plc_lc = p.lower()
+                    if not p or plc_lc in selected_names or plc_lc in collected_places_lc:
+                        continue
+                    collected_places.append(p)
+                    collected_places_lc.add(plc_lc)
+                    saw_add_place = True
+                continue
+            if "place" in args and isinstance(args["place"], str):
+                p = args["place"].strip()
+                plc_lc = p.lower()
+                if p and plc_lc not in selected_names and plc_lc not in collected_places_lc:
+                    collected_places.append(p)
+                    collected_places_lc.add(plc_lc)
+                    saw_add_place = True
+                continue
+            if "postcode" in args and isinstance(args["postcode"], str):
+                # Keep postcode AddPlace as its own payload (downstream nodes handle postcode resolution)
+                norm_args = {"postcode": args["postcode"].strip()}
+                key = (intent, json.dumps(norm_args, sort_keys=True))
                 if key in seen:
                     continue
                 seen.add(key)
-                payloads.append({"intent": intent, "arguments": {"place": p}})
+                payloads.append({"intent": intent, "arguments": norm_args})
                 saw_add_place = True
-            # If we expanded places, also consider a trailing FetchCubes if present later
-            continue
-
-        # Normalize single AddPlace with explicit place/postcode
-        if intent == "AddPlace":
-            if "place" in args and isinstance(args["place"], str):
-                p = args["place"].strip()
-                if p and p.lower() in selected_names:
-                    continue
-                norm_args = {"place": p} if p else {}
-            elif "postcode" in args and isinstance(args["postcode"], str):
-                norm_args = {"postcode": args["postcode"].strip()}
-            else:
-                # Unusable AddPlace arg set
                 continue
-            key = (intent, json.dumps(norm_args, sort_keys=True))
-            if key in seen:
-                continue
-            seen.add(key)
-            payloads.append({"intent": intent, "arguments": norm_args})
-            saw_add_place = True
+            # Unusable AddPlace arg set
             continue
 
         # Normalize DescribeTheme args to the node's expected key
@@ -791,6 +818,10 @@ def _normalize_and_validate_actions(actions: List[PlannedAction], state: lg_Stat
             saw_add_theme = True
         elif intent == "FetchCubes":
             saw_fetch = True
+
+    # If we collected multiple places, emit a single grouped AddPlace payload
+    if collected_places:
+        payloads.append({"intent": "AddPlace", "arguments": {"places": collected_places}})
 
     # If the user is selecting a theme (and either adding places now or already has units), ensure we fetch cubes at the end
     try:
