@@ -502,7 +502,13 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
         if reply:
             # Append natural reply
             state["messages"].append(AIMessage(content=reply))
-            logger.info("conversational_agent_node: replying without actions")
+            logger.info(
+                "conversational_agent_node: replying without actions",
+                extra={
+                    "reply_preview": reply[:120],
+                    "reply_len": len(reply),
+                },
+            )
             return {
                 "messages": state["messages"],
                 "last_intent_payload": state.get("last_intent_payload"),
@@ -530,6 +536,13 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
         # Nothing actionable after normalization
         if reply:
             state["messages"].append(AIMessage(content=reply))
+            logger.info(
+                "conversational_agent_node: replying after normalization (no actions)",
+                extra={
+                    "reply_preview": reply[:120],
+                    "reply_len": len(reply),
+                },
+            )
             return {"messages": state["messages"], "last_intent_payload": state.get("last_intent_payload")}
         return {}
 
@@ -610,7 +623,10 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
             txt = "\n".join([p for p in parts if p])
 
         state["messages"].append(AIMessage(content=txt))
-        logger.info("conversational_agent_node: replied with UnitTypeInfo summary")
+        logger.info(
+            "conversational_agent_node: replied with UnitTypeInfo summary",
+            extra={"reply_preview": (txt or "")[:120], "reply_len": len(txt or "")},
+        )
         return {"messages": state["messages"], "intent_queue": queue, "last_intent_payload": None}
 
     if intent == "Chat" or not target_node:
