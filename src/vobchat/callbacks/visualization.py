@@ -163,6 +163,15 @@ def register_simple_visualization_callbacks(app):
                 title=title,
                 xaxis_title="Year",
                 yaxis_title="Value",
+                legend=dict(
+                    orientation='h',
+                    yanchor='bottom',
+                    y=1.02,
+                    xanchor='left',
+                    x=0.0,
+                    title=dict(text='Series')
+                ),
+                margin={"l": 50, "r": 50, "t": 120, "b": 50},
                 annotations=[{
                     'text': title,
                     'xref': "paper", 'yref': "paper",
@@ -257,7 +266,15 @@ def register_simple_visualization_callbacks(app):
                 xaxis_title="Year",
                 yaxis_title="Value",
                 hovermode='x unified',
-                margin={"l": 50, "r": 50, "t": 50, "b": 50},
+                legend=dict(
+                    orientation='h',
+                    yanchor='bottom',
+                    y=1.02,
+                    xanchor='left',
+                    x=0.0,
+                    title=dict(text='Series')
+                ),
+                margin={"l": 50, "r": 50, "t": 120, "b": 50},
                 height=None,
                 autosize=True,
                 legend_title_text='Series'

@@ -250,7 +250,7 @@ class ActionReference(BaseModel):
     action: ActionType = Field(..., description="The type of action")
     target: Optional[str] = Field(
         default=None,
-        description="The target the action applies to (place, theme, unit type, etc.)",
+        description="The target the action applies to (place, theme, unit type)",
     )
     confidence: float = Field(
         default=1.0, description="Confidence in extraction (0.0-1.0)"
@@ -268,10 +268,10 @@ _ACTION_EXTRACTION_PROMPT = ChatPromptTemplate.from_messages(
         (
             "system",
             """
-You are an action classification agent. Classify the user's intent into one/multiple of these actions:
+You are an action classification agent. 
+Classify the user's intent into one/multiple of these actions:
 
-Actions:
-- add: Adding/selecting places and/or data themes to selection.
+- add: Adding/selecting places and/or data/statistical themes.
 - remove: Removing/deselecting places and/or data themes from selection.
 - state: Current selected places and/or data themes.
 - describe: Return information about a place or the definition of a unit type/data theme.
@@ -279,7 +279,22 @@ Actions:
 - info: Provide a list of available data themes.
 - chat: General conversation/anything else.
 
-Reply with JSON only.
+Classification rules (be strict and prefer concrete actions):
+- If the user asks to "show/get/display/fetch/see" (or similar) "stats/data/statistics/figures" for one or more places, classify as add (not describe).
+- When both a place and a theme are present (e.g., "population stats for portsmouth"), classify as add (so downstream logic can AddPlace and AddTheme).
+- Use describe only for definition/explanation requests (e.g., "tell me about manchester" for place info, or "what is the population theme?").
+- Use info for listing available options (e.g., "what themes are available?").
+- Use state for queries about the current selection (e.g., "what have I selected").
+- Use reset for starting over/clearing selection.
+- Use chat only when the user is just chatting and not asking to do anything.
+
+Examples (JSON only; set higher confidence for the correct action):
+"show population stats for portsmouth" → {{"actions": [{{"action": "add", "target": "place", "confidence": 1.0}}]}}
+"population stats for portsmouth and newport" → {{"actions": [{{"action": "add", "target": "place", "confidence": 1.0}}]}}
+"show data for M1 1AE" → {{"actions": [{{"action": "add", "target": "place", "confidence": 1.0}}]}}
+"tell me about manchester" → {{"actions": [{{"action": "describe", "target": "manchester", "confidence": 1.0}}]}}
+"what is the population theme?" → {{"actions": [{{"action": "describe", "target": "population", "confidence": 1.0}}]}}
+"what themes are available?" → {{"actions": [{{"action": "info", "confidence": 1.0}}]}}
 """,
         ),
         ("user", "{text}"),
