@@ -1,17 +1,13 @@
 # app/tools.py
-from langchain_core.runnables import RunnableLambda
 from langchain_core.messages import ToolMessage
-from pydantic import BaseModel, Field
-from langchain.tools import BaseTool, StructuredTool, tool
+from langchain.tools import tool
 from langchain_community.tools import QuerySQLDataBaseTool
 import pandas as pd
 from typing import List, Annotated, Dict
 import json
 from vobchat.config import load_config, get_db
-import io
 from vobchat.utils.constants import UNIT_TYPES
 import logging
-from geoalchemy2 import Geometry
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +70,7 @@ def get_date_ranges_by_type() -> pd.DataFrame:
     res = list(res.mappings())
     return pd.DataFrame(res)
 
+
 def calculate_center_and_zoom(gdf_filtered):
     """
     Calculate the center and zoom level for a GeoDataFrame of selected polygons.
@@ -108,7 +105,7 @@ def calculate_center_and_zoom(gdf_filtered):
 def find_cubes_for_unit_theme(
     g_unit: Annotated[str, "unit identifier for the cube"],
     theme_id: Annotated[str, "theme id for the cube"],
-    ) -> str:
+) -> str:
     """
     Find cubes for a given unit and theme.
     """
@@ -139,6 +136,7 @@ def find_cubes_for_unit_theme(
         try:
             # Create a fresh database tool for each attempt
             from vobchat.config import load_config, get_db
+
             config = load_config()
             fresh_db = get_db(config)
             dbtool = QuerySQLDataBaseTool(db=fresh_db)
@@ -146,21 +144,37 @@ def find_cubes_for_unit_theme(
             res = dbtool.db._execute(query)
             df = pd.DataFrame(res)
             # Convert column names to match what we expect
-            df.columns = ['Theme_ID','Cube_ID', 'Cube', 'Start', 'End', 'Count']
-            logger.debug(f"[find_cubes_for_unit_theme] Query returned: \n\n{df}")
+            df.columns = [
+                "Theme_ID",
+                "Cube_ID",
+                "Cube",
+                "Start",
+                "End",
+                "Count",
+            ]
+            logger.debug(
+                f"[find_cubes_for_unit_theme] Query returned: \n\n{df}"
+            )
             # Handle NaN values properly for JSON serialization
-            return df.to_json(orient='records', force_ascii=False, default_handler=str)
+            return df.to_json(
+                orient="records", force_ascii=False, default_handler=str
+            )
 
         except Exception as e:
-            logger.warning(f"[find_cubes_for_unit_theme] Database error for unit {g_unit}, theme {theme_id} (attempt {attempt + 1}/{max_retries}): {e}")
+            logger.warning(
+                f"[find_cubes_for_unit_theme] Database error for unit {g_unit}, theme {theme_id} (attempt {attempt + 1}/{max_retries}): {e}"
+            )
 
             if attempt < max_retries - 1:
                 import time
+
                 time.sleep(retry_delay)
                 retry_delay *= 2  # Exponential backoff
                 continue
             else:
-                logger.error(f"[find_cubes_for_unit_theme] All retry attempts failed for unit {g_unit}, theme {theme_id}: {e}")
+                logger.error(
+                    f"[find_cubes_for_unit_theme] All retry attempts failed for unit {g_unit}, theme {theme_id}: {e}"
+                )
                 # Return empty result instead of crashing
                 return "[]"
 
@@ -168,12 +182,12 @@ def find_cubes_for_unit_theme(
 @tool
 def find_units_by_postcode(
     postcode: Annotated[str, "postcode to search for"],
-    ) -> str:
+) -> str:
     """
     Find units by postcode.
     """
 
-    user_lang = 'eng'
+    user_lang = "eng"
     query = """
     WITH unit_name AS (
         SELECT g_unit,
@@ -215,7 +229,7 @@ def find_units_by_postcode(
     res = dbtool.db._execute(query)
     df = pd.DataFrame(res)
     logger.debug(f"[find_units_by_postcode] Query returned: \n\n{df}")
-    return df.to_json(orient='records', force_ascii=False, default_handler=str)
+    return df.to_json(orient="records", force_ascii=False, default_handler=str)
 
 
 @tool
@@ -225,12 +239,14 @@ def find_places_by_name(
     unit_type: Annotated[str, "Unit type code, default is '0'"] = "0",
     nation: Annotated[str, "Nation code, default is '0'"] = "0",
     domain: Annotated[str, "Domain code, default is '0'"] = "0",
-    state: Annotated[str, "State code, default is '0'"] = "0"
+    state: Annotated[str, "State code, default is '0'"] = "0",
 ) -> str:
     """
     Find place names by provided parameters.
     """
-    types_tuple = tuple(UNIT_TYPES.keys()) if unit_type == "0" else (f"('{unit_type}')")
+    types_tuple = (
+        tuple(UNIT_TYPES.keys()) if unit_type == "0" else (f"('{unit_type}')")
+    )
     query = f"""
         SELECT
             p.g_place,
@@ -285,12 +301,13 @@ def find_places_by_name(
     res = dbtool.db._execute(query)
     df = pd.DataFrame(res)
     logger.debug(f"[find_places_by_name] Query returned: \n\n{df}")
-    return df.to_json(orient='records', force_ascii=False, default_handler=str)
+    return df.to_json(orient="records", force_ascii=False, default_handler=str)
+
 
 @tool
 def find_themes_for_unit(
     unit: Annotated[str, "unit identifier for the cube"],
-    ) -> str:
+) -> str:
     """
     Find themes for a given unit.
     """
@@ -311,6 +328,7 @@ def find_themes_for_unit(
         try:
             # Create a fresh database tool for each attempt
             from vobchat.config import load_config, get_db
+
             config = load_config()
             fresh_db = get_db(config)
             dbtool = QuerySQLDataBaseTool(db=fresh_db)
@@ -318,18 +336,25 @@ def find_themes_for_unit(
             res = dbtool.db._execute(query)
             df = pd.DataFrame(res)
             logger.debug(f"[find_themes_for_unit] Query returned: \n\n{df}")
-            return df.to_json(orient='records', force_ascii=False, default_handler=str)
+            return df.to_json(
+                orient="records", force_ascii=False, default_handler=str
+            )
 
         except Exception as e:
-            logger.warning(f"[find_themes_for_unit] Database error for unit {unit} (attempt {attempt + 1}/{max_retries}): {e}")
+            logger.warning(
+                f"[find_themes_for_unit] Database error for unit {unit} (attempt {attempt + 1}/{max_retries}): {e}"
+            )
 
             if attempt < max_retries - 1:
                 import time
+
                 time.sleep(retry_delay)
                 retry_delay *= 2  # Exponential backoff
                 continue
             else:
-                logger.error(f"[find_themes_for_unit] All retry attempts failed for unit {unit}: {e}")
+                logger.error(
+                    f"[find_themes_for_unit] All retry attempts failed for unit {unit}: {e}"
+                )
                 # Return empty result instead of crashing
                 return "[]"
 
@@ -337,12 +362,12 @@ def find_themes_for_unit(
 @tool
 def data_query(
     unitname: Annotated[str, "unit name to search for"],
-    ) -> str:
+) -> str:
     """
     Query data for a given unit name.
     """
 
-    user_lang = 'eng'
+    user_lang = "eng"
     query = """
     WITH unit_name AS (
         SELECT g_unit,
@@ -377,11 +402,12 @@ def data_query(
     dbtool = QuerySQLDataBaseTool(db=db)
     res = dbtool.db._execute(query)
     df = pd.DataFrame(res)
-    return df.to_json(orient='records', force_ascii=False, default_handler=str)
+    return df.to_json(orient="records", force_ascii=False, default_handler=str)
+
 
 @tool
 def get_cube_data(
-    cube_id: Annotated[str, "ID of the cube to fetch data for"]
+    cube_id: Annotated[str, "ID of the cube to fetch data for"],
 ) -> str:
     """
     Fetch the actual data for a given cube ID.
@@ -404,18 +430,20 @@ def get_cube_data(
     res = dbtool.db._execute(query)
     df = pd.DataFrame(res)
     # Handle NaN values properly for JSON serialization
-    return df.to_json(orient='records', force_ascii=False, default_handler=str)
+    return df.to_json(orient="records", force_ascii=False, default_handler=str)
+
 
 @tool
 def get_all_cube_data(
-    g_unit: Annotated[str, "unit identifier for the cube"],
-    cube_ids: List[str]
+    g_unit: Annotated[str, "unit identifier for the cube"], cube_ids: List[str]
 ) -> str:
     """
     Fetch data for multiple cubes at once.
     """
     if not cube_ids:
-        logger.warning(f"[get_all_cube_data] No cube_ids provided for unit {g_unit}")
+        logger.warning(
+            f"[get_all_cube_data] No cube_ids provided for unit {g_unit}"
+        )
         return "[]"
 
     cube_ids_str = "','".join(cube_ids)
@@ -442,27 +470,40 @@ def get_all_cube_data(
     """
 
     try:
-        logger.debug(f"[get_all_cube_data] Running query for unit {g_unit} with {len(cube_ids)} cubes")
+        logger.debug(
+            f"[get_all_cube_data] Running query for unit {g_unit} with {len(cube_ids)} cubes"
+        )
         dbtool = QuerySQLDataBaseTool(db=db)
         res = dbtool.db._execute(query)
         df = pd.DataFrame(res)
 
         if df.empty:
-            logger.warning(f"[get_all_cube_data] No data found for unit {g_unit}")
+            logger.warning(
+                f"[get_all_cube_data] No data found for unit {g_unit}"
+            )
             return "[]"
 
         # Pivot the data to create columns for each cube
-        pivot_df = df.pivot(index=['g_name', 'year'], columns='cellref', values='value').reset_index()
-        logger.debug(f"[get_all_cube_data] Returning {len(pivot_df)} rows for unit {g_unit}")
+        pivot_df = df.pivot(
+            index=["g_name", "year"], columns="cellref", values="value"
+        ).reset_index()
+        logger.debug(
+            f"[get_all_cube_data] Returning {len(pivot_df)} rows for unit {g_unit}"
+        )
         # Handle NaN values properly for JSON serialization
-        return pivot_df.to_json(orient='records', force_ascii=False, default_handler=str)
+        return pivot_df.to_json(
+            orient="records", force_ascii=False, default_handler=str
+        )
     except Exception as e:
-        logger.error(f"[get_all_cube_data] Database error for unit {g_unit}: {e}")
+        logger.error(
+            f"[get_all_cube_data] Database error for unit {g_unit}: {e}"
+        )
         # Return empty result instead of crashing
         return "[]"
 
 
 # tool to choose theme from sentence
+
 
 @tool
 def get_unit_details(unit_ids: List[str]) -> str:
@@ -471,12 +512,14 @@ def get_unit_details(unit_ids: List[str]) -> str:
     Useful for listing currently selected units.
     """
     if not unit_ids:
-        return pd.DataFrame(columns=['g_unit', 'unit_name', 'unit_type', 'long_name']).to_json(orient='records', force_ascii=False, default_handler=str)
+        return pd.DataFrame(
+            columns=["g_unit", "unit_name", "unit_type", "long_name"]
+        ).to_json(orient="records", force_ascii=False, default_handler=str)
 
     # Ensure IDs are strings and handle potential SQL injection (though less likely with list)
     safe_unit_ids = [str(uid).replace("'", "''") for uid in unit_ids]
     unit_ids_str = "','".join(safe_unit_ids)
-    user_lang = 'eng'
+    user_lang = "eng"
     query = f"""
     WITH unit_name AS (
         SELECT  g_unit,
@@ -507,14 +550,22 @@ def get_unit_details(unit_ids: List[str]) -> str:
     dbtool = QuerySQLDataBaseTool(db=db)
     try:
         res = dbtool.db._execute(query)
-        df = pd.DataFrame(res, columns=['g_unit', 'unit_name', 'unit_type'])
+        df = pd.DataFrame(res, columns=["g_unit", "unit_name", "unit_type"])
         # Add the long name for display
-        df['long_name'] = df['unit_type'].apply(lambda ut: UNIT_TYPES.get(ut, {}).get('long_name', ut))
+        df["long_name"] = df["unit_type"].apply(
+            lambda ut: UNIT_TYPES.get(ut, {}).get("long_name", ut)
+        )
         logger.debug(f"[get_unit_details] Query returned: \n\n{df}")
-        return df.to_json(orient='records', force_ascii=False, default_handler=str)
+        return df.to_json(
+            orient="records", force_ascii=False, default_handler=str
+        )
     except Exception as e:
-        logger.error(f"[get_unit_details] Error executing query: {e}", exc_info=True)
-        return pd.DataFrame(columns=['g_unit', 'unit_name', 'unit_type', 'long_name']).to_json(orient='records', force_ascii=False, default_handler=str)
+        logger.error(
+            f"[get_unit_details] Error executing query: {e}", exc_info=True
+        )
+        return pd.DataFrame(
+            columns=["g_unit", "unit_name", "unit_type", "long_name"]
+        ).to_json(orient="records", force_ascii=False, default_handler=str)
 
 
 # Make sure get_all_themes is robust
@@ -524,19 +575,25 @@ def get_all_themes() -> str:
     Get all available statistical themes from the database.
     Renamed to avoid conflict with the internal function name.
     """
-    query = f"""
+    query = """
     SELECT ent_id, labl, text FROM hgis.g_data_ent where ent_type='T'
     ORDER BY labl
     """
     dbtool = QuerySQLDataBaseTool(db=db)
     try:
         res = dbtool.db._execute(query)
-        df = pd.DataFrame(res, columns=['ent_id', 'labl', 'text'])
+        df = pd.DataFrame(res, columns=["ent_id", "labl", "text"])
         logger.debug(f"[get_all_themes_tool] Query returned: \n\n{df}")
-        return df.to_json(orient='records', force_ascii=False, default_handler=str)
+        return df.to_json(
+            orient="records", force_ascii=False, default_handler=str
+        )
     except Exception as e:
-        logger.error(f"[get_all_themes_tool] Error executing query: {e}", exc_info=True)
-        return pd.DataFrame(columns=['ent_id', 'labl', 'text']).to_json(orient='records', force_ascii=False, default_handler=str)
+        logger.error(
+            f"[get_all_themes_tool] Error executing query: {e}", exc_info=True
+        )
+        return pd.DataFrame(columns=["ent_id", "labl", "text"]).to_json(
+            orient="records", force_ascii=False, default_handler=str
+        )
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -553,17 +610,22 @@ def get_theme_text(theme_code: Annotated[str, "Theme code e.g. T_POP"]):
         LIMIT 1;
     """
     dbtool = QuerySQLDataBaseTool(db=db)
-    res    = dbtool.db._execute(query)
-    df     = pd.DataFrame(res, columns=["ent_id", "labl", "text"])
+    res = dbtool.db._execute(query)
+    df = pd.DataFrame(res, columns=["ent_id", "labl", "text"])
     if df.empty:
-        return pd.DataFrame(columns=["ent_id", "labl", "text"]).to_json(orient='records', force_ascii=False, default_handler=str)
-    return df.to_json(orient='records', force_ascii=False, default_handler=str)
+        return pd.DataFrame(columns=["ent_id", "labl", "text"]).to_json(
+            orient="records", force_ascii=False, default_handler=str
+        )
+    return df.to_json(orient="records", force_ascii=False, default_handler=str)
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # get key findings for a place
 # ────────────────────────────────────────────────────────────────────────────
 @tool
-def get_place_information(g_place: Annotated[int, "Place identifier (g_place) for the place"]):
+def get_place_information(
+    g_place: Annotated[int, "Place identifier (g_place) for the place"],
+):
     """Return detailed information about a place from g_place table, matching the original Vision of Britain place page display."""
     query = f"""
         SELECT
@@ -599,27 +661,31 @@ def get_place_information(g_place: Annotated[int, "Place identifier (g_place) fo
     res = dbtool.db._execute(query)
 
     if not res:
-        return pd.DataFrame().to_json(orient='records', force_ascii=False, default_handler=str)
+        return pd.DataFrame().to_json(
+            orient="records", force_ascii=False, default_handler=str
+        )
 
     # Convert to dict for easier handling
     place_data = dict(res[0])
 
     # If there's a see_also_place, get its name
-    if place_data.get('see_also_place'):
+    if place_data.get("see_also_place"):
         see_also_query = f"""
             SELECT g_name
             FROM hgis.g_place
-            WHERE g_place = {place_data['see_also_place']}
+            WHERE g_place = {place_data["see_also_place"]}
         """
         see_also_res = dbtool.db._execute(see_also_query)
         if see_also_res:
-            place_data['see_also_place_name'] = see_also_res[0]['g_name']
+            place_data["see_also_place_name"] = see_also_res[0]["g_name"]
 
     df = pd.DataFrame([place_data])
-    return df.to_json(orient='records', force_ascii=False, default_handler=str)
+    return df.to_json(orient="records", force_ascii=False, default_handler=str)
 
 
-def get_place_key_findings(g_unit: Annotated[int, "Unit identifier for the place"]):
+def get_place_key_findings(
+    g_unit: Annotated[int, "Unit identifier for the place"],
+):
     """Return key findings for a place from g_unit_key_findings table."""
     query = f"""
         SELECT
@@ -637,8 +703,12 @@ def get_place_key_findings(g_unit: Annotated[int, "Unit identifier for the place
     res = dbtool.db._execute(query)
     df = pd.DataFrame(res, columns=["g_url", "g_label", "g_text"])
     if df.empty:
-        return pd.DataFrame(columns=["g_url", "g_label", "g_text"]).to_json(orient='records', force_ascii=False, default_handler=str)
-    return df.to_json(orient='records', force_ascii=False, default_handler=str)
+        return pd.DataFrame(columns=["g_url", "g_label", "g_text"]).to_json(
+            orient="records", force_ascii=False, default_handler=str
+        )
+    return df.to_json(orient="records", force_ascii=False, default_handler=str)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -647,7 +717,10 @@ def get_place_key_findings(g_unit: Annotated[int, "Unit identifier for the place
 # ────────────────────────────────────────────────────────────────────────────
 @tool
 def get_unit_type_info(
-    unit_type: Annotated[str, "Unit type code (e.g., 'LG_DIST') or label (e.g., 'Local Government District')"]
+    unit_type: Annotated[
+        str,
+        "Unit type code (e.g., 'LG_DIST') or label (e.g., 'Local Government District')",
+    ],
 ) -> str:
     """Return structured details about a unit type (label, id, level, ADL feature type, descriptions, counts, relations, statuses).
 
@@ -694,53 +767,131 @@ def get_unit_type_info(
         LIMIT 1;
     """
 
+    # Normalize known labels to codes using constants to avoid relying on exact DB label text
+    candidate_code = None
     try:
-        res = dbtool.db._execute(base_query_by_code)
-        base_df = pd.DataFrame(res, columns=[
-            "g_unit_type","g_type_label","g_type_level","level_label","g_adl_ft",
-            "g_description","g_full_description","notes"
-        ])
+        raw_upper = raw.upper()
+        if raw_upper in UNIT_TYPES:
+            candidate_code = raw_upper
+        else:
+            raw_lower = raw.lower()
+            # Exact long_name match (case-insensitive)
+            for code_key, meta in UNIT_TYPES.items():
+                long_name = (meta.get("long_name") or "").strip()
+                if long_name and long_name.lower() == raw_lower:
+                    candidate_code = code_key
+                    break
+            # Simple plural-to-singular fallback (e.g., "Modern Districts" → "Modern District")
+            if not candidate_code and raw_lower.endswith("s"):
+                singular = raw_lower[:-1]
+                for code_key, meta in UNIT_TYPES.items():
+                    long_name = (meta.get("long_name") or "").strip()
+                    if long_name and long_name.lower() == singular:
+                        candidate_code = code_key
+                        break
+    except Exception:
+        candidate_code = None
+
+    try:
+        base_df = pd.DataFrame()
+        # Prefer lookup by canonical code if we can map it
+        if candidate_code:
+            safe_code = candidate_code.replace("'", "''")
+            q = base_query_by_code.replace(safe, safe_code)
+            res = dbtool.db._execute(q)
+            base_df = pd.DataFrame(
+                res,
+                columns=[
+                    "g_unit_type",
+                    "g_type_label",
+                    "g_type_level",
+                    "level_label",
+                    "g_adl_ft",
+                    "g_description",
+                    "g_full_description",
+                    "notes",
+                ],
+            )
+        # Fallback: try as provided (code), then as label
+        if base_df.empty:
+            res = dbtool.db._execute(base_query_by_code)
+            base_df = pd.DataFrame(
+                res,
+                columns=[
+                    "g_unit_type",
+                    "g_type_label",
+                    "g_type_level",
+                    "level_label",
+                    "g_adl_ft",
+                    "g_description",
+                    "g_full_description",
+                    "notes",
+                ],
+            )
         if base_df.empty:
             res = dbtool.db._execute(base_query_by_label)
-            base_df = pd.DataFrame(res, columns=[
-                "g_unit_type","g_type_label","g_type_level","level_label","g_adl_ft",
-                "g_description","g_full_description","notes"
-            ])
+            base_df = pd.DataFrame(
+                res,
+                columns=[
+                    "g_unit_type",
+                    "g_type_label",
+                    "g_type_level",
+                    "level_label",
+                    "g_adl_ft",
+                    "g_description",
+                    "g_full_description",
+                    "notes",
+                ],
+            )
         if base_df.empty:
             return json.dumps({})
         row = base_df.iloc[0]
         code = str(row["g_unit_type"])  # canonical code
     except Exception as e:
-        logger.error(f"[get_unit_type_info] Error fetching base info: {e}", exc_info=True)
+        logger.error(
+            f"[get_unit_type_info] Error fetching base info: {e}", exc_info=True
+        )
         return json.dumps({})
 
     # Count units
     try:
         count_query = f"SELECT count(g_unit) as unit_count FROM g_unit WHERE g_unit_type = '{code}';"
         res = dbtool.db._execute(count_query)
-        count_df = pd.DataFrame(res, columns=["unit_count"]) if res is not None else pd.DataFrame()
-        unit_count = int(count_df.iloc[0]["unit_count"]) if not count_df.empty else 0
+        count_df = (
+            pd.DataFrame(res, columns=["unit_count"])
+            if res is not None
+            else pd.DataFrame()
+        )
+        unit_count = (
+            int(count_df.iloc[0]["unit_count"]) if not count_df.empty else 0
+        )
     except Exception as e:
-        logger.warning(f"[get_unit_type_info] Count query failed for {code}: {e}")
+        logger.warning(
+            f"[get_unit_type_info] Count query failed for {code}: {e}"
+        )
         unit_count = 0
 
-    def rel_query(sql_tmpl_no_filter: str, sql_tmpl_with_filter: str, cols: List[str]) -> List[Dict[str, str]]:
+    def rel_query(
+        sql_tmpl_no_filter: str, sql_tmpl_with_filter: str, cols: List[str]
+    ) -> List[Dict[str, str]]:
         try:
             res = dbtool.db._execute(sql_tmpl_with_filter)
-            df  = pd.DataFrame(res, columns=cols)
+            df = pd.DataFrame(res, columns=cols)
             if df.empty:
                 res = dbtool.db._execute(sql_tmpl_no_filter)
-                df  = pd.DataFrame(res, columns=cols)
+                df = pd.DataFrame(res, columns=cols)
         except Exception:
             try:
                 res = dbtool.db._execute(sql_tmpl_no_filter)
-                df  = pd.DataFrame(res, columns=cols)
+                df = pd.DataFrame(res, columns=cols)
             except Exception:
                 df = pd.DataFrame(columns=cols)
         out = []
         for _, r in df.iterrows():
             try:
-                out.append({"unit_type": str(r[cols[0]]), "label": str(r[cols[1]])})
+                out.append(
+                    {"unit_type": str(r[cols[0]]), "label": str(r[cols[1]])}
+                )
             except Exception:
                 continue
         return out
@@ -758,7 +909,9 @@ def get_unit_type_info(
         WHERE  r.g_rel_type = 'IsPartOf' AND r.g_unit_type = '{code}'
           AND  t.g_jurisdiction = 'GBHGIS';
     """
-    above = rel_query(above_no_filter, above_with_filter, ["g_rel_unit_type","g_type_label"])
+    above = rel_query(
+        above_no_filter, above_with_filter, ["g_rel_unit_type", "g_type_label"]
+    )
 
     below_no_filter = f"""
         SELECT r.g_unit_type, t.g_type_label
@@ -773,7 +926,9 @@ def get_unit_type_info(
         WHERE  r.g_rel_type = 'IsPartOf' AND r.g_rel_unit_type = '{code}'
           AND  t.g_jurisdiction = 'GBHGIS';
     """
-    below = rel_query(below_no_filter, below_with_filter, ["g_unit_type","g_type_label"])
+    below = rel_query(
+        below_no_filter, below_with_filter, ["g_unit_type", "g_type_label"]
+    )
 
     before_q = f"""
         SELECT r.g_unit_type, t.g_type_label
@@ -781,7 +936,7 @@ def get_unit_type_info(
         JOIN   g_unit_type t ON t.g_unit_type = r.g_unit_type
         WHERE  r.g_rel_type = 'SucceededBy' AND r.g_rel_unit_type = '{code}';
     """
-    before = rel_query(before_q, before_q, ["g_unit_type","g_type_label"])
+    before = rel_query(before_q, before_q, ["g_unit_type", "g_type_label"])
 
     after_q = f"""
         SELECT r.g_rel_unit_type, t.g_type_label
@@ -789,28 +944,56 @@ def get_unit_type_info(
         JOIN   g_unit_type t ON t.g_unit_type = r.g_rel_unit_type
         WHERE  r.g_rel_type = 'SucceededBy' AND r.g_unit_type = '{code}';
     """
-    after = rel_query(after_q, after_q, ["g_rel_unit_type","g_type_label"])
+    after = rel_query(after_q, after_q, ["g_rel_unit_type", "g_type_label"])
 
     # Status values
     try:
         status_q = f"SELECT g_status, g_label FROM g_status_type WHERE g_unit_type = '{code}';"
         res = dbtool.db._execute(status_q)
-        status_df = pd.DataFrame(res, columns=["g_status","g_label"]) if res is not None else pd.DataFrame()
+        status_df = (
+            pd.DataFrame(res, columns=["g_status", "g_label"])
+            if res is not None
+            else pd.DataFrame()
+        )
         statuses = []
         for _, r in status_df.iterrows():
-            statuses.append({"code": str(r["g_status"]), "label": str(r["g_label"])})
+            statuses.append(
+                {"code": str(r["g_status"]), "label": str(r["g_label"])}
+            )
     except Exception as e:
-        logger.warning(f"[get_unit_type_info] Status query failed for {code}: {e}")
+        logger.warning(
+            f"[get_unit_type_info] Status query failed for {code}: {e}"
+        )
         statuses = []
 
     out = {
         "identifier": code,
         "label": str(row.get("g_type_label", "")),
-        "level": int(row.get("g_type_level")) if row.get("g_type_level") is not None else None,
-        "level_label": str(row.get("level_label")) if row.get("level_label") is not None else None,
-        "adl_feature_type": (str(row.get("g_adl_ft")) if row.get("g_adl_ft") is not None else None),
-        "description": (str(row.get("g_description")) if row.get("g_description") is not None else None),
-        "full_description": (str(row.get("g_full_description")) if row.get("g_full_description") is not None else None),
+        "level": (
+            int(row.get("g_type_level"))
+            if row.get("g_type_level") is not None
+            else None
+        ),
+        "level_label": (
+            str(row.get("level_label"))
+            if row.get("level_label") is not None
+            else None
+        ),
+        "adl_feature_type": (
+            str(row.get("g_adl_ft"))
+            if row.get("g_adl_ft") is not None
+            else None
+        ),
+        "description": (
+            str(row.get("g_description"))
+            if row.get("g_description") is not None
+            else None
+        ),
+        "full_description": (
+            str(row.get("g_full_description"))
+            if row.get("g_full_description") is not None
+            else None
+        ),
         "unit_count": unit_count,
         "may_be_part_of": above,
         "may_have_parts": below,

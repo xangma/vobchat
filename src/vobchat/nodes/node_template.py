@@ -48,8 +48,8 @@ def simple_node_template(state: lg_State) -> Dict[str, Union[str, list, dict]]:
     
     # 1. Validate prerequisites
     if not state.get("some_required_field"):
-        _append_ai(state, "Error: Missing required data.")
-        return {"messages": state.get("messages", [])}
+        msg = _append_ai(state, "Error: Missing required data.")
+        return {"messages": [msg]}
     
     # 2. Process data
     try:
@@ -57,16 +57,16 @@ def simple_node_template(state: lg_State) -> Dict[str, Union[str, list, dict]]:
         result = "Processing completed successfully"
         
         # 3. Add success message and return state
-        _append_ai(state, result)
+        msg = _append_ai(state, result)
         return {
-            "messages": state.get("messages", []),
+            "messages": [msg],
             "some_result_field": result
         }
         
     except Exception as e:
         logger.error(f"Error in simple_node_template: {e}", exc_info=True)
-        _append_ai(state, f"Error during processing: {str(e)}")
-        return {"messages": state.get("messages", [])}
+        msg = _append_ai(state, f"Error during processing: {str(e)}")
+        return {"messages": [msg]}
 
 
 def interrupt_node_template(state: lg_State) -> None:
@@ -81,8 +81,8 @@ def interrupt_node_template(state: lg_State) -> None:
     # 1. Validate prerequisites  
     if not state.get("some_required_field"):
         # For error messages, DON'T interrupt - just return state
-        _append_ai(state, "Error: Missing required data.")
-        return {"messages": state.get("messages", [])}
+        msg = _append_ai(state, "Error: Missing required data.")
+        return {"messages": [msg]}
     
     # 2. Process data that needs user interaction
     options = [
@@ -119,8 +119,8 @@ def data_processing_with_interrupt_template(state: lg_State) -> None:
     # 1. Validate prerequisites
     if not state.get("required_data"):
         # Error case - no interrupt needed, just return state
-        _append_ai(state, "Error: Missing required data.")
-        return {"messages": state.get("messages", [])}
+        msg = _append_ai(state, "Error: Missing required data.")
+        return {"messages": [msg]}
     
     # 2. Process data
     try:
@@ -142,8 +142,8 @@ def data_processing_with_interrupt_template(state: lg_State) -> None:
     except Exception as e:
         logger.error(f"Error in processing: {e}", exc_info=True)
         # Error case - no interrupt, return state with error message
-        _append_ai(state, f"Error during processing: {str(e)}")
-        return {"messages": state.get("messages", [])}
+        msg = _append_ai(state, f"Error during processing: {str(e)}")
+        return {"messages": [msg]}
 
 
 def command_routing_template(state: lg_State) -> Command:
@@ -157,11 +157,11 @@ def command_routing_template(state: lg_State) -> Command:
     
     if condition == "route_a":
         # Update state and route to node A
-        _append_ai(state, "Routing to process A.")
+        msg = _append_ai(state, "Routing to process A.")
         return Command(
             goto="node_a",
             update={
-                "messages": state.get("messages", []),
+                "messages": [msg],
                 "routing_decision": "a"
             }
         )
@@ -170,10 +170,10 @@ def command_routing_template(state: lg_State) -> Command:
         return Command(goto="node_b")
     else:
         # Default routing
-        _append_ai(state, "Using default routing.")
+        msg = _append_ai(state, "Using default routing.")
         return Command(
             goto="default_node",
-            update={"messages": state.get("messages", [])}
+            update={"messages": [msg]}
         )
 
 
@@ -197,8 +197,8 @@ def handle_error_template(state: lg_State, error: Exception, context: str) -> Di
     Always use this pattern for errors that don't need interrupts.
     """
     logger.error(f"Error in {context}: {error}", exc_info=True)
-    _append_ai(state, f"Error: {str(error)}")
-    return {"messages": state.get("messages", [])}
+    msg = _append_ai(state, f"Error: {str(error)}")
+    return {"messages": [msg]}
 
 
 # EXAMPLES OF REAL PATTERNS FROM CODEBASE
@@ -250,8 +250,8 @@ def real_world_example_data_processing(state: lg_State) -> None:
     theme = state.get("selected_theme")
     
     if not units or not theme:
-        _append_ai(state, "Missing required data for processing.")
-        return {"messages": state.get("messages", [])}
+        msg = _append_ai(state, "Missing required data for processing.")
+        return {"messages": [msg]}
     
     # Process data (your processing logic here)
     processed_data = {"cubes": [], "count": 0}  # Your results

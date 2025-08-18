@@ -1,13 +1,11 @@
 import pytest
 import time
-import json
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import TimeoutException, WebDriverException
 import subprocess
 import os
 import signal
@@ -446,9 +444,9 @@ def verify_plot_contains_data(driver):
             print(f"  - JS data exists: {plot_info.get('jsDataExists', False)}")
             break
         elif not plot_info.get('hasElement'):
-            print(f"Plot element not found yet...")
+            print("Plot element not found yet...")
         elif not plot_info.get('hasSvg'):
-            print(f"Plotly SVG not rendered yet...")
+            print("Plotly SVG not rendered yet...")
         else:
             print(f"No rendered data detected yet. Traces: {plot_info.get('traceCount', 0)}, Points: {plot_info.get('dataPointCount', 0)}")
 

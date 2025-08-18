@@ -26,6 +26,34 @@ The user interacts with the system through the chat interface. The workflow proc
 3. **Visualization:** The retrieved data is displayed on the map and/or as charts and graphs.
 4. **User Interaction:** The user can further refine their query or explore different aspects of the data through the chat interface.
 
+### Chat Streaming & SSE (How it works)
+
+VobChat uses a lightweight Server‑Sent Events (SSE) bridge to stream model output to the browser and keep the UI responsive.
+
+- Endpoints:
+  - `GET /sse/<thread_id>`: Long‑lived SSE stream. Emits `state_update`, `interrupt`, and `error` events.
+  - `POST /workflow/<thread_id>`: Advances the LangGraph workflow; results stream back to the open SSE connection.
+- Event flow:
+  - The browser opens the SSE connection for a given `thread_id` and optionally posts an initial `workflow_input` (e.g., a user message).
+  - The server sets `llm_busy=True` immediately so the “thinking” indicator shows.
+  - When the LLM starts streaming tokens, the adapter forwards incremental `messages` arrays containing the full chat history plus a growing AI bubble. On the first visible token, it clears `llm_busy`.
+  - During streaming, snapshot events still flow for other UI keys (map, options, cubes), but snapshot “messages” are suppressed to avoid duplicate updates.
+  - When no streaming occurs (e.g., planner‑only turns), snapshots deliver the final `messages` array.
+- Stream tagging (server side):
+  - Planner and subagent chains are tagged `planner`, `subagent`, and `no_ui_stream` so their JSON/metadata is never shown in chat.
+  - Natural chat replies are tagged `reply_stream` so token chunks are forwarded to the UI.
+- Conversational agent behavior:
+  - If the planner returns `actions=[]` and no `final_reply` (e.g., a simple greeting), the agent still produces a streamed natural reply via a plain chat LLM.
+  - If the planner returns a `Chat` action, the agent streams a reply as well. Other actions are routed to their nodes.
+- Frontend client (`assets/sse_client.js`):
+  - Maintains one EventSource per `thread_id` and updates chat, map, and visualization directly from `state_update` events.
+  - Drives the “thinking” indicator via the `llm_busy` flag and ensures message order without duplicates.
+
+Troubleshooting streaming
+- No tokens rendering: check that reply chains are tagged `reply_stream`, and planner/subagent chains carry `no_ui_stream`.
+- Duplicate message updates: verify the adapter suppresses snapshot `messages` while streaming is active.
+- Spinner oddities: ensure `llm_busy` is cleared only after the first visible token renders.
+
 ### Code Structure
 
 The code is organized into the following directories and files:
@@ -33,8 +61,10 @@ The code is organized into the following directories and files:
 * **app:** Contains the main application code.
     * `main.py`: Initializes the Dash app, defines the layout, and registers callbacks.
     * `workflow.py`: Defines the workflow logic and nodes using LangGraph.
+    * `workflow_sse_adapter.py`: Bridges the compiled workflow to SSE, handling token streams and UI deltas.
     * `callbacks`: Contains callback functions for handling user interactions.
         * `chat.py`: Callbacks for the chat interface.
+        * `chat_sse.py`: Simplified chat callbacks that coordinate SSE connections and workflow input.
         * `map_leaflet.py`: Callbacks for the map component.
         * `visualization.py`: Callbacks for the visualization component.
         * `clientside_callbacks.py`: Client-side callbacks for UI updates.
@@ -48,6 +78,9 @@ The code is organized into the following directories and files:
     * `utils`: Contains utility functions and constants.
         * `constants.py`: Defines constants for unit types and themes.
         * `polygon_cache.py`: Caches polygon data for faster retrieval.
+    * `assets/sse_client.js`: The browser SSE client that renders chat tokens and handles interrupts.
+    * `conversational_agent.py`: LLM‑planned agent that emits actions and/or a natural reply.
+    * `intent_handling.py`, `intent_subagents.py`: Robust intent extraction using subagents (place/theme/action).
 
 ### Installation and Running
 

@@ -13,24 +13,20 @@ from .place_nodes import (
     RemovePlace_node,
     PlaceInfo_node,
     postcode_tool_call,
-    multi_place_tool_call
+    multi_place_tool_call,
 )
 from .theme_nodes import (
     AddTheme_node,
     RemoveTheme_node,
     ListThemes_node,
     DescribeTheme_node,
-    resolve_theme
+    resolve_theme,
 )
-from .state_nodes import (
-    ShowState_node,
-    Reset_node
-)
-from .interaction_nodes import (
-    ask_followup_node
-)
-from .data_nodes import (
-    find_cubes_node
+from .state_nodes import ShowState_node, Reset_node
+from .interaction_nodes import ask_followup_node
+from .data_nodes import find_cubes_node
+from .info_nodes import (
+    UnitTypeInfo_node,
 )
 from .workflow_place_nodes import (
     update_polygon_selection,
@@ -41,27 +37,28 @@ from .workflow_place_nodes import (
 
 __all__ = [
     # Place nodes
-    'AddPlace_node',
-    'RemovePlace_node',
-    'PlaceInfo_node',
-    'postcode_tool_call',
-    'multi_place_tool_call',
+    "AddPlace_node",
+    "RemovePlace_node",
+    "PlaceInfo_node",
+    "postcode_tool_call",
+    "multi_place_tool_call",
     # Theme nodes
-    'AddTheme_node',
-    'RemoveTheme_node',
-    'ListThemes_node',
-    'DescribeTheme_node',
-    'resolve_theme',
+    "AddTheme_node",
+    "RemoveTheme_node",
+    "ListThemes_node",
+    "DescribeTheme_node",
+    "resolve_theme",
     # State nodes
-    'ShowState_node',
-    'Reset_node',
+    "ShowState_node",
+    "Reset_node",
     # Interaction nodes
-    'ask_followup_node',
+    "ask_followup_node",
     # Data nodes
-    'find_cubes_node',
+    "find_cubes_node",
+    "UnitTypeInfo_node",
     # Workflow place nodes
-    'update_polygon_selection',
+    "update_polygon_selection",
     # 'request_map_selection',
-    'select_unit_on_map',
-    'resolve_place_and_unit',
+    "select_unit_on_map",
+    "resolve_place_and_unit",
 ]

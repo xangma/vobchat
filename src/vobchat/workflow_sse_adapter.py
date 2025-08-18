@@ -11,173 +11,20 @@ It deliberately avoids owning business logic; nodes and the graph encode the
 behavior. The adapter focuses on transport and small UX niceties only.
 """
 
-# # Simple Workflow SSE Adapter - Clean rewrite
-# # Single responsibility: Execute workflow and stream events
-
-# import logging
-# from typing import Dict, Any, Optional
-# from langchain_core.messages import AIMessage
-
-# from vobchat.sse_manager import simple_sse_manager
-
-# logger = logging.getLogger(__name__)
-
-# # Global registry of streamed message IDs per thread to prevent duplicates
-# _global_streamed_message_ids = {}
-
-# class SimpleWorkflowSSEAdapter:
-#     """Simplified workflow adapter that streams events via SSE"""
-
-#     def __init__(self, compiled_workflow):
-#         self.compiled_workflow = compiled_workflow
-
-#     async def execute_workflow(self, thread_id: str, workflow_input: Optional[Dict[str, Any]] = None):
-#         """Execute workflow and stream results via SSE using async methods"""
-
-#         try:
-#             logger.info(f"Starting workflow execution for thread {thread_id}")
-
-#             # Create config for this thread
-#             config = {
-#                 "configurable": {
-#                     "thread_id": thread_id,
-#                     "checkpoint_ns": "",
-#                     "checkpoint_id": None
-#                 }
-#             }
-
-#             # Get or create the set of streamed message IDs for this thread
-#             if thread_id not in _global_streamed_message_ids:
-#                 _global_streamed_message_ids[thread_id] = set()
-#             streamed_message_ids = _global_streamed_message_ids[thread_id]
-
-#             # Pre-mark existing messages from checkpoint state as already streamed
-#             try:
-#                 current_state = await self.compiled_workflow.aget_state(config)
-#                 if current_state and current_state.values:
-#                     existing_messages = current_state.values.get("messages", [])
-#                     for msg in existing_messages:
-#                         if isinstance(msg, AIMessage) and hasattr(msg, 'response_metadata') and msg.response_metadata:
-#                             existing_message_id = msg.response_metadata.get('message_id')
-#                             if existing_message_id:
-#                                 streamed_message_ids.add(existing_message_id)
-#                                 logger.debug(f"Pre-marked existing message ID {existing_message_id} as streamed")
-#             except Exception as e:
-#                 logger.debug(f"Could not pre-mark existing messages: {e}")
-
-#             # Stream workflow execution using async methods
-#             async for state_update in self.compiled_workflow.astream(
-#                 workflow_input,
-#                 config=config,
-#                 stream_mode="values"  # Get state updates
-#             ):
-#                 # Handle messages in state
-#                 if isinstance(state_update, dict) and "messages" in state_update:
-#                     messages = state_update["messages"]
-
-#                     # Find new AI messages to stream
-#                     for message in messages:
-#                         if isinstance(message, AIMessage) and message.content:
-#                             # Check if this should be streamed (default yes)
-#                             stream_mode = "stream"
-#                             message_id = None
-#                             if hasattr(message, 'response_metadata') and message.response_metadata:
-#                                 stream_mode = message.response_metadata.get('stream_mode', 'stream')
-#                                 message_id = message.response_metadata.get('message_id')
-
-#                             if stream_mode == "stream":
-#                                 # Check if we've already streamed this message ID
-#                                 if message_id and message_id in streamed_message_ids:
-#                                     logger.debug(f"Skipping already-streamed message with ID {message_id}")
-#                                     continue
-
-#                                 # Stream the message
-#                                 simple_sse_manager.send_message(thread_id, str(message.content))
-
-#                                 # Track this message ID as streamed
-#                                 if message_id:
-#                                     streamed_message_ids.add(message_id)
-#                                     logger.debug(f"Marked message ID {message_id} as streamed")
-
-#                 # Send state updates for UI
-#                 if isinstance(state_update, dict):
-#                     # Extract relevant state for frontend
-#                     frontend_state = self._extract_frontend_state(state_update)
-#                     if frontend_state:
-#                         simple_sse_manager.send_state_update(thread_id, frontend_state)
-
-#             # Get final state and check for interrupts using async method
-#             final_state = await self.compiled_workflow.aget_state(config)
-#             if final_state and final_state.tasks:
-#                 interrupt_task = final_state.tasks[-1]
-#                 if interrupt_task.interrupts:
-#                     interrupt_data = interrupt_task.interrupts[0].value
-#                     simple_sse_manager.send_interrupt(thread_id, interrupt_data)
-#                     logger.info(f"Sent interrupt for thread {thread_id}")
-
-#             logger.info(f"Workflow execution completed for thread {thread_id}")
-
-#         except Exception as e:
-#             logger.error(f"Workflow execution failed for thread {thread_id}: {e}", exc_info=True)
-#             simple_sse_manager.send_error(thread_id, str(e))
-
-#     def _extract_frontend_state(self, workflow_state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-#         """Extract only essential state data for frontend"""
-
-#         # Only send state that affects UI
-#         essential_keys = [
-#             "places",  # Single source of truth for place/unit data
-#             "selected_polygons",
-#             "selected_polygons_unit_types",
-#             "current_place_index",
-#             "current_node",
-#             "selected_theme",
-#             "options",
-#             "cubes",
-#             "selected_cubes",
-#             "show_visualization",
-#             "map_update_request",  # Critical for map updates
-#             "units_needing_map_selection"  # Critical for polygon selection
-#         ]
-
-#         frontend_state = {}
-#         for key in essential_keys:
-#             if key in workflow_state:
-#                 frontend_state[key] = workflow_state[key]
-
-#         # Only send if we have something useful
-#         return frontend_state if frontend_state else None
-
-# # Factory function
-# def create_simple_workflow_adapter(compiled_workflow):
-#     """Create simplified workflow adapter"""
-#     return SimpleWorkflowSSEAdapter(compiled_workflow)
-
-
-# workflow_sse_adapter.py – thin bridge workflow → SSE
-# =====================================================
-# Responsibilities
-# ----------------
-# • Run an **async LangGraph workflow**.
-# • Stream AI messages + trimmed state deltas to the browser via *SSE_HUB*.
-# • Emit interrupt payloads when the graph finishes with one.
-#
-# Simplifications
-# ---------------
-# • The adapter owns its own `streamed_ids` set → no globals.
-# • All hub calls are *awaited* so ordering is preserved.
-# • `_extract_state()` is a tiny whitelist of UI‑relevant keys.
-# =====================================================
-
 from __future__ import annotations
 
-import asyncio
 import logging
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Optional
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import (
+    AIMessage,
+    HumanMessage,
+    AIMessageChunk,
+    HumanMessageChunk,
+)
 
 from vobchat.sse_manager import get_sse_manager
+from vobchat.nodes.utils import serialize_messages as _base_serialize_messages
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +34,6 @@ _UI_KEYS = {
     "current_node",
     "selected_theme",
     "options",
-    "cubes",
     "selected_cubes",
     "show_visualization",
     "map_update_request",
@@ -197,34 +43,40 @@ _UI_KEYS = {
 
 simple_sse_manager = get_sse_manager()
 
-def serialize_messages(messages):
-    """Convert LangChain messages into JSON-serializable dictionaries.
 
-    Only the subset of fields needed by the front-end chat UI is emitted. This
-    avoids leaking backend-only metadata and keeps the payload small.
+def serialize_messages(messages: list[Any]) -> list[dict[str, Any]]:
+    """Serialize messages using the shared util, then strip reasoning text.
+
+    The shared serializer converts LangChain message objects to minimal dicts.
+    We post-process to remove visible chain-of-thought segments from AI output.
     """
-    serialized = []
-    for msg in messages:
-        if isinstance(msg, AIMessage):
-            serialized.append({
-                "_type": "ai",
-                "content": msg.content,
-                "type": "ai"
-            })
-        elif isinstance(msg, HumanMessage):
-            serialized.append({
-                "_type": "human",
-                "content": msg.content,
-                "type": "human"
-            })
-        elif hasattr(msg, 'content'):
-            # Generic message with content
-            serialized.append({
-                "_type": getattr(msg, '_type', 'unknown'),
-                "content": msg.content,
-                "type": getattr(msg, 'type', 'unknown')
-            })
-    return serialized
+    out = _base_serialize_messages(messages)
+    try:
+        for item in out:
+            if isinstance(item, dict) and item.get("_type") == "ai":
+                item["content"] = item.get("content") or ""
+    except Exception:
+        pass
+    return out
+
+
+def _looks_like_planner_json(text: str) -> bool:
+    """Heuristic to suppress planner JSON from being rendered as chat.
+
+    Treat any content that begins with '{' or '[' as planner/JSON-ish until
+    we later see natural language content. This is conservative but avoids
+    flashing schema text like {"actions": ...} or {"places": ...} in the UI.
+    """
+    try:
+        if not text:
+            return False
+        s = str(text).strip()
+        if not s:
+            return False
+        return s[0] in "[{"
+    except Exception:
+        return False
+
 
 class WorkflowSSEAdapter:
     """Run a compiled workflow and push updates to clients via the SSE hub.
@@ -235,7 +87,6 @@ class WorkflowSSEAdapter:
 
     def __init__(self, compiled_workflow):
         self.wf = compiled_workflow
-        self._streamed: Dict[str, Set[str]] = {}
 
     # ------------------------------------------------------------------
     # Public entry
@@ -256,21 +107,13 @@ class WorkflowSSEAdapter:
               payload size and UI churn; message objects are serialized.
             - Emits the final interrupt payload (if present) when the run ends.
         """
-        cfg = {"configurable": {"thread_id": thread_id,
-                                "checkpoint_ns": "", "checkpoint_id": None}}
-        self._streamed.setdefault(thread_id, set())
-        streamed_ids = self._streamed[thread_id]
-
-        # Pre‑populate with message_ids already in checkpoint (if any)
-        try:
-            st = await self.wf.aget_state(cfg)
-            for m in (st.values.get("messages", []) if st and st.values else []):
-                mid = getattr(m, "response_metadata", {}).get(
-                    "message_id") if isinstance(m, AIMessage) else None
-                if mid:
-                    streamed_ids.add(mid)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("Checkpoint scan failed: %s", exc)
+        cfg = {
+            "configurable": {
+                "thread_id": thread_id,
+                "checkpoint_ns": "",
+                "checkpoint_id": None,
+            }
+        }
 
         # --------------------------------------------------------------
         # Proactively signal that the assistant is working
@@ -279,28 +122,150 @@ class WorkflowSSEAdapter:
         except Exception:
             logger.debug("Could not send initial llm_busy state")
         llm_busy = True
-        # Stream the graph
+        # Stream the graph using the event stream to capture token-level updates
         # --------------------------------------------------------------
 
         try:
-            async for delta in self.wf.astream(initial_input, config=cfg, stream_mode="values"):
-                # 2️⃣  State snip ---------------------------------------------
-                ui_state = {k: v for k, v in delta.items() if k in _UI_KEYS}
-                if ui_state:
-                    # Serialize messages if present
-                    if "messages" in ui_state:
-                        ui_state["messages"] = serialize_messages(ui_state["messages"])
-                    await simple_sse_manager.state(thread_id, ui_state)
+            # Local render cache for token-level streaming
+            render_messages: list[dict[str, Any]] | None = None
+            # Delay rendering until a likely reply start appears to avoid meta text
+            visible_started: bool = False
 
-                    # Clear busy flag only when an AI message appears (not just echoing the human)
-                    if llm_busy and ui_state.get("messages"):
+            events = self.wf.astream_events(initial_input, config=cfg, version="v1")
+            # Flag to indicate that we have seen any chat-model stream for this turn.
+            # While true, snapshot events should not send `messages` because the
+            # streaming path is responsible for progressive chat rendering.
+            saw_stream: bool = False
+            async for event in events:
+                kind = event.get("event") or ""
+
+                # 1) Token stream from the model
+                if kind == "on_chat_model_stream":
+                    try:
+                        data = event.get("data", {}) or {}
+                        # If upstream marks this stream as non-UI (planner/subagent/no_ui_stream), skip it entirely
+                        tags = event.get("tags") or data.get("tags") or []
                         try:
-                            msgs = ui_state["messages"]
-                            if isinstance(msgs, list) and any(isinstance(m, dict) and m.get("_type") == "ai" for m in msgs):
-                                await simple_sse_manager.state(thread_id, {"llm_busy": False})
-                                llm_busy = False
+                            # normalize tags to a flat list of strings
+                            if isinstance(tags, dict):
+                                tags = list(tags.values())
+                            if not isinstance(tags, list):
+                                tags = [str(tags)]
                         except Exception:
-                            logger.debug("Could not update llm_busy False after AI message")
+                            tags = []
+                        # Skip planner/subagent streams, but always allow explicit reply streams
+                        if "reply_stream" not in tags:
+                            if any(t in ("planner", "subagent", "no_ui_stream") for t in tags):
+                                continue
+                        saw_stream = True
+                        chunk = data.get("chunk")
+                        text = ""
+                        if chunk is not None:
+                            text = getattr(chunk, "content", "") or ""
+                            # Ignore reasoning-only chunks when ChatOllama(reasoning=True)
+                            try:
+                                ak = getattr(chunk, "additional_kwargs", {}) or {}
+                                rc = ak.get("reasoning_content")
+                                if rc and not text:
+                                    # Reasoning is streaming separately; keep busy, don't render
+                                    continue
+                            except Exception:
+                                pass
+                        else:
+                            text = data.get("content", "") or ""
+
+                        if text:
+                            prev = ""
+                            # On first visible token, seed the render buffer with the existing
+                            # conversation history so the UI keeps the human turn while streaming.
+                            if render_messages is None:
+                                try:
+                                    st_snap = await self.wf.aget_state(cfg)
+                                    vals_snap: Dict[str, Any] = (
+                                        (st_snap.values or {}) if st_snap else {}
+                                    )
+                                    render_messages = serialize_messages(
+                                        vals_snap.get("messages") or []
+                                    )
+                                except Exception:
+                                    render_messages = []
+                            if (
+                                render_messages
+                                and isinstance(render_messages[-1], dict)
+                                and render_messages[-1].get("_type") == "ai"
+                            ):
+                                prev = render_messages[-1].get("content") or ""
+                            candidate = prev + str(text)
+                            # Skip planner/JSON-like content entirely until natural text appears
+                            if _looks_like_planner_json(candidate):
+                                continue
+                            # Skip empty/whitespace after stripping reasoning
+                            if not candidate.strip():
+                                continue
+                            # If we haven't shown any visible content yet, mark the
+                            # beginning of the visible stream. Do not attempt to trim
+                            # content here — just render from the first token.
+                            if not visible_started:
+                                visible_started = True
+                            if (
+                                not render_messages
+                                or render_messages[-1].get("_type") != "ai"
+                            ):
+                                render_messages.append(
+                                    {"_type": "ai", "type": "ai", "content": ""}
+                                )
+                            render_messages[-1]["content"] = candidate
+                            # First, stream the token update to the UI
+                            await simple_sse_manager.state(
+                                thread_id, {"messages": render_messages}
+                            )
+                            # Then clear the busy indicator after the first visible token is rendered
+                            if llm_busy and render_messages[-1]["content"].strip():
+                                try:
+                                    await simple_sse_manager.state(
+                                        thread_id, {"llm_busy": False}
+                                    )
+                                    llm_busy = False
+                                except Exception:
+                                    logger.debug(
+                                        "Could not clear llm_busy on first token"
+                                    )
+                    except Exception:
+                        continue
+                    continue
+
+                # 2) Snapshot/values events: forward whitelisted state
+                if kind in (
+                    "on_values",
+                    "on_node_end",
+                    "on_checkpoint",
+                    "on_chain_stream",
+                ):
+                    try:
+                        st = await self.wf.aget_state(cfg)
+                        vals: Dict[str, Any] = (st.values or {}) if st else {}
+                        ui_state: Dict[str, Any] = {
+                            k: vals.get(k) for k in _UI_KEYS if k in vals
+                        }
+                        if "messages" in ui_state:
+                            state_serialized = serialize_messages(
+                                ui_state["messages"] or []
+                            )
+                            # While a chat stream is active this turn, suppress snapshot
+                            # message payloads entirely to avoid duplicate updates. The
+                            # streaming path is responsible for message rendering.
+                            if saw_stream:
+                                ui_state.pop("messages", None)
+                            else:
+                                # No token stream detected — trust the snapshot and
+                                # refresh the buffer to reflect latest state.
+                                render_messages = state_serialized
+                                ui_state["messages"] = state_serialized
+                        if ui_state:
+                            await simple_sse_manager.state(thread_id, ui_state)
+                    except Exception:
+                        continue
+                    continue
 
             # ----------------------------------------------------------
             # Final interrupt (if any) ---------------------------------
@@ -313,10 +278,16 @@ class WorkflowSSEAdapter:
                         llm_busy = False
                     except Exception:
                         logger.debug("Could not clear llm_busy before interrupt")
-                await simple_sse_manager.interrupt(thread_id, st.tasks[-1].interrupts[0].value)
+                await simple_sse_manager.interrupt(
+                    thread_id, st.tasks[-1].interrupts[0].value
+                )
         except Exception as exc:  # noqa: BLE001
             logger.exception("Workflow run failed for %s", thread_id)
-            await simple_sse_manager.error(thread_id, str(exc))
+            try:
+                if llm_busy:
+                    await simple_sse_manager.state(thread_id, {"llm_busy": False})
+            finally:
+                await simple_sse_manager.error(thread_id, str(exc))
         finally:
             # If nothing triggered a clear, make sure to drop busy flag at end
             if llm_busy:

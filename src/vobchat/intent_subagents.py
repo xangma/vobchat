@@ -10,18 +10,25 @@ payload consumed by the workflow router.
 """
 
 from enum import Enum
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List
 from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_ollama import ChatOllama
+from vobchat.llm_factory import get_llm
+from .configure_logging import get_llm_callback
 import logging
 import os
-import re
 import json
 
-from .intent_handling import AssistantIntent, SingleIntent, AssistantIntentPayload
+from .intent_handling import (
+    AssistantIntent,
+    SingleIntent,
+    AssistantIntentPayload,
+)
+from vobchat.utils.constants import UNIT_TYPES
+from .configure_logging import log_llm_interaction
 
 logger = logging.getLogger(__name__)
+
 
 def _get_theme_labels() -> List[str]:
     """Return theme labels for dynamic prompt inclusion.
@@ -32,48 +39,59 @@ def _get_theme_labels() -> List[str]:
     """
     try:
         from .tools import get_all_themes
+
         themes_json = get_all_themes.invoke({})  # Use invoke instead of direct call
         themes_data = json.loads(themes_json)
-        return [theme['labl'] for theme in themes_data if theme.get('labl')]
+        return [theme["labl"] for theme in themes_data if theme.get("labl")]
     except Exception as e:
         logger.warning(f"Failed to load themes for prompt: {e}")
         # Fallback to common themes
-        return ["Population", "Housing", "Employment", "Education", "Crime", "Agriculture", "Transport"]
+        return [
+            "Population",
+            "Housing",
+            "Employment",
+            "Education",
+            "Crime",
+            "Agriculture",
+            "Transport",
+        ]
 
-# LLM Configuration
-_MODEL_NAME = os.getenv("VOBCHAT_LLM_MODEL", "deepseek-r1-wt:latest")  # keep in sync with workflow.py
-_MODEL_TEMP = os.getenv("VOBCHAT_LLM_TEMP", 0.7)
-_OLLAMA_HOST = os.getenv("OLLAMA_HOST", "localhost")
-_OLLAMA_PORT = os.getenv("OLLAMA_PORT", "11434")
-_OLLAMA_SUBPATH = os.getenv("OLLAMA_SUBPATH", "")
-_OLLAMA_USE_SSL = os.getenv("OLLAMA_USE_SSL", "true").lower() == "true"
-protocol = "https" if _OLLAMA_USE_SSL else "http"
-_BASE_URL = f"{protocol}://{_OLLAMA_HOST}:{_OLLAMA_PORT}/{_OLLAMA_SUBPATH}/"
 
-# Shared LLM instance for all subagents
-_subagent_llm = ChatOllama(
-    model=_MODEL_NAME,
-    base_url=_BASE_URL,
-    temperature=_MODEL_TEMP,
-    client_kwargs={"verify": False}
-)
+_REASONING_ENV = os.getenv("VOBCHAT_OLLAMA_REASONING", "true").lower() == "true"
+
+# Shared LLM instance via centralized factory (JSON mode for structured outputs).
+# Disable reasoning here to prevent non-JSON reasoning tokens from polluting
+# structured outputs and causing parse issues.
+_subagent_llm = get_llm(json_mode=True, reasoning=False)
 
 # =====================================================================
 # 1. Place Extraction Subagent
 # =====================================================================
 
+
 class PlaceReference(BaseModel):
     """A geographic place reference found in user text."""
+
     name: str = Field(..., description="The place name or postcode")
-    is_postcode: bool = Field(default=False, description="Whether this is a UK postcode")
-    confidence: float = Field(default=1.0, description="Confidence in extraction (0.0-1.0)")
+    is_postcode: bool = Field(
+        default=False, description="Whether this is a UK postcode"
+    )
+    confidence: float = Field(
+        default=1.0, description="Confidence in extraction (0.0-1.0)"
+    )
+
 
 class PlaceExtractionResult(BaseModel):
     """Result from place extraction subagent."""
+
     places: List[PlaceReference] = Field(default_factory=list)
 
-_PLACE_EXTRACTION_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """
+
+_PLACE_EXTRACTION_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """
 Extract UK place names and postcodes from user text.
 
 Extract:
@@ -100,37 +118,56 @@ Examples:
 "set theme to education" → [] (no places mentioned)
 
 Reply with JSON only.
-"""),
-    ("user", "{text}")
-])
+""",
+        ),
+        ("user", "{text}"),
+    ]
+)
 
-_place_extraction_chain = _PLACE_EXTRACTION_PROMPT | _subagent_llm.with_structured_output(
-    schema=PlaceExtractionResult
+_place_extraction_chain = (
+    _PLACE_EXTRACTION_PROMPT
+    | _subagent_llm.with_structured_output(schema=PlaceExtractionResult)
+).with_config(
+    {
+        "tags": ["subagent", "no_ui_stream"],
+        "run_name": "place_extractor",
+        "callbacks": [get_llm_callback()],
+    }
 )
 
 # =====================================================================
-# 2. Theme Extraction Subagent  
+# 2. Theme Extraction Subagent
 # =====================================================================
+
 
 class ThemeReference(BaseModel):
     """A statistical theme or data category found in user text."""
+
     theme_query: str = Field(..., description="The theme or statistical category")
-    confidence: float = Field(default=1.0, description="Confidence in extraction (0.0-1.0)")
+    confidence: float = Field(
+        default=1.0, description="Confidence in extraction (0.0-1.0)"
+    )
+
 
 class ThemeExtractionResult(BaseModel):
     """Result from theme extraction subagent."""
+
     themes: List[ThemeReference] = Field(default_factory=list)
+
 
 def _create_theme_extraction_prompt():
     """Create the theme extraction prompt augmented with current labels."""
     theme_labels = _get_theme_labels()
     theme_examples = ", ".join(theme_labels[:10])  # Use first 10 themes as examples
-    
+
     # Build the system message string to avoid f-string conflicts
-    system_message = """
+    system_message = (
+        """
 Extract statistical themes from user text.
 
-Available themes include: """ + theme_examples + """, and others.
+Available themes include: """
+        + theme_examples
+        + """, and others.
 
 Extract themes when you see:
 - Statistical topics matching available themes
@@ -169,103 +206,105 @@ Examples:
 
 Reply with JSON only.
 """
-    
-    return ChatPromptTemplate.from_messages([
-        ("system", system_message),
-        ("user", "{text}")
-    ])
+    )
+
+    return ChatPromptTemplate.from_messages(
+        [("system", system_message), ("user", "{text}")]
+    )
+
 
 _THEME_EXTRACTION_PROMPT = _create_theme_extraction_prompt()
 
-_theme_extraction_chain = _THEME_EXTRACTION_PROMPT | _subagent_llm.with_structured_output(
-    schema=ThemeExtractionResult
+_theme_extraction_chain = (
+    _THEME_EXTRACTION_PROMPT
+    | _subagent_llm.with_structured_output(schema=ThemeExtractionResult)
+).with_config(
+    {
+        "tags": ["subagent", "no_ui_stream"],
+        "run_name": "theme_extractor",
+        "callbacks": [get_llm_callback()],
+    }
 )
 
 # =====================================================================
 # 3. Action Extraction Subagent
 # =====================================================================
 
+
 class ActionType(str, Enum):
     ADD = "add"
-    REMOVE = "remove" 
-    SHOW = "show"
-    LIST = "list"
+    REMOVE = "remove"
+    STATE = "state"
     DESCRIBE = "describe"
     RESET = "reset"
     INFO = "info"
     CHAT = "chat"
 
+
 class ActionReference(BaseModel):
-    """An action or command found in user text."""
+    """An action determined from user text.
+
+    This includes the type of action, the target it applies to, and the confidence in the extraction.
+    """
+
     action: ActionType = Field(..., description="The type of action")
-    target: Optional[str] = Field(default=None, description="What the action applies to (place, theme, state)")
-    confidence: float = Field(default=1.0, description="Confidence in extraction (0.0-1.0)")
+    target: Optional[str] = Field(
+        default=None,
+        description="The target the action applies to (place, theme, unit type, etc.)",
+    )
+    confidence: float = Field(
+        default=1.0, description="Confidence in extraction (0.0-1.0)"
+    )
+
 
 class ActionExtractionResult(BaseModel):
     """Result from action extraction subagent."""
+
     actions: List[ActionReference] = Field(default_factory=list)
 
-_ACTION_EXTRACTION_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """
-You are an action classification agent. Classify the user's intent into one of these actions:
+
+_ACTION_EXTRACTION_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """
+You are an action classification agent. Classify the user's intent into one/multiple of these actions:
 
 Actions:
-- add: Adding places or themes to selection  
-- remove: Removing places or themes
-- show: Show current state/selection
-- list: List available options
-- describe: Get information about themes
-- reset: Start over/clear everything
-- info: Get information about places
-- chat: General conversation
-
-Key patterns:
-- "start over", "reset" → reset
-- "remove [something]" → remove  
-- "show my selection", "what have I selected" → show
-- "list themes", "what themes available" → list
-- "what stats/statistics/data are there", "what X available" → list
-- "what stats/data/themes do you have" → list
-- Data requests with places, stats, or data → add
-- Location queries "where's", "show me", "find" [place] → add
-- "tell me about [place]", "information about" → info
-- "what is [theme]" → describe
-
-IMPORTANT:
-- Questions about available options like "what stats are there?" should be classified as 'list'
-- "where's X?", "show me X", "find X" should be classified as 'add' (user wants to add place to selection)
-- Only use 'info' for explicit information requests like "tell me about X"
-
-Examples:
-"start over" → [{{"action": "reset", "target": null, "confidence": 1.0}}]
-"remove london" → [{{"action": "remove", "target": null, "confidence": 1.0}}]
-"what have I selected" → [{{"action": "show", "target": null, "confidence": 1.0}}]
-"list themes" → [{{"action": "list", "target": null, "confidence": 1.0}}]
-"what stats are there?" → [{{"action": "list", "target": null, "confidence": 1.0}}]
-"what statistics do you have?" → [{{"action": "list", "target": null, "confidence": 1.0}}]
-"what data is available?" → [{{"action": "list", "target": null, "confidence": 1.0}}]
-"population stats for london" → [{{"action": "add", "target": null, "confidence": 1.0}}]
-"where's bristol?" → [{{"action": "add", "target": null, "confidence": 1.0}}]
-"show me cambridge" → [{{"action": "add", "target": null, "confidence": 1.0}}]
-"find manchester" → [{{"action": "add", "target": null, "confidence": 1.0}}]
-"show data for M1 1AE" → [{{"action": "add", "target": null, "confidence": 1.0}}]
-"tell me about manchester" → [{{"action": "info", "target": null, "confidence": 1.0}}]
-"what is population theme" → [{{"action": "describe", "target": null, "confidence": 1.0}}]
+- add: Adding/selecting places and/or data themes to selection.
+- remove: Removing/deselecting places and/or data themes from selection.
+- state: Current selected places and/or data themes.
+- describe: Return information about a place or the definition of a unit type/data theme.
+- reset: Start over/clear everything.
+- info: Provide a list of available data themes.
+- chat: General conversation/anything else.
 
 Reply with JSON only.
-"""),
-    ("user", "{text}")
-])
+""",
+        ),
+        ("user", "{text}"),
+    ]
+)
 
-_action_extraction_chain = _ACTION_EXTRACTION_PROMPT | _subagent_llm.with_structured_output(
-    schema=ActionExtractionResult
+_action_extraction_chain = (
+    _ACTION_EXTRACTION_PROMPT
+    | _subagent_llm.with_structured_output(schema=ActionExtractionResult)
+).with_config(
+    {
+        "tags": ["subagent", "no_ui_stream"],
+        "run_name": "action_extractor",
+        "callbacks": [get_llm_callback()],
+    }
 )
 
 # =====================================================================
 # 4. Orchestrator
 # =====================================================================
 
-def extract_intent_with_subagents(user_text: str, messages: List) -> AssistantIntentPayload:
+
+def extract_intent_with_subagents(
+    user_text: str, messages: List
+) -> AssistantIntentPayload:
     """Extract intents using place/theme/action subagents and combine results.
 
     Args:
@@ -278,39 +317,96 @@ def extract_intent_with_subagents(user_text: str, messages: List) -> AssistantIn
     """
     try:
         logger.info(f"Extracting intent with subagents for: '{user_text}'")
-        
-        # Run all subagents in parallel (for now, sequentially)
+
+        # Run all subagents in parallel (for now, sequentially), with logging
+        try:
+            msgs = _PLACE_EXTRACTION_PROMPT.format_messages({"text": user_text})
+            log_llm_interaction(
+                name="place_extractor",
+                prompt_vars={"text": user_text},
+                formatted_messages=msgs,
+                extra={"reasoning_enabled": _REASONING_ENV},
+            )
+        except Exception:
+            pass
         place_result = _place_extraction_chain.invoke({"text": user_text})
+        try:
+            log_llm_interaction(name="place_extractor_result", output=place_result)
+        except Exception:
+            pass
+
+        try:
+            msgs_t = _THEME_EXTRACTION_PROMPT.format_messages({"text": user_text})
+            log_llm_interaction(
+                name="theme_extractor",
+                prompt_vars={"text": user_text},
+                formatted_messages=msgs_t,
+                extra={"reasoning_enabled": _REASONING_ENV},
+            )
+        except Exception:
+            pass
         theme_result = _theme_extraction_chain.invoke({"text": user_text})
+        try:
+            log_llm_interaction(name="theme_extractor_result", output=theme_result)
+        except Exception:
+            pass
+
+        try:
+            msgs_a = _ACTION_EXTRACTION_PROMPT.format_messages({"text": user_text})
+            log_llm_interaction(
+                name="action_extractor",
+                prompt_vars={"text": user_text},
+                formatted_messages=msgs_a,
+                extra={"reasoning_enabled": _REASONING_ENV},
+            )
+        except Exception:
+            pass
         action_result = _action_extraction_chain.invoke({"text": user_text})
-        
+        try:
+            log_llm_interaction(name="action_extractor_result", output=action_result)
+        except Exception:
+            pass
+
         logger.info(f"Place extraction: {place_result.model_dump()}")
         logger.info(f"Theme extraction: {theme_result.model_dump()}")
+        # logger.info(f"UnitTypeInfo extraction: {unit_type_result.model_dump()}")
         logger.info(f"Action extraction: {action_result.model_dump()}")
-        
+
         # Combine results into final intents
-        intents = _combine_subagent_results(place_result, theme_result, action_result, user_text)
-        
+        intents = _combine_subagent_results(
+            place_result,
+            theme_result,
+            action_result,
+            user_text,
+        )
+
         result = AssistantIntentPayload(intents=intents)
-        logger.info(f"Final combined intents: {[i.intent.value for i in result.intents]}")
-        
+        logger.info(
+            f"Final combined intents: {[i.intent.value for i in result.intents]}"
+        )
+
         return result
-        
+
     except Exception as e:
         logger.error(f"Subagent extraction failed: {e}")
         # Fallback to chat intent
         return AssistantIntentPayload(
-            intents=[SingleIntent(
-                intent=AssistantIntent.CHAT, 
-                arguments={"text": f"I'm having trouble processing your request: {user_text}. Could you please try rephrasing?"}
-            )]
+            intents=[
+                SingleIntent(
+                    intent=AssistantIntent.CHAT,
+                    arguments={
+                        "text": f"I'm having trouble processing your request: {user_text}. Could you please try rephrasing?"
+                    },
+                )
+            ]
         )
 
+
 def _combine_subagent_results(
-    places: PlaceExtractionResult, 
-    themes: ThemeExtractionResult, 
+    places: PlaceExtractionResult,
+    themes: ThemeExtractionResult,
     actions: ActionExtractionResult,
-    user_text: str
+    user_text: str,
 ) -> List[SingleIntent]:
     """Combine subagent results into the final list of SingleIntent.
 
@@ -322,113 +418,130 @@ def _combine_subagent_results(
         list[SingleIntent]: Canonical intent list for the router.
     """
     intents = []
-    
+
     # Determine primary action
+    # Prefer the highest-confidence action if multiple are returned.
     primary_action = ActionType.CHAT
     if actions.actions:
-        primary_action = actions.actions[0].action
-    
+        try:
+            primary_action = (
+                sorted(
+                    actions.actions,
+                    key=lambda a: getattr(a, "confidence", 1.0),
+                    reverse=True,
+                )[0]
+            ).action
+        except Exception:
+            primary_action = actions.actions[0].action
+
     logger.info(f"Primary action: {primary_action}")
     logger.info(f"Places found: {len(places.places)}")
     logger.info(f"Themes found: {len(themes.themes)}")
-    
+
+    # # If no clear action but we found entities, default to ADD
+    # if primary_action == ActionType.CHAT and (places.places or themes.themes):
+    #     primary_action = ActionType.ADD
+
     # Handle different action types
     if primary_action == ActionType.ADD:
         # Add place intents first
         for place in places.places:
             if place.is_postcode:
-                intents.append(SingleIntent(
-                    intent=AssistantIntent.ADD_PLACE,
-                    arguments={"place": place.name, "postcode": place.name}
-                ))
+                intents.append(
+                    SingleIntent(
+                        intent=AssistantIntent.ADD_PLACE,
+                        arguments={"postcode": place.name},
+                    )
+                )
             else:
-                intents.append(SingleIntent(
-                    intent=AssistantIntent.ADD_PLACE,
-                    arguments={"place": place.name}
-                ))
-        
+                intents.append(
+                    SingleIntent(
+                        intent=AssistantIntent.ADD_PLACE,
+                        arguments={"place": place.name},
+                    )
+                )
+
         # Add theme intents only if themes were found
-        # Special case: don't add theme for postcode-only queries
-        if themes.themes and not (len(places.places) == 1 and places.places[0].is_postcode and "data" in user_text.lower()):
+        # Special case: if this is a postcode-only query and the theme is generic
+        # (e.g., "data", "stats", etc.), skip adding the theme. Allow specific
+        # themes like "population" or "housing" to go through.
+        generic_themes = {"data", "stat", "stats", "statistics", "figures", "numbers"}
+        is_postcode_only = len(places.places) == 1 and places.places[0].is_postcode
+        if themes.themes:
             for theme in themes.themes:
-                intents.append(SingleIntent(
-                    intent=AssistantIntent.ADD_THEME,
-                    arguments={"theme_query": theme.theme_query}
-                ))
-            
+                tq = (theme.theme_query or "").strip().lower()
+                if is_postcode_only and (tq in generic_themes):
+                    continue
+                intents.append(
+                    SingleIntent(
+                        intent=AssistantIntent.ADD_THEME,
+                        arguments={"theme_query": theme.theme_query},
+                    )
+                )
+
     elif primary_action == ActionType.REMOVE:
         # Handle remove operations - let the LLM determine what to remove based on context
         if places.places:
             # Remove specific places
             for place in places.places:
-                intents.append(SingleIntent(
-                    intent=AssistantIntent.REMOVE_PLACE,
-                    arguments={"place": place.name}
-                ))
+                intents.append(
+                    SingleIntent(
+                        intent=AssistantIntent.REMOVE_PLACE,
+                        arguments={"place": place.name},
+                    )
+                )
         elif themes.themes:
             # Remove themes
-            intents.append(SingleIntent(
-                intent=AssistantIntent.REMOVE_THEME,
-                arguments={}
-            ))
+            intents.append(
+                SingleIntent(intent=AssistantIntent.REMOVE_THEME, arguments={})
+            )
         else:
             # Generic remove - assume theme removal
-            intents.append(SingleIntent(
-                intent=AssistantIntent.REMOVE_THEME,
-                arguments={}
-            ))
-            
-    elif primary_action == ActionType.SHOW:
-        intents.append(SingleIntent(
-            intent=AssistantIntent.SHOW_STATE,
-            arguments={}
-        ))
-        
-    elif primary_action == ActionType.LIST:
-        intents.append(SingleIntent(
-            intent=AssistantIntent.LIST_ALL_THEMES,
-            arguments={}
-        ))
-        
+            intents.append(
+                SingleIntent(intent=AssistantIntent.REMOVE_THEME, arguments={})
+            )
+
+    elif primary_action == ActionType.STATE:
+        intents.append(SingleIntent(intent=AssistantIntent.SHOW_STATE, arguments={}))
+
+    # 'list' action removed; use INFO for available options
+
     elif primary_action == ActionType.DESCRIBE:
         if places.places:
             # Describing a place
-            intents.append(SingleIntent(
-                intent=AssistantIntent.PLACE_INFO,
-                arguments={"place": places.places[0].name}
-            ))
+            intents.append(
+                SingleIntent(
+                    intent=AssistantIntent.PLACE_INFO,
+                    arguments={"place": places.places[0].name},
+                )
+            )
         elif themes.themes:
             # Describing a theme
-            intents.append(SingleIntent(
-                intent=AssistantIntent.DESCRIBE_THEME,
-                arguments={"theme": themes.themes[0].theme_query}
-            ))
-            
+            intents.append(
+                SingleIntent(
+                    intent=AssistantIntent.DESCRIBE_THEME,
+                    arguments={"theme_query": themes.themes[0].theme_query},
+                )
+            )
+
     elif primary_action == ActionType.RESET:
-        intents.append(SingleIntent(
-            intent=AssistantIntent.RESET,
-            arguments={}
-        ))
-        
+        intents.append(SingleIntent(intent=AssistantIntent.RESET, arguments={}))
+
     elif primary_action == ActionType.INFO:
-        if places.places:
-            intents.append(SingleIntent(
-                intent=AssistantIntent.PLACE_INFO,
-                arguments={"place": places.places[0].name}
-            ))
-            
+        # Informational queries about what's available → list themes/options
+        intents.append(
+            SingleIntent(intent=AssistantIntent.LIST_ALL_THEMES, arguments={})
+        )
+
     else:  # CHAT or unknown
-        intents.append(SingleIntent(
-            intent=AssistantIntent.CHAT,
-            arguments={"text": "I can help you explore historical data. Try asking about population, housing, or employment statistics for UK places."}
-        ))
-    
-    # If no intents were generated, default to chat
+        # Do not force a Chat fallback here. Leaving no intents allows the
+        # conversational planner to generate a natural reply.
+        pass
+
+    # If no intents were generated, return an empty list so the planner
+    # path in conversational_agent can produce a natural reply.
     if not intents:
-        intents.append(SingleIntent(
-            intent=AssistantIntent.CHAT,
-            arguments={"text": "I can help you explore historical data. Try asking about population, housing, or employment statistics for UK places."}
-        ))
-    
+        return []
+
     logger.info(f"Generated intents: {[i.intent.value for i in intents]}")
     return intents

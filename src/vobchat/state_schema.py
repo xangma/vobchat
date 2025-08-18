@@ -7,19 +7,24 @@ also imports those helpers).
 
 from typing import Annotated, Optional, List
 from typing_extensions import TypedDict
-from langgraph.graph.message import add_messages  # adds message-append semantics
+from langgraph.graph.message import (
+    add_messages,
+)  # adds message-append semantics
 from langchain_core.messages import AnyMessage
 
 
-
-def merge_lists(existing: Optional[List[dict]], new: Optional[List[dict]]) -> Optional[List[dict]]:
+def merge_lists(
+    existing: Optional[List[dict]], new: Optional[List[dict]]
+) -> Optional[List[dict]]:
     """Helper function to merge lists, preferring new value if provided."""
     if new is not None:
         return new
     return existing
 
 
-def merge_places(existing: Optional[List[dict]], new: Optional[List[dict]]) -> Optional[List[dict]]:
+def merge_places(
+    existing: Optional[List[dict]], new: Optional[List[dict]]
+) -> Optional[List[dict]]:
     """Helper function to merge places, preferring new value if provided."""
     if new is not None:
         return new
@@ -80,7 +85,13 @@ def get_selected_place_ids(state) -> List[int]:
     return [p.get("g_place") for p in places if p.get("g_place") is not None]
 
 
-def add_place_to_state(state, name: str, g_unit: Optional[int] = None, g_unit_type: Optional[str] = None, g_place: Optional[int] = None) -> None:
+def add_place_to_state(
+    state,
+    name: str,
+    g_unit: Optional[int] = None,
+    g_unit_type: Optional[str] = None,
+    g_place: Optional[int] = None,
+) -> None:
     """Add a place to the state using single source of truth."""
     places = state.get("places", []) or []
 
@@ -98,7 +109,7 @@ def add_place_to_state(state, name: str, g_unit: Optional[int] = None, g_unit_ty
         "g_unit_type": g_unit_type,
         "g_place": g_place,
         "candidate_rows": [],
-        "unit_rows": []
+        "unit_rows": [],
     }
     places.append(new_place)
     state["places"] = places
@@ -110,8 +121,10 @@ def remove_place_from_state(state, identifier) -> bool:
 
     # Try to remove by g_unit first, then by name
     for i, place in enumerate(places):
-        if (isinstance(identifier, int) and place.get("g_unit") == identifier) or \
-           (isinstance(identifier, str) and place.get("name", "").lower() == identifier.lower()):
+        if (isinstance(identifier, int) and place.get("g_unit") == identifier) or (
+            isinstance(identifier, str)
+            and place.get("name", "").lower() == identifier.lower()
+        ):
             places.pop(i)
             state["places"] = places
             return True
@@ -136,7 +149,7 @@ class lg_State(TypedDict):
     extracted_theme: Optional[str]
 
     # cube selection
-    cubes : Optional[List[str]]
+    cubes: Optional[List[str]]
     selected_cubes: Optional[List[str]]
 
     # processing state
@@ -159,6 +172,8 @@ class lg_State(TypedDict):
     map_update_request: Optional[dict]
     _prompted_for_place: Optional[bool]
     show_visualization: Optional[bool]
-    interrupt_message: Optional[str]  # Message from interrupt to be added to state on resume
+    interrupt_message: Optional[
+        str
+    ]  # Message from interrupt to be added to state on resume
     # conversational memory (optional, used by conversational agent)
     memory_summary: Optional[str]

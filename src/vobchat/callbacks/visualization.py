@@ -38,15 +38,16 @@ def register_simple_visualization_callbacks(app):
         hidden_container = {"flex": "0 0 0%", "display": "none"}
         hidden_area = {"height": "100%", "display": "none", "flexDirection": "column"}
 
-        # Check if we have data to visualize
-        has_cubes = place_state and place_state.get('cubes')
-        has_places_and_theme = (
-            place_state and
-            place_state.get('places') and
-            place_state.get('selected_theme')
-        )
+        # Always hide when there are no selected places (authoritative rule)
+        places = (place_state or {}).get('places') if place_state else None
+        if not places:
+            logger.info("Hiding visualization - no places selected")
+            return hidden_container, hidden_area, [], []
 
-        should_show = has_cubes or has_places_and_theme
+        # Check if we have data to visualize beyond places
+        has_cubes = bool((place_state or {}).get('cubes'))
+        has_theme = bool((place_state or {}).get('selected_theme'))
+        should_show = has_cubes or has_theme
 
         if not should_show:
             logger.info("Hiding visualization - no data available")
@@ -81,8 +82,15 @@ def register_simple_visualization_callbacks(app):
                             else:
                                 theme_data = selected_theme
 
-                            if 'ent_id' in theme_data:
-                                current_theme_cubes = theme_cubes_df[theme_cubes_df['ent_id'] == theme_data['ent_id']]
+                            # Support both dict and list-of-dict formats
+                            ent_id = None
+                            if isinstance(theme_data, dict) and 'ent_id' in theme_data:
+                                ent_id = theme_data['ent_id']
+                            elif isinstance(theme_data, list) and len(theme_data) > 0 and isinstance(theme_data[0], dict):
+                                ent_id = theme_data[0].get('ent_id')
+
+                            if ent_id:
+                                current_theme_cubes = theme_cubes_df[theme_cubes_df['ent_id'] == ent_id]
                                 if not current_theme_cubes.empty:
                                     cubes = current_theme_cubes.to_json(orient='records', force_ascii=False, default_handler=str)
                                     logger.info(f"Generated {len(current_theme_cubes)} cube options from theme")
@@ -165,9 +173,13 @@ def register_simple_visualization_callbacks(app):
                 }]
             )
 
-        # Check data availability
+        # Skip work entirely when the panel would be hidden
         if not place_state or not place_state.get('places'):
-            return empty_chart("No areas selected")
+            raise PreventUpdate
+        has_cubes = bool(place_state.get('cubes'))
+        has_theme = bool(place_state.get('selected_theme'))
+        if not (has_cubes or has_theme):
+            raise PreventUpdate
 
         if not selected_cubes:
             return empty_chart("No data filters selected")

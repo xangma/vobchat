@@ -213,13 +213,25 @@ class PureMapState {
             .filter(place => place.g_unit !== null && place.g_unit !== undefined)
             .map(place => place.g_unit_type || 'MOD_REG');
 
-        // Quick check: if workflow state matches current user state exactly, skip entirely
+        // Quick check: if workflow state matches current user state exactly (by id:type pairs), skip entirely
         console.log('PureMapState: Comparing states - new polygons:', newPolygons, 'current polygons:', this.userState.selectedPolygons);
         console.log('PureMapState: Comparing states - new types:', newPolygonTypes, 'current types:', this.userState.selectedPolygonTypes);
 
-        if (JSON.stringify(newPolygons.sort()) === JSON.stringify(this.userState.selectedPolygons.slice().sort()) &&
-            JSON.stringify(newPolygonTypes.sort()) === JSON.stringify(this.userState.selectedPolygonTypes.slice().sort())) {
-            console.log('PureMapState: Workflow state matches current state exactly, skipping sync');
+        const newPairsSig = (() => {
+            try {
+                const pairs = newPolygons.map((id, idx) => `${id}:${newPolygonTypes[idx] ?? ''}`);
+                return pairs.slice().sort().join('|');
+            } catch (e) { return null; }
+        })();
+        const curPairsSig = (() => {
+            try {
+                const pairs = this.userState.selectedPolygons.map((id, idx) => `${id}:${this.userState.selectedPolygonTypes[idx] ?? ''}`);
+                return pairs.slice().sort().join('|');
+            } catch (e) { return null; }
+        })();
+
+        if (newPairsSig && curPairsSig && newPairsSig === curPairsSig) {
+            console.log('PureMapState: Workflow state matches current state exactly (by id:type), skipping sync');
             return;
         }
 
@@ -311,6 +323,10 @@ class PureMapState {
                 const currentMapState = (mapStateStore && mapStateStore._dash_value) || {};
 
                 // Create places array as single source of truth
+                try {
+                    const pairs = this.userState.selectedPolygons.map((polygonId, index) => ({ id: String(polygonId), ut: this.userState.selectedPolygonTypes[index] || null }));
+                    console.log('PureMapState: building places from user state', pairs);
+                } catch (e) {}
                 const places = this.userState.selectedPolygons.map((polygonId, index) => ({
                     name: `Place ${index + 1}`,  // Default name - could be enhanced
                     g_unit: parseInt(polygonId),

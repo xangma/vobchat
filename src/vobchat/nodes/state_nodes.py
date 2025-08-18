@@ -6,6 +6,7 @@ that resets key fields and routes to ``START``.
 """
 from __future__ import annotations
 from typing import List
+import io
 import pandas as pd
 from langgraph.types import Command
 from vobchat.state_schema import lg_State, get_selected_units
@@ -33,8 +34,14 @@ def ShowState_node(state: lg_State) -> dict:
         summary.append("• no places selected yet")
 
     if state.get("selected_theme"):
-        df = pd.read_json(state["selected_theme"], typ='series')
-        summary.append(f"• theme: {df['labl']}")
+        try:
+            df = pd.read_json(io.StringIO(state["selected_theme"]), orient='records')
+            if not df.empty and 'labl' in df.columns:
+                summary.append(f"• theme: {df['labl'].iat[0]}")
+            else:
+                summary.append("• theme: (unknown)")
+        except Exception:
+            summary.append("• theme: (unknown)")
     else:
         summary.append("• no theme selected yet")
 
@@ -42,12 +49,12 @@ def ShowState_node(state: lg_State) -> dict:
     if any(yrs):
         summary.append(f"• years: {yrs[0] or '…'} - {yrs[1] or '…'}")
 
-    _append_ai(state, "Current selection:\n" + "\n".join(summary))
+    msg = _append_ai(state, "Current selection:\n" + "\n".join(summary))
 
     # Only return the specific fields this node updates
     return {
-        "messages": state.get("messages", []),  # Updated by _append_ai
-        "last_intent_payload": {}  # Clear after processing to prevent loops
+        "messages": [msg],  # Delta message via reducer
+        "last_intent_payload": {},  # Clear after processing to prevent loops
     }
 
 def Reset_node(state: lg_State) -> Command:
@@ -69,8 +76,12 @@ def Reset_node(state: lg_State) -> Command:
     # Only return the fields that need to be reset, not the entire state
     reset_places = reset_state.get("places", [])
 
+    # Clear all messages using RemoveMessage with the add_messages reducer
+    from langchain_core.messages import RemoveMessage
+    from langgraph.graph.message import REMOVE_ALL_MESSAGES
+
     return Command(goto="START", update={
-        "messages": state.get("messages", []),  # Include the "Starting over" message
+        "messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES)],
         "places": reset_places,
         "selected_theme": reset_state.get("selected_theme"),
         "selected_cubes": reset_state.get("selected_cubes"),
@@ -83,5 +94,5 @@ def Reset_node(state: lg_State) -> Command:
         "current_node": reset_state.get("current_node"),
         "selection_idx": reset_state.get("selection_idx"),
         "options": reset_state.get("options", []),
-        "map_update_request": reset_state.get("map_update_request")
+        "map_update_request": reset_state.get("map_update_request"),
     })

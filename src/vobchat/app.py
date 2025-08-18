@@ -21,8 +21,12 @@ and auth endpoints so the login page can render.
 """
 
 # Simple App - Clean rewrite with simplified SSE architecture
-import logging, os
-from dash_extensions.enrich import DashProxy, CycleBreakerTransform #ServersideOutputTransform
+import logging
+import os
+from dash_extensions.enrich import (
+    DashProxy,
+    CycleBreakerTransform,
+)  # ServersideOutputTransform
 import dash_bootstrap_components as dbc
 from dash import html
 from vobchat.workflow import create_workflow
@@ -33,8 +37,12 @@ from vobchat.components.map import create_map_layout
 from vobchat.components.visualization import create_visualization_layout
 
 # Import simplified callbacks (now the main versions)
-from vobchat.callbacks.visualization import register_simple_visualization_callbacks
-from vobchat.callbacks.clientside_callbacks import register_simple_clientside_callbacks
+from vobchat.callbacks.visualization import (
+    register_simple_visualization_callbacks,
+)
+from vobchat.callbacks.clientside_callbacks import (
+    register_simple_clientside_callbacks,
+)
 from vobchat.callbacks.chat_sse import register_simple_chat_callbacks
 
 # Import simplified SSE (now the main versions)
@@ -47,10 +55,8 @@ from vobchat.api.map_state_routes import register_map_state_routes
 from vobchat.models import register_app_routes
 from vobchat.utils.async_manager import async_manager
 from flask import Response, request, redirect, url_for, jsonify
-import uuid
-from authlib.integrations.flask_client import OAuth
 from flask_login import current_user
-import os, json, functools, pathlib
+import pathlib
 from vobchat.models import db, lm, bp as auth_bp
 from vobchat.cli import register_commands
 
@@ -62,8 +68,13 @@ simple_sse_manager = get_sse_manager()
 
 # Normalize base path per Dash's url_base_pathname env var
 from vobchat.config import get_dash_base_paths
+
 ROUTE_PREFIX, URL_BASE_PATHNAME = get_dash_base_paths()
-logger.info("Dash base path configured: url_base_pathname=%s route_prefix=%s", URL_BASE_PATHNAME, ROUTE_PREFIX or "<root>")
+logger.info(
+    "Dash base path configured: url_base_pathname=%s route_prefix=%s",
+    URL_BASE_PATHNAME,
+    ROUTE_PREFIX or "<root>",
+)
 
 
 def register_simple_sse_routes(server, workflow_adapter):
@@ -85,8 +96,11 @@ def register_simple_sse_routes(server, workflow_adapter):
         q: queue.Queue[str | None] = queue.Queue()
 
         class Sender:
-            def send(self, msg: str): q.put(msg)
-            def close(self): q.put(None)
+            def send(self, msg: str):
+                q.put(msg)
+
+            def close(self):
+                q.put(None)
 
         sender = Sender()
         simple_sse_manager.add_client(thread_id, sender)
@@ -102,20 +116,21 @@ def register_simple_sse_routes(server, workflow_adapter):
                     try:
                         msg = q.get(timeout=1)
                         if msg is None:
-                            break          # Sender.close() called
+                            break  # Sender.close() called
                         yield msg
                     except queue.Empty:
                         now = time.time()
-                        if now - last > 30:   # heartbeat
+                        if now - last > 30:  # heartbeat
                             yield "event: heartbeat\ndata: {}\n\n"
                             last = now
             finally:
                 simple_sse_manager.remove_client(thread_id, sender)
 
-        return Response(gen(),
-                        mimetype="text/event-stream",
-                        headers={"Cache-Control": "no-cache",
-                                 "X-Accel-Buffering": "no"})
+        return Response(
+            gen(),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     # ------------------------------------------------------------------ #
     # 2. WORKFLOW ADVANCE  (sync version)                                #
@@ -130,8 +145,10 @@ def register_simple_sse_routes(server, workflow_adapter):
         wf_input = data.get("workflow_input")
 
         if not wf_input:
-            return jsonify({"status": "error",
-                            "message": "No workflow_input"}), 400
+            return (
+                jsonify({"status": "error", "message": "No workflow_input"}),
+                400,
+            )
 
         # Wrap the async call in a coroutine and hand it to the async manager
         async def run():
@@ -141,7 +158,7 @@ def register_simple_sse_routes(server, workflow_adapter):
                 logger.exception("Workflow failed: %s", exc)
                 await simple_sse_manager.error(thread_id, str(exc))
 
-        async_manager.submit_task(run())   # fire-and-forget
+        async_manager.submit_task(run())  # fire-and-forget
         return jsonify({"status": "accepted"}), 202
 
 
@@ -157,13 +174,15 @@ def create_app():
         transforms=[CycleBreakerTransform()],
         external_stylesheets=[dbc.themes.BOOTSTRAP],
         assets_folder=str(pathlib.Path(__file__).parent / "assets"),
-        url_base_pathname=URL_BASE_PATHNAME
+        url_base_pathname=URL_BASE_PATHNAME,
     )
 
     # Configure Flask server
     server = app.server
-    server.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key')
-    server.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL", "sqlite:///users.db")
+    server.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key")
+    server.config["SQLALCHEMY_DATABASE_URI"] = os.getenv(
+        "DATABASE_URL", "sqlite:///users.db"
+    )
     server.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
     server.config.update(
         SESSION_COOKIE_SECURE=True,
@@ -192,49 +211,79 @@ def create_app():
     # Create simplified workflow adapter
     workflow_adapter = create_simple_workflow_adapter(compiled_workflow)
 
-    assets_folder = os.path.join(os.path.dirname(__file__), 'assets')
+    assets_folder = os.path.join(os.path.dirname(__file__), "assets")
 
     # App layout
-    app.layout = html.Div([
-        create_stores(),
-        # Expose the Dash base path to client JS (normalized with trailing slash)
-        html.Script(children=f"window.DASH_URL_BASE_PATHNAME = '{URL_BASE_PATHNAME}';"),
-        # Include pure map state manager and SSE client (loaded from assets)
-        html.Script(src=f"{URL_BASE_PATHNAME}assets/pure_map_state.js"),
-        html.Script(src=f"{URL_BASE_PATHNAME}assets/sse_client.js"),
-        html.Div(className="resizable-container", children=[
-            html.Div(className="resizable-horizontal", style={"display": "flex", "width": "100%", "height": "100%"}, children=[
-                # 1. Chat panel on the left: conversation + options + input
-                html.Div(className="resizable-panel", id="chat-panel", children=[
-                    create_chat_layout()
-                ], style={"flex": "0 0 30%"}),  # Initial width 30%
-
-                # First Horizontal resize handle
-                html.Div(className="resize-handle-horizontal",
-                         id="resize-handle-1"),
-
-                # 2. Visualization panel in the middle (hidden until data is available)
-                html.Div(className="resizable-panel", id="visualization-panel-container", children=[
-                    # Wrap the viz component to control its container's visibility/style
-                    create_visualization_layout()
-                ], style={
-                    "flex": "0 0 0%",  # Start collapsed
-                    "display": "none",
-                }),  # Initial width 0%, initially hidden
-                # Second Horizontal resize handle
-                html.Div(className="resize-handle-horizontal", id="resize-handle-2",
-                         # Initially shown (or controlled by callback)
-                         style={"display": "flex"}),
-
-                # 3. Map panel on the right: Dash Leaflet map + controls
-                html.Div(className="resizable-panel", id="map-panel", children=[
-                    create_map_layout(assets_folder)
-                    # Initial width 30% (flex-grow: 1 allows it to take remaining space initially)
-                ], style={"flex": "1 1 30%"}),
-            ]),
-        ]),
-    ],
-        id="document")
+    app.layout = html.Div(
+        [
+            create_stores(),
+            # Expose the Dash base path to client JS (normalized with trailing slash)
+            html.Script(
+                children=f"window.DASH_URL_BASE_PATHNAME = '{URL_BASE_PATHNAME}';"
+            ),
+            # Include pure map state manager and SSE client (loaded from assets)
+            html.Script(src=f"{URL_BASE_PATHNAME}assets/pure_map_state.js"),
+            html.Script(src=f"{URL_BASE_PATHNAME}assets/sse_client.js"),
+            html.Div(
+                className="resizable-container",
+                children=[
+                    html.Div(
+                        className="resizable-horizontal",
+                        style={
+                            "display": "flex",
+                            "width": "100%",
+                            "height": "100%",
+                        },
+                        children=[
+                            # 1. Chat panel on the left: conversation + options + input
+                            html.Div(
+                                className="resizable-panel",
+                                id="chat-panel",
+                                children=[create_chat_layout()],
+                                style={"flex": "0 0 30%"},
+                            ),  # Initial width 30%
+                            # First Horizontal resize handle
+                            html.Div(
+                                className="resize-handle-horizontal",
+                                id="resize-handle-1",
+                            ),
+                            # 2. Visualization panel in the middle (hidden until data is available)
+                            html.Div(
+                                className="resizable-panel",
+                                id="visualization-panel-container",
+                                children=[
+                                    # Wrap the viz component to control its container's visibility/style
+                                    create_visualization_layout()
+                                ],
+                                style={
+                                    "flex": "0 0 0%",  # Start collapsed
+                                    "display": "none",
+                                },
+                            ),  # Initial width 0%, initially hidden
+                            # Second Horizontal resize handle
+                            html.Div(
+                                className="resize-handle-horizontal",
+                                id="resize-handle-2",
+                                # Initially shown (or controlled by callback)
+                                style={"display": "flex"},
+                            ),
+                            # 3. Map panel on the right: Dash Leaflet map + controls
+                            html.Div(
+                                className="resizable-panel",
+                                id="map-panel",
+                                children=[
+                                    create_map_layout(assets_folder)
+                                    # Initial width 30% (flex-grow: 1 allows it to take remaining space initially)
+                                ],
+                                style={"flex": "1 1 30%"},
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+        id="document",
+    )
 
     # Register simplified callbacks
     logger.info("Registering simplified callbacks")

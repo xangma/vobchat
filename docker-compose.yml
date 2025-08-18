@@ -33,7 +33,6 @@ services:
       # Authentication settings
       - SECRET_KEY=${SECRET_KEY:-dev-secret-key-change-in-production}
       - DATABASE_URL=${DATABASE_URL:-sqlite:///users.db}
-      - CONVERSATIONAL_AGENT=1
 
     # command: ["sh", "-c", "redis-server --port 6379 --bind 127.0.0.1 --protected-mode no --save '' --stop-writes-on-bgsave-error no & exec python -m debugpy --listen 0.0.0.0:5678 --wait-for-client -m flask run --host 0.0.0.0 --port 8050"]
 

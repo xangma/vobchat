@@ -1,4 +1,5 @@
 """Implementation of a langgraph checkpoint saver using Redis."""
+
 from contextlib import asynccontextmanager, contextmanager
 from typing import (
     Any,
@@ -117,19 +118,27 @@ def _load_writes(
     for (task_id, _), data in task_id_to_data.items():
         try:
             # Check if required keys exist
-            if b"type" not in data or b"value" not in data or b"channel" not in data:
+            required = {b"channel", b"type", b"value"}
+            missing = [k for k in required if k not in data]
+            if missing:
                 import logging
+
                 logger = logging.getLogger(__name__)
-                logger.warning(f"Skipping corrupted write data for task {task_id}, missing keys: {list(data.keys())}")
+                logger.debug(
+                    f"Skipping incomplete pending write for task {task_id}; missing={missing} raw={data}"
+                )
                 continue
-                
-            writes.append((
-                task_id,
-                data[b"channel"].decode(),
-                serde.loads_typed((data[b"type"].decode(), data[b"value"])),
-            ))
+
+            writes.append(
+                (
+                    task_id,
+                    data[b"channel"].decode(),
+                    serde.loads_typed((data[b"type"].decode(), data[b"value"])),
+                )
+            )
         except Exception as e:
             import logging
+
             logger = logging.getLogger(__name__)
             logger.warning(f"Failed to load write for task {task_id}: {e}")
             continue
@@ -179,7 +188,8 @@ def _parse_redis_checkpoint_data(
         parent_config=parent_config,
         pending_writes=pending_writes,
     )
-    
+
+
 class RedisSaver(BaseCheckpointSaver):
     """Redis-based checkpoint saver implementation."""
 
@@ -270,13 +280,8 @@ class RedisSaver(BaseCheckpointSaver):
             )
             type_, serialized_value = self.serde.dumps_typed(value)
             data = {"channel": channel, "type": type_, "value": serialized_value}
-            if all(w[0] in WRITES_IDX_MAP for w in writes):
-                # Use HSET which will overwrite existing values
-                self.conn.hset(key, mapping=data)
-            else:
-                # Use HSETNX which will not overwrite existing values
-                for field, value in data.items():
-                    self.conn.hsetnx(key, field, value)
+            # Always perform an atomic HSET of the full mapping to avoid partial hashes
+            self.conn.hset(key, mapping=data)
 
     def get_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
         """Get a checkpoint tuple from Redis.
@@ -395,7 +400,8 @@ class RedisSaver(BaseCheckpointSaver):
             key=lambda k: _parse_redis_checkpoint_key(k.decode())["checkpoint_id"],
         )
         return latest_key.decode()
-    
+
+
 class AsyncRedisSaver(BaseCheckpointSaver):
     """Async redis-based checkpoint saver implementation."""
 
@@ -457,9 +463,8 @@ class AsyncRedisSaver(BaseCheckpointSaver):
             else "",
         }
 
-
         await self.conn.hset(key, mapping=data)
-        
+
         return {
             "configurable": {
                 "thread_id": thread_id,
@@ -497,13 +502,8 @@ class AsyncRedisSaver(BaseCheckpointSaver):
             )
             type_, serialized_value = self.serde.dumps_typed(value)
             data = {"channel": channel, "type": type_, "value": serialized_value}
-            if all(w[0] in WRITES_IDX_MAP for w in writes):
-                # Use HSET which will overwrite existing values
-                await self.conn.hset(key, mapping=data)
-            else:
-                # Use HSETNX which will not overwrite existing values
-                for field, value in data.items():
-                    await self.conn.hsetnx(key, field, value)
+            # Always perform an atomic HSET of the full mapping to avoid partial hashes
+            await self.conn.hset(key, mapping=data)
 
     async def aget_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
         """Get a checkpoint tuple from Redis asynchronously.
@@ -538,7 +538,7 @@ class AsyncRedisSaver(BaseCheckpointSaver):
         pending_writes = await self._aload_pending_writes(
             thread_id, checkpoint_ns, checkpoint_id
         )
-        
+
         return _parse_redis_checkpoint_data(
             self.serde, checkpoint_key, checkpoint_data, pending_writes=pending_writes
         )

@@ -6,7 +6,6 @@ This bypasses all the Flask/SQLAlchemy complexity.
 
 import sqlite3
 import os
-from pathlib import Path
 from passlib.context import CryptContext
 
 def add_test_user_directly():
@@ -47,7 +46,7 @@ def add_test_user_directly():
             conn.commit()
             print(f"✓ Created new test user '{test_email}'")
         
-        print(f"Test credentials:")
+        print("Test credentials:")
         print(f"  Email: {test_email}")
         print(f"  Password: {test_password}")
         

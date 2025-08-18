@@ -89,13 +89,13 @@ def find_cubes_node(state: lg_State) -> Dict[str, Union[str, list, dict]]:
     # 1️⃣  Preconditions ---------------------------------------------------------
     units: List[int] = sorted(set(get_selected_units(state)))
     if not units:
-        _append_ai(state, "No areas selected – please add a place first.")
-        return {"messages": msgs}
+        msg = _append_ai(state, "No areas selected – please add a place first.")
+        return {"messages": [msg]}
 
     theme_json = state.get("selected_theme")
     if not theme_json:
-        _append_ai(state, "No theme selected – pick a theme first.")
-        return {"messages": msgs}
+        msg = _append_ai(state, "No theme selected – pick a theme first.")
+        return {"messages": [msg]}
 
     theme_df = pd.read_json(io.StringIO(theme_json), orient="records")
     theme_id: str = theme_df["ent_id"].iat[0]
@@ -146,12 +146,14 @@ def find_cubes_node(state: lg_State) -> Dict[str, Union[str, list, dict]]:
                 fresh.append(df)
         except Exception as exc:  # noqa: BLE001 – external call can fail
             logger.warning("Cube fetch failed for unit %s: %s", u, exc)
-            _append_ai(state, f"Trouble fetching data for one area (ID {u}).")
+            warn_msg = _append_ai(state, f"Trouble fetching data for one area (ID {u}).")
+            # Return the warning as a delta so it is persisted before continuing
+            return {"messages": [warn_msg]}
 
     if existing.empty and not fresh:
-        _append_ai(
+        msg = _append_ai(
             state, f"No data found for theme ‘{theme_label}’ in the chosen areas.")
-        return {"messages": state["messages"], "selected_cubes": None}
+        return {"messages": [msg], "selected_cubes": None}
 
     # 4️⃣  Merge + store ----------------------------------------------------------
     combined = pd.concat([existing, *fresh],

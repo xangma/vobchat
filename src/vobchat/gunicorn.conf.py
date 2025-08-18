@@ -1,6 +1,6 @@
 # gunicorn.conf.py
 # gunicorn -c gunicorn.conf.py app:server
-import trio
+
 workers = 2  # Adjust based on CPU cores
 bind = "0.0.0.0:8050"
 
@@ -13,7 +13,7 @@ keepalive = 30  # Keep connections open longer for ws
 worker_class = "gevent"  # Async worker for ws
 worker_connections = 1000  # Max concurrent connections per worker
 
-loglevel = "debug"
+loglevel = "info"
 preload = False
 
 # Additional SSE-specific settings

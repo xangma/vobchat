@@ -26,20 +26,30 @@ from pydantic import BaseModel, Field
 import os
 import logging
 
-from langchain_ollama import ChatOllama
+from vobchat.llm_factory import get_llm
+from vobchat.configure_logging import get_llm_callback
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 
 from .state_schema import lg_State, get_selected_place_names, get_selected_units
-from .intent_handling import extract_intent, AssistantIntent  # reuse subagent-based extraction
+from .intent_handling import (
+    extract_intent,
+    AssistantIntent,
+)  # reuse subagent-based extraction
+from .nodes.utils import _append_ai
+from .configure_logging import log_llm_interaction
 
 logger = logging.getLogger(__name__)
+
+# Guardrail: limit number of actions executed per turn
+MAX_ACTIONS = int(os.getenv("VOBCHAT_PLANNER_MAX_ACTIONS", "4"))
 
 
 # --------------------------------------------------------------------------------------
 # Pydantic schema for structured output
 # --------------------------------------------------------------------------------------
+
 
 class ActionName(str, Enum):
     AddPlace = "AddPlace"
@@ -79,10 +89,11 @@ class AssistantPlan(BaseModel):
 # Prompt template
 # --------------------------------------------------------------------------------------
 
-_PLANNER_PROMPT = ChatPromptTemplate.from_messages([
-    (
-        "system",
-        """
+_PLANNER_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """
 You are a helpful assistant for a statistics chat app. You can plan actions to
 update the user's selection (places and theme) and fetch results. When missing
 critical info, ask a brief clarifying question instead of guessing.
@@ -112,10 +123,10 @@ Rules:
 - If the user asks about this app or what it does, DO NOT propose actions; return a concise explanation in final_reply.
 Return only valid JSON matching the schema; no explanation.
         """.strip(),
-    ),
-    (
-        "user",
-        """
+        ),
+        (
+            "user",
+            """
 CONTEXT
 - Selected places: {selected_places}
 - Selected theme: {selected_theme}
@@ -124,37 +135,42 @@ CONTEXT
 - UI options (if any):\n{ui_options}
 - UI option labels (if any): {ui_option_labels}
 - Recent conversation (last turns):\n{recent_conversation}
- - Domain hints (if any):\n{domain_hints}
+- Domain hints (if any):\n{domain_hints}
+- Memory summary: {memory_summary}
 
 USER_MESSAGE
 {user_text}
 
 Respond with JSON only: {{"actions": [{{"intent": "...", "arguments": {{...}}}}], "final_reply": "..."}}.
         """.strip(),
-    ),
-])
+        ),
+    ]
+)
 
 
-def _make_llm() -> ChatOllama:
-    """Create a deterministic LLM instance for planning.
-
-    Respects environment variables:
-    - OLLAMA_HOST / OLLAMA_PORT (endpoint)
-    - VOBCHAT_LLM_MODEL (model name)
-    """
-    _OLLAMA_HOST = os.getenv("OLLAMA_HOST", "localhost")
-    _OLLAMA_PORT = os.getenv("OLLAMA_PORT", "11434")
-    _OLLAMA_SUBPATH = os.getenv("OLLAMA_SUBPATH", "")
-    _OLLAMA_USE_SSL = os.getenv("OLLAMA_USE_SSL", "true").lower() == "true"
-    protocol = "https" if _OLLAMA_USE_SSL else "http"
-    _BASE_URL = f"{protocol}://{_OLLAMA_HOST}:{_OLLAMA_PORT}/{_OLLAMA_SUBPATH}".strip("/")
-
-    _MODEL_NAME = os.getenv("VOBCHAT_LLM_MODEL", "deepseek-r1-wt:latest")
-    _MODEL_TEMP = os.getenv("VOBCHAT_LLM_TEMP", 0.7)
-    logger.debug(
-        f"conversational_agent: initializing LLM - base_url={_BASE_URL}, model={_MODEL_NAME}",
-    )
-    return ChatOllama(model=_MODEL_NAME, base_url=_BASE_URL, temperature=_MODEL_TEMP, client_kwargs={"verify": False})
+def _try_parse_plan_from_text(txt: str) -> Optional["AssistantPlan"]:
+    """Parse AssistantPlan from a JSON string with Pydantic v1/v2 compatibility."""
+    if not txt:
+        return None
+    try:
+        # Pydantic v2
+        if hasattr(AssistantPlan, "model_validate_json"):
+            return AssistantPlan.model_validate_json(txt)
+    except Exception:
+        pass
+    try:
+        # Pydantic v1
+        if hasattr(AssistantPlan, "parse_raw"):
+            return AssistantPlan.parse_raw(txt)
+    except Exception:
+        pass
+    try:
+        data = json.loads(txt)
+        if isinstance(data, dict):
+            return AssistantPlan(**data)
+    except Exception:
+        return None
+    return None
 
 
 def _summarize_selection(state: lg_State) -> Dict[str, object]:
@@ -173,7 +189,9 @@ def _summarize_selection(state: lg_State) -> Dict[str, object]:
     }
 
 
-def _summarize_recent_conversation(state: lg_State, max_messages: int = 6, max_chars: int = 600) -> str:
+def _summarize_recent_conversation(
+    state: lg_State, max_messages: int = 6, max_chars: int = 600
+) -> str:
     """Return a short summary of the last few conversation turns.
 
     Includes role and truncated content. Avoids dumping large or sensitive text.
@@ -201,6 +219,7 @@ def _summarize_recent_conversation(state: lg_State, max_messages: int = 6, max_c
 # --------------------------------------------------------------------------------------
 # Hint providers (general mechanism)
 # --------------------------------------------------------------------------------------
+
 
 def _build_domain_hints(state: lg_State, user_text: str, max_chars: int = 800) -> str:
     """Collect compact, domain-specific hint blocks for the planner.
@@ -231,23 +250,20 @@ def _build_domain_hints(state: lg_State, user_text: str, max_chars: int = 800) -
     return text
 
 
-def _theme_labels_hint(state: lg_State, user_text: str, max_items: int = 20) -> Optional[str]:
+def _theme_labels_hint(
+    state: lg_State, user_text: str, max_items: int = 20
+) -> Optional[str]:
     """If the current turn is theme-explanatory, provide a compact themes list.
 
     Trigger: user_text mentions both a theme intent and an explanatory verb
     like "what is", "describe", or "explain".
     """
-    txt = (user_text or "").lower()
-    trigger = (
-        ("theme" in txt or "themes" in txt)
-        and ("what is" in txt or "what's" in txt or "describe" in txt or "explain" in txt or "tell me about" in txt)
-    )
-    if not trigger:
-        return None
     try:
         # Lazy import to avoid heavy deps; get_all_themes returns JSON
         from vobchat.tools import get_all_themes
-        import io, pandas as pd  # used locally to keep it simple
+        import io
+        import pandas as pd  # used locally to keep it simple
+
         themes_json = get_all_themes("")
         df = pd.read_json(io.StringIO(themes_json), orient="records")
         if df.empty:
@@ -258,7 +274,9 @@ def _theme_labels_hint(state: lg_State, user_text: str, max_items: int = 20) -> 
         return None
 
 
-def _unit_type_labels_hint(state: lg_State, user_text: str, max_items: int = 12) -> Optional[str]:
+def _unit_type_labels_hint(
+    state: lg_State, user_text: str, max_items: int = 12
+) -> Optional[str]:
     """Provide a compact list of unit type labels when relevant.
 
     Uses human-readable names only (no internal codes) as these are not user-relevant.
@@ -266,13 +284,22 @@ def _unit_type_labels_hint(state: lg_State, user_text: str, max_items: int = 12)
     """
     txt = (user_text or "").lower()
     triggers = [
-        "unit type", "geography type", "constituency", "ward", "district", "parish", "borough",
+        "unit type",
+        "geography type",
+        "constituency",
+        "ward",
+        "district",
+        "parish",
+        "borough",
     ]
     if not any(t in txt for t in triggers):
         return None
     try:
         # Pull labels from constants; avoid exposing codes
-        from vobchat.utils.constants import UNIT_TYPES  # dict[code] -> {long_name, color, ...}
+        from vobchat.utils.constants import (
+            UNIT_TYPES,
+        )  # dict[code] -> {long_name, color, ...}
+
         labels = [v.get("long_name") or k for k, v in UNIT_TYPES.items()]
         labels = [str(x) for x in labels if x]
         if not labels:
@@ -283,7 +310,9 @@ def _unit_type_labels_hint(state: lg_State, user_text: str, max_items: int = 12)
         return None
 
 
-def _place_candidates_hint(state: lg_State, user_text: str, max_items: int = 10) -> Optional[str]:
+def _place_candidates_hint(
+    state: lg_State, user_text: str, max_items: int = 10
+) -> Optional[str]:
     """Surface current place candidates from options if present.
 
     Looks for option_type == 'place' in state.options and emits a one-line list.
@@ -302,7 +331,9 @@ def _place_candidates_hint(state: lg_State, user_text: str, max_items: int = 10)
     return ("Place candidates: " + "; ".join(labels)) if labels else None
 
 
-def _unit_type_candidates_hint(state: lg_State, user_text: str, max_items: int = 8) -> Optional[str]:
+def _unit_type_candidates_hint(
+    state: lg_State, user_text: str, max_items: int = 8
+) -> Optional[str]:
     """Surface current unit-type choices from options if present.
 
     Looks for option_type == 'unit' in state.options and emits their labels only.
@@ -333,7 +364,10 @@ def _ready_to_fetch_hint(state: lg_State) -> Optional[str]:
         theme_json = state.get("selected_theme")
         if not theme_json:
             return None
-        import json as _json, io as _io, pandas as _pd
+        import json as _json
+        import io as _io
+        import pandas as _pd
+
         # selected_theme is JSON records; extract label if available
         try:
             df = _pd.read_json(_io.StringIO(theme_json), orient="records")
@@ -343,9 +377,13 @@ def _ready_to_fetch_hint(state: lg_State) -> Optional[str]:
             try:
                 data = _json.loads(theme_json)
                 if isinstance(data, list) and data:
-                    theme_label = str(data[0].get("labl") or data[0].get("label") or "(theme)")
+                    theme_label = str(
+                        data[0].get("labl") or data[0].get("label") or "(theme)"
+                    )
                 elif isinstance(data, dict):
-                    theme_label = str(data.get("labl") or data.get("label") or "(theme)")
+                    theme_label = str(
+                        data.get("labl") or data.get("label") or "(theme)"
+                    )
                 else:
                     theme_label = None
             except Exception:
@@ -405,21 +443,39 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
     actions in `intent_queue`. If there are no actions but a `final_reply`,
     append it and end the turn.
     """
-    # Fetch the current message list from state; we only act if there is a
-    # fresh HumanMessage at the end.
+    # Build planner input: prefer a fresh HumanMessage; otherwise synthesize from UI intent
     messages = state.get("messages", []) or []
-    if not messages:
-        logger.info("conversational_agent_node: no messages → nothing to do")
-        return {}
+    user_text = None
+    if messages:
+        last_msg = messages[-1]
+        if isinstance(last_msg, HumanMessage):
+            user_text = (last_msg.content or "").strip()
 
-    last_msg = messages[-1]
-    if not isinstance(last_msg, HumanMessage):
-        logger.debug("conversational_agent_node: last message is not human → nothing to plan")
-        return {}
-
-    user_text = (last_msg.content or "").strip()
     if not user_text:
-        logger.debug("conversational_agent_node: empty user text")
+        lip = state.get("last_intent_payload") or {}
+        intent = (lip or {}).get("intent")
+        args = dict((lip or {}).get("arguments") or {})
+        if intent in ("AddPlace", "RemovePlace"):
+            place = str(args.get("place") or "").strip()
+            unit_type = str(args.get("unit_type") or "").strip()
+            polygon_id = args.get("polygon_id")
+            verb = "add" if intent == "AddPlace" else "remove"
+            parts = [f"Map click: {verb} place"]
+            details = []
+            if place:
+                details.append(f"name='{place}'")
+            if unit_type:
+                details.append(f"unit_type={unit_type}")
+            if polygon_id is not None:
+                details.append(f"polygon_id={polygon_id}")
+            if details:
+                parts.append("(" + ", ".join(details) + ")")
+            user_text = " ".join(parts)
+
+    if not user_text:
+        logger.info(
+            "conversational_agent_node: no messages and no UI intent → nothing to do"
+        )
         return {}
 
     # Prepare context
@@ -428,57 +484,93 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
     ui_option_labels = _list_ui_option_labels(state)
     recent_conv = _summarize_recent_conversation(state)
     domain_hints = _build_domain_hints(state, user_text)
-    recent_conv = _summarize_recent_conversation(state)
-    domain_hints = _build_domain_hints(state, user_text)
+    memory_summary = (state.get("memory_summary") or "(none)").strip() or "(none)"
     # Log a short snapshot for debugging (not the full user text)
     logger.info(
-        "conversational_agent_node: planning for user input",
-        extra={
-            "user_text_preview": user_text[:120],
-            "ctx": ctx,
-            "ui_options_present": bool(state.get("options")),
-            "recent_conv_present": bool(recent_conv and recent_conv != "(none)"),
-            "domain_hints_len": len(domain_hints) if isinstance(domain_hints, str) else 0,
-        },
+        "conversational_agent_node: planning for user input: " + user_text[:120],
     )
     # Always use the LLM planner to decide next steps.
-    llm = _make_llm()
-    chain = _PLANNER_PROMPT | llm.with_structured_output(schema=AssistantPlan)
+    # Use JSON mode with reasoning for the planner to enforce strict JSON output
+    # Use strict JSON without reasoning to avoid non-JSON tokens in outputs
+    planner_llm = get_llm(json_mode=True, reasoning=False)
+    chain = (
+        _PLANNER_PROMPT | planner_llm.with_structured_output(schema=AssistantPlan)
+    ).with_config(
+        {
+            "tags": ["planner", "no_ui_stream"],
+            "run_name": "planner",
+            "callbacks": [get_llm_callback()],
+        }
+    )
 
-    # Phase A: Use subagent-based extraction to build a deterministic intent skeleton
-    try:
-        extracted = extract_intent(user_text, state.get("messages", []))
-    except Exception as e:
-        logger.warning(f"conversational_agent_node: subagent extraction failed → {e}")
-        extracted = None
+    # Fast-path for map clicks: skip NLP/planner, use UI-provided intent/args directly
+    lip = state.get("last_intent_payload") or {}
+    lip_intent = (lip or {}).get("intent")
+    lip_args = dict((lip or {}).get("arguments") or {})
+    is_map_click = str(lip_args.get("source") or "").strip().lower() == "map_click"
 
     actions: List[PlannedAction] = []
+    if is_map_click and lip_intent in ("AddPlace", "RemovePlace"):
+        # Build a single planned action directly from the UI payload
+        try:
+            actions = [
+                PlannedAction(
+                    intent=ActionName(lip_intent),
+                    arguments=lip_args,
+                )
+            ]
+            logger.info(
+                {
+                    "event": "map_click_bypass",
+                    "actions": _safe_actions_for_log(actions),
+                }
+            )
+        except Exception:
+            # If anything goes wrong, fall back to extraction below
+            actions = []
+
+    # Phase A: Use subagent-based extraction to build a deterministic intent skeleton
+    if not actions:
+        try:
+            extracted = extract_intent(user_text, state.get("messages", []))
+        except Exception as e:
+            logger.warning(
+                f"conversational_agent_node: subagent extraction failed → {e}"
+            )
+            extracted = None
     reply = None
-    if extracted and getattr(extracted, "intents", None):
+    if not actions and extracted and getattr(extracted, "intents", None):
         # Translate extracted intents to PlannedAction deterministically
         for intent_obj in extracted.intents:
             try:
-                name = intent_obj.intent.value if hasattr(intent_obj.intent, "value") else str(intent_obj.intent)
+                name = (
+                    intent_obj.intent.value
+                    if hasattr(intent_obj.intent, "value")
+                    else str(intent_obj.intent)
+                )
                 args = dict(intent_obj.arguments or {})
-                if name not in ActionName.__members__.values():
-                    # Map AssistantIntent names to ActionName where identical
-                    pass
-                # Normalize DescribeTheme arg key to theme_query for consistency
-                if name == AssistantIntent.DESCRIBE_THEME.value and "theme" in args and "theme_query" not in args:
-                    args = {**args, "theme_query": args.get("theme")}
                 # Build PlannedAction if the intent exists in our ActionName enum
                 if name in [a.value for a in ActionName]:
-                    actions.append(PlannedAction(intent=ActionName(name), arguments=args))
+                    actions.append(
+                        PlannedAction(intent=ActionName(name), arguments=args)
+                    )
             except Exception:
                 continue
 
         logger.info(
-            "conversational_agent_node: built actions from subagent extraction",
-            extra={"count": len(actions), "intents": [a.intent.value for a in actions]},
+            {
+                "event": "built_actions_from_subagent",
+                "actions": _safe_actions_for_log(actions),
+            }
         )
-    else:
+        # Cap number of actions from subagent translation
+        if actions:
+            actions = actions[:MAX_ACTIONS]
+    elif not actions:
         # Phase A fallback to planner LLM only when no structured intents were extracted
-        logger.info("conversational_agent_node: no subagent intents → requesting plan from LLM")
+        logger.info(
+            "conversational_agent_node: no subagent intents → requesting plan from LLM"
+        )
         try:
             app_overview = (
                 "VobChat is a conversational app (Dash + Flask) that helps you "
@@ -486,212 +578,399 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
                 "relevant data cubes. It supports UK place/postcode lookup, theme "
                 "selection, map-based unit selection, and showing your current selection."
             )
-            plan: AssistantPlan = chain.invoke({
-                "app_overview": app_overview,
-                "selected_places": ctx["selected_places"],
-                "selected_theme": ctx["selected_theme"],
-                "selected_units": ctx["selected_units"],
-                "ui_options": ui_opts_summary,
-                "ui_option_labels": ui_option_labels,
-                "recent_conversation": recent_conv,
-                "domain_hints": domain_hints,
-                "user_text": user_text,
-            })
-            actions = plan.actions or []
+            # Log formatted prompt for planner
+            try:
+                _msgs = _PLANNER_PROMPT.format_messages(
+                    {
+                        "app_overview": app_overview,
+                        "selected_places": ctx["selected_places"],
+                        "selected_theme": ctx["selected_theme"],
+                        "selected_units": ctx["selected_units"],
+                        "ui_options": ui_opts_summary,
+                        "ui_option_labels": ui_option_labels,
+                        "recent_conversation": recent_conv,
+                        "domain_hints": domain_hints,
+                        "memory_summary": memory_summary,
+                        "user_text": user_text,
+                    }
+                )
+                log_llm_interaction(
+                    name="planner",
+                    prompt_vars={
+                        "app_overview": app_overview,
+                        "selected_places": ctx["selected_places"],
+                        "selected_theme": ctx["selected_theme"],
+                        "selected_units": ctx["selected_units"],
+                        "ui_options": ui_opts_summary,
+                        "ui_option_labels": ui_option_labels,
+                        "recent_conversation": recent_conv,
+                        "domain_hints": domain_hints,
+                        "memory_summary": memory_summary,
+                        "user_text": user_text,
+                    },
+                    formatted_messages=_msgs,
+                    extra={"reasoning_enabled": True},
+                )
+            except Exception:
+                pass
+
+            plan: AssistantPlan = chain.invoke(
+                {
+                    "app_overview": app_overview,
+                    "selected_places": ctx["selected_places"],
+                    "selected_theme": ctx["selected_theme"],
+                    "selected_units": ctx["selected_units"],
+                    "ui_options": ui_opts_summary,
+                    "ui_option_labels": ui_option_labels,
+                    "recent_conversation": recent_conv,
+                    "domain_hints": domain_hints,
+                    "memory_summary": memory_summary,
+                    "user_text": user_text,
+                }
+            )
+            actions = (plan.actions or [])[:MAX_ACTIONS]
             reply = (plan.final_reply or "").strip() if plan.final_reply else None
+            try:
+                log_llm_interaction(
+                    name="planner_result",
+                    output=plan,
+                    extra={"truncated_actions": len(actions), "reply": reply},
+                )
+            except Exception:
+                pass
             logger.info(
-                "conversational_agent_node: received plan",
-                extra={
-                    "actions_count": len(actions),
-                    "first_action": actions[0].intent.value if actions else None,
-                    "reply_present": bool(reply),
-                },
+                {
+                    "event": "planner_result",
+                    "actions": _safe_actions_for_log(
+                        plan.actions if hasattr(plan, "actions") else []
+                    ),
+                    "has_final_reply": bool(getattr(plan, "final_reply", None)),
+                }
             )
             try:
                 planned_actions_log = [
                     {
-                        "intent": (a.intent.value if isinstance(a.intent, ActionName) else str(a.intent)),
-                        "arguments": _sanitize_for_log(a.arguments or {}),
+                        "intent": (
+                            a.intent.value
+                            if isinstance(a.intent, ActionName)
+                            else str(a.intent)
+                        ),
+                        "arguments": a.arguments or {},
                     }
                     for a in actions
                 ]
-                logger.info({"event": "planner_actions", "actions": planned_actions_log})
+                logger.info(
+                    {"event": "planner_actions", "actions": planned_actions_log}
+                )
             except Exception:
                 pass
         except Exception as e:
+            # Structured extraction failed — attempt JSON-mode raw parse as a fallback
             logger.warning(f"conversational_agent_node: plan extraction failed → {e}")
-            return {}
+            try:
+                raw_chain = (_PLANNER_PROMPT | planner_llm).with_config(
+                    {
+                        "tags": ["planner_fallback", "no_ui_stream"],
+                        "run_name": "planner_fallback",
+                        "callbacks": [get_llm_callback()],
+                    }
+                )
+                # Log formatted prompt for fallback
+                try:
+                    _msgs_fb = _PLANNER_PROMPT.format_messages(
+                        {
+                            "app_overview": app_overview,
+                            "selected_places": ctx["selected_places"],
+                            "selected_theme": ctx["selected_theme"],
+                            "selected_units": ctx["selected_units"],
+                            "ui_options": ui_opts_summary,
+                            "ui_option_labels": ui_option_labels,
+                            "recent_conversation": recent_conv,
+                            "domain_hints": domain_hints,
+                            "memory_summary": memory_summary,
+                            "user_text": user_text,
+                        }
+                    )
+                    log_llm_interaction(
+                        name="planner_fallback",
+                        prompt_vars={
+                            "app_overview": app_overview,
+                            "selected_places": ctx["selected_places"],
+                            "selected_theme": ctx["selected_theme"],
+                            "selected_units": ctx["selected_units"],
+                            "ui_options": ui_opts_summary,
+                            "ui_option_labels": ui_option_labels,
+                            "recent_conversation": recent_conv,
+                            "domain_hints": domain_hints,
+                            "memory_summary": memory_summary,
+                            "user_text": user_text,
+                        },
+                        formatted_messages=_msgs_fb,
+                        extra={"reasoning_enabled": True},
+                    )
+                except Exception:
+                    pass
 
-    if not actions:
-        if reply:
-            # Append natural reply
-            state["messages"].append(AIMessage(content=reply))
-            logger.info(
-                "conversational_agent_node: replying without actions",
-                extra={
-                    "reply_preview": reply[:120],
-                    "reply_len": len(reply),
-                },
-            )
-            return {
-                "messages": state["messages"],
-                "last_intent_payload": state.get("last_intent_payload"),
-            }
-        # No actions and no reply → nothing to do
-        logger.debug("conversational_agent_node: no actions and no reply → noop")
-        return {}
+                raw = raw_chain.invoke(
+                    {
+                        "app_overview": app_overview,
+                        "selected_places": ctx["selected_places"],
+                        "selected_theme": ctx["selected_theme"],
+                        "selected_units": ctx["selected_units"],
+                        "ui_options": ui_opts_summary,
+                        "ui_option_labels": ui_option_labels,
+                        "recent_conversation": recent_conv,
+                        "domain_hints": domain_hints,
+                        "memory_summary": memory_summary,
+                        "user_text": user_text,
+                    }
+                )
+                raw_txt = getattr(raw, "content", raw) or ""
+                plan = _try_parse_plan_from_text(raw_txt)
+                try:
+                    log_llm_interaction(
+                        name="planner_fallback_result",
+                        output=raw_txt,
+                    )
+                except Exception:
+                    pass
+                if plan is None:
+                    logger.warning(
+                        "conversational_agent_node: fallback parse failed (no plan)"
+                    )
+                    return {}
+                actions = (plan.actions or [])[:MAX_ACTIONS]
+                reply = (plan.final_reply or "").strip() if plan.final_reply else None
+                logger.info(
+                    "conversational_agent_node: received plan via fallback: "
+                    + json.dumps(plan, default=str),
+                )
+            except Exception as e2:
+                logger.warning(
+                    f"conversational_agent_node: fallback planning failed → {e2}"
+                )
+                return {}
 
-    # Normalize and validate actions, then convert to queue format
-    queue: List[dict] = state.get("intent_queue", []) or []
-    payloads = _normalize_and_validate_actions(actions, state)
-    # Log normalized actions (sanitized)
+    # Normalize actions to plain payload dicts, order them, and cap to MAX_ACTIONS
+    payloads: List[dict] = _actions_to_payloads(actions)
+    payloads = _order_payloads(payloads)[:MAX_ACTIONS]
+
+    # Log normalized actions
     try:
-        norm_log = [
-            {"intent": p.get("intent"), "arguments": _sanitize_for_log(p.get("arguments", {}))}
-            for p in payloads
-        ]
-        logger.info({
-            "event": "normalized_actions",
-            "actions": norm_log,
-        })
+        logger.info({"event": "actions", "actions": _safe_actions_for_log(payloads)})
     except Exception:
         pass
-    if not payloads:
-        # Nothing actionable after normalization
-        if reply:
-            state["messages"].append(AIMessage(content=reply))
-            logger.info(
-                "conversational_agent_node: replying after normalization (no actions)",
-                extra={
-                    "reply_preview": reply[:120],
-                    "reply_len": len(reply),
-                },
-            )
-            return {"messages": state["messages"], "last_intent_payload": state.get("last_intent_payload")}
-        return {}
 
+    if not payloads:
+        # No actionable items → always stream a natural reply for better UX.
+        # Use planner's final_reply only as a fallback if streaming fails or yields nothing.
+        try:
+            reply_llm = get_llm()
+            streaming_prompt = ChatPromptTemplate.from_messages(
+                [
+                    (
+                        "system",
+                        "You are VobChat, a concise, helpful UK statistics assistant. Reply directly to the user in natural language. Do not include JSON or code fences.",
+                    ),
+                    ("user", "{user_text}"),
+                ]
+            )
+            streaming_chain = (streaming_prompt | reply_llm).with_config(
+                {"tags": ["reply_stream"], "run_name": "reply_stream"}
+            )
+            parts: list[str] = []
+            for chunk in streaming_chain.stream({"user_text": user_text}):
+                try:
+                    txt = getattr(chunk, "content", "") or ""
+                    if txt:
+                        parts.append(txt)
+                except Exception:
+                    continue
+            final_txt_streamed = ("".join(parts)).strip()
+            final_txt = final_txt_streamed or (reply or "").strip()
+        except Exception:
+            final_txt = (reply or "").strip()
+
+        msg = _append_ai(state, final_txt)
+        logger.info(
+            "conversational_agent_node: replying without actions (streamed): "
+            + final_txt[:120],
+        )
+        return {
+            "messages": [msg],
+            "last_intent_payload": state.get("last_intent_payload"),
+        }
+
+    # We have payloads: route the first, queue the rest
+    queue: List[dict] = state.get("intent_queue", []) or []
     first = payloads[0]
     rest = payloads[1:]
     if rest:
         queue.extend(rest)
         logger.debug(
-            "conversational_agent_node: queued additional actions",
-            extra={"queued_count": len(rest), "queue_len": len(queue)},
+            {
+                "event": "queued_additional_actions",
+                "actions": _safe_actions_for_log(rest),
+            }
         )
 
     intent = first.get("intent")
     target_node = _intent_to_node(intent)
 
-    # Special handling for UnitTypeInfo: fetch from DB and reply directly
-    if intent == "UnitTypeInfo":
-        try:
-            from vobchat.tools import get_unit_type_info
-            ut_arg = (first.get("arguments") or {}).get("unit_type")
-            info_json = get_unit_type_info.invoke({"unit_type": ut_arg}) if hasattr(get_unit_type_info, "invoke") else get_unit_type_info(ut_arg)
-            info = json.loads(info_json) if info_json else {}
-        except Exception as e:
-            logger.warning(f"conversational_agent_node: UnitTypeInfo fetch failed: {e}")
-            info = {}
-
-        if not info:
-            txt = f"I couldn't find details for unit type: {ut_arg}."
-        else:
-            # Build a concise summary
-            parts = []
-            parts.append(f"Type: {info.get('label', '')} ({info.get('identifier', '')})")
-            lvl_label = info.get('level_label')
-            lvl = info.get('level')
-            if lvl or lvl_label:
-                parts.append(f"Level: {lvl} ({lvl_label})" if lvl_label else f"Level: {lvl}")
-            adl = info.get('adl_feature_type')
-            if adl:
-                parts.append(f"ADL Feature Type: {adl}")
-            parts.append(f"Number of units: {info.get('unit_count', 0)}")
-
-            def fmt_rel(key: str, title: str, lim: int = 6):
-                rels = info.get(key) or []
-                if not rels:
-                    return None
-                labels = [r.get('label') or r.get('unit_type') for r in rels]
-                labels = [x for x in labels if x]
-                if not labels:
-                    return None
-                if len(labels) > lim:
-                    shown = ", ".join(labels[:lim]) + f", +{len(labels)-lim} more"
-                else:
-                    shown = ", ".join(labels)
-                return f"{title}: {shown}"
-
-            for key, title in (
-                ("may_be_part_of", "May be part of"),
-                ("may_have_parts", "May have parts"),
-                ("may_have_succeeded", "May have succeeded"),
-                ("may_have_preceded", "May have preceded"),
-            ):
-                s = fmt_rel(key, title)
-                if s:
-                    parts.append(s)
-
-            statuses = info.get('statuses') or []
-            if statuses:
-                st = ", ".join(
-                    [f"{x.get('label')} ({x.get('code')})" if x.get('label') and x.get('code') else (x.get('label') or x.get('code') or '') for x in statuses]
-                )
-                if st.strip():
-                    parts.append(f"Possible statuses: {st}")
-
-            desc = info.get('description') or info.get('full_description')
-            if desc:
-                parts.append(desc)
-
-            txt = "\n".join([p for p in parts if p])
-
-        state["messages"].append(AIMessage(content=txt))
-        logger.info(
-            "conversational_agent_node: replied with UnitTypeInfo summary",
-            extra={"reply_preview": (txt or "")[:120], "reply_len": len(txt or "")},
-        )
-        return {"messages": state["messages"], "intent_queue": queue, "last_intent_payload": None}
-
     if intent == "Chat" or not target_node:
-        # Just reply if provided; else a generic acknowledgment
-        # If Chat action includes a text argument, prefer that.
+        # Just reply (prefer Chat.text if present; else final_reply)
         chat_txt = None
         try:
             chat_txt = (first.get("arguments") or {}).get("text")
         except Exception:
             chat_txt = None
-        default_overview = (
-            "This app helps you explore statistics by selecting places and a theme, "
-            "and then retrieving visualizable data cubes."
-        )
-        txt = chat_txt or reply or default_overview
-        state["messages"].append(AIMessage(content=txt))
+        txt = (chat_txt or reply or "").strip()
+
+        try:
+            reply_llm = get_llm()
+            streaming_prompt = ChatPromptTemplate.from_messages(
+                [
+                    (
+                        "system",
+                        "You are VobChat, a concise, helpful UK statistics assistant. Reply directly; no JSON or code fences.",
+                    ),
+                    ("user", "{user_text}"),
+                ]
+            )
+            streaming_chain = (streaming_prompt | reply_llm).with_config(
+                {
+                    "tags": ["reply_stream"],
+                    "run_name": "reply_stream",
+                    "callbacks": [get_llm_callback()],
+                }
+            )
+            parts: list[str] = []
+            try:
+                msgs_reply = streaming_prompt.format_messages({"user_text": user_text})
+                log_llm_interaction(
+                    name="reply_stream",
+                    prompt_vars={"user_text": user_text},
+                    formatted_messages=msgs_reply,
+                )
+            except Exception:
+                pass
+            for chunk in streaming_chain.stream({"user_text": user_text}):
+                try:
+                    t = getattr(chunk, "content", "") or ""
+                    if t:
+                        parts.append(t)
+                except Exception:
+                    continue
+            final_txt = ("".join(parts)).strip() or txt
+            try:
+                log_llm_interaction(name="reply_stream_result", output=final_txt)
+            except Exception:
+                pass
+        except Exception:
+            final_txt = txt
+
+        msg = _append_ai(state, final_txt)
         logger.info(
-            "conversational_agent_node: Chat/No target → replying",
-            extra={"reply_preview": txt[:120]},
+            "conversational_agent_node: Chat/No target → replying (streamed): "
+            + final_txt[:120]
         )
         return {
-            "messages": state["messages"],
+            "messages": [msg],
             "intent_queue": queue,
             "last_intent_payload": None,
         }
 
     logger.info(
-        "conversational_agent_node: routing to node",
-        extra={"target_node": target_node, "intent": intent},
+        "conversational_agent_node: routing to node: "
+        + json.dumps({"target_node": target_node, "intent": intent}, default=str),
     )
     return Command(
         goto=target_node,
         update={
             "intent_queue": queue,
-            "last_intent_payload": first,
+            "last_intent_payload": first,  # <-- already a plain dict
         },
     )
+
 
 # --------------------------------------------------------------------------------------
 # Helpers: normalization and mapping
 # --------------------------------------------------------------------------------------
+
+
+# --------------------------------------------------------------------------------------
+# Helpers: serialization + normalization (Pydantic v1/v2 compatible)
+# --------------------------------------------------------------------------------------
+
+
+def _model_dump_compat(obj):
+    """Return a plain dict from a pydantic model in v1 or v2; otherwise return obj if already a dict."""
+    try:
+        # pydantic v2
+        if hasattr(obj, "model_dump"):
+            return obj.model_dump()
+        # pydantic v1
+        if hasattr(obj, "dict"):
+            return obj.dict()
+    except Exception:
+        pass
+    return obj  # might already be a dict
+
+
+def _actions_to_payloads(actions: List[PlannedAction]) -> List[dict]:
+    """Normalize PlannedAction objects to plain dict payloads: {'intent': str, 'arguments': dict}."""
+    payloads: List[dict] = []
+    for a in actions or []:
+        # If user accidentally handed us dicts already, keep them
+        if isinstance(a, dict):
+            # Ensure keys exist and types look right
+            intent = a.get("intent")
+            args = a.get("arguments") or {}
+            if hasattr(intent, "value"):  # Enum or pydantic-wrapped enum
+                intent = intent.value
+            payloads.append(
+                {
+                    "intent": str(intent) if intent is not None else None,
+                    "arguments": dict(args),
+                }
+            )
+            continue
+
+        # PlannedAction (pydantic)
+        try:
+            intent = a.intent.value if hasattr(a.intent, "value") else str(a.intent)
+            args = dict(a.arguments or {})
+            payloads.append({"intent": intent, "arguments": args})
+        except Exception:
+            # Last-resort: model dump then coerce
+            d = _model_dump_compat(a)
+            intent = d.get("intent")
+            if hasattr(intent, "value"):
+                intent = intent.value
+            payloads.append(
+                {
+                    "intent": str(intent) if intent is not None else None,
+                    "arguments": dict(d.get("arguments") or {}),
+                }
+            )
+    return payloads
+
+
+def _safe_actions_for_log(actions: List[PlannedAction | dict]) -> list:
+    """Return a JSON-serializable representation of actions for logging."""
+    out = []
+    for a in actions or []:
+        if isinstance(a, dict):
+            out.append(
+                {"intent": str(a.get("intent")), "arguments": a.get("arguments", {})}
+            )
+        else:
+            try:
+                out.append(_actions_to_payloads([a])[0])
+            except Exception:
+                out.append(str(a))
+    return out
+
 
 def _intent_to_node(intent: Optional[str]) -> Optional[str]:
     """Map an intent string to a workflow node name."""
@@ -708,131 +987,10 @@ def _intent_to_node(intent: Optional[str]) -> Optional[str]:
         "Reset": "Reset_node",
         "FetchCubes": "find_cubes_node",
         "Chat": None,
-        "UnitTypeInfo": None,  # handled inline
+        "UnitTypeInfo": "UnitTypeInfo_node",
         "DescribeTheme": "DescribeTheme_node",
     }
     return mapping.get(intent)
-
-
-def _allowed_args_for_intent(intent: str) -> Set[str]:
-    """Allowed argument keys per intent for basic validation and pruning."""
-    table = {
-        "AddPlace": {"place", "places", "postcode"},
-        "RemovePlace": {"place"},
-        "AddTheme": {"theme_query"},
-        "RemoveTheme": set(),
-        "ShowState": set(),
-        "ListThemes": set(),
-        "PlaceInfo": {"place"},
-        "Reset": set(),
-        "FetchCubes": set(),
-        "Chat": {"text"},
-        "UnitTypeInfo": {"unit_type"},
-        # Accept both keys; we'll normalize to 'theme' for the node contract
-        "DescribeTheme": {"theme", "theme_query"},
-    }
-    return table.get(intent, set())
-
-
-def _normalize_and_validate_actions(actions: List[PlannedAction], state: lg_State) -> List[dict]:
-    """Normalize the list of actions into payload dicts with basic validation.
-
-    - Group all AddPlace actions into a single payload with "places": [str]
-      (except AddPlace with a postcode, which remains separate)
-    - Drop unknown intents
-    - Filter arguments to allowed keys
-    - Deduplicate actions and skip already-selected places
-    """
-    selected_names = set([n.lower() for n in get_selected_place_names(state)])
-    from typing import Tuple as _Tuple
-    seen: Set[_Tuple[str, str]] = set()
-    payloads: List[dict] = []
-    saw_add_place = False
-    saw_add_theme = False
-    saw_fetch = False
-
-    # Collect multiple AddPlace items into a single grouped payload
-    collected_places: List[str] = []
-    collected_places_lc: Set[str] = set()
-
-    for act in actions:
-        intent = act.intent.value if isinstance(act.intent, ActionName) else str(act.intent)
-        target = _intent_to_node(intent)
-        # Keep Chat and UnitTypeInfo even if target is None (handled specially)
-        if target is None and intent not in ("Chat", "UnitTypeInfo"):
-            # Unknown or not routable intent
-            continue
-        args = dict(act.arguments or {})
-        # Filter to allowed keys
-        allowed = _allowed_args_for_intent(intent)
-        args = {k: v for k, v in args.items() if k in allowed}
-
-        # Handle AddPlace intents by collecting names to group resolution
-        if intent == "AddPlace":
-            # Prefer grouping of place names; handle postcodes as individual payloads
-            if isinstance(args.get("places"), list):
-                places = [str(p).strip() for p in args.get("places") if str(p).strip()]
-                for p in places:
-                    plc_lc = p.lower()
-                    if not p or plc_lc in selected_names or plc_lc in collected_places_lc:
-                        continue
-                    collected_places.append(p)
-                    collected_places_lc.add(plc_lc)
-                    saw_add_place = True
-                continue
-            if "place" in args and isinstance(args["place"], str):
-                p = args["place"].strip()
-                plc_lc = p.lower()
-                if p and plc_lc not in selected_names and plc_lc not in collected_places_lc:
-                    collected_places.append(p)
-                    collected_places_lc.add(plc_lc)
-                    saw_add_place = True
-                continue
-            if "postcode" in args and isinstance(args["postcode"], str):
-                # Keep postcode AddPlace as its own payload (downstream nodes handle postcode resolution)
-                norm_args = {"postcode": args["postcode"].strip()}
-                key = (intent, json.dumps(norm_args, sort_keys=True))
-                if key in seen:
-                    continue
-                seen.add(key)
-                payloads.append({"intent": intent, "arguments": norm_args})
-                saw_add_place = True
-                continue
-            # Unusable AddPlace arg set
-            continue
-
-        # Normalize DescribeTheme args to the node's expected key
-        if intent == "DescribeTheme":
-            if "theme" not in args and isinstance(args.get("theme_query"), str):
-                t = args.get("theme_query").strip()
-                if t:
-                    args = {"theme": t}
-
-        # Other intents: keep filtered args
-        key = (intent, json.dumps(args, sort_keys=True))
-        if key in seen:
-            continue
-        seen.add(key)
-        payloads.append({"intent": intent, "arguments": args})
-        if intent == "AddTheme":
-            saw_add_theme = True
-        elif intent == "FetchCubes":
-            saw_fetch = True
-
-    # If we collected multiple places, emit a single grouped AddPlace payload
-    if collected_places:
-        payloads.append({"intent": "AddPlace", "arguments": {"places": collected_places}})
-
-    # If the user is selecting a theme (and either adding places now or already has units), ensure we fetch cubes at the end
-    try:
-        has_units = bool(get_selected_units(state))
-    except Exception:
-        has_units = False
-    if saw_add_theme and (saw_add_place or has_units) and not saw_fetch:
-        payloads.append({"intent": "FetchCubes", "arguments": {}})
-
-    # Order actions to a sensible priority, keeping relative order within same priority
-    return _order_payloads(payloads)
 
 
 def _order_payloads(payloads: List[dict]) -> List[dict]:
@@ -859,25 +1017,3 @@ def _order_payloads(payloads: List[dict]) -> List[dict]:
     indexed.sort(key=lambda iv: (priority.get(iv[1].get("intent"), 999), iv[0]))
     ordered = [p for _, p in indexed]
     return ordered
-
-
-def _sanitize_for_log(value, max_len: int = 120):
-    """Best-effort sanitizer to keep logs concise and safe."""
-    try:
-        if isinstance(value, str):
-            v = value.strip()
-            return (v[:max_len] + "…") if len(v) > max_len else v
-        if isinstance(value, (int, float, bool)) or value is None:
-            return value
-        if isinstance(value, list):
-            return [_sanitize_for_log(v, max_len=max_len//2) for v in value[:10]]
-        if isinstance(value, dict):
-            return {str(k): _sanitize_for_log(v, max_len=max_len//2) for k, v in list(value.items())[:10]}
-        s = str(value)
-        return (s[:max_len] + "…") if len(s) > max_len else s
-    except Exception:
-        try:
-            s = str(value)
-            return (s[:max_len] + "…") if len(s) > max_len else s
-        except Exception:
-            return "(unloggable)"

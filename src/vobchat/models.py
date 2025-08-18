@@ -2,54 +2,69 @@
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin
 from passlib.context import CryptContext
-from authlib.integrations.flask_client import OAuth
-from flask import Blueprint, render_template_string, redirect, url_for, request, session, flash
-from flask_login import LoginManager, login_user, logout_user, login_required, current_user
-from vobchat.assets.loginpage import LOGIN_PAGE_NO_SIGNUP, SIGNUP_FORM_HTML
+from flask import (
+    Blueprint,
+    render_template_string,
+    redirect,
+    url_for,
+    request,
+    flash,
+)
+from flask_login import (
+    LoginManager,
+    login_user,
+    logout_user,
+    login_required,
+    current_user,
+)
+from vobchat.assets.loginpage import LOGIN_PAGE_NO_SIGNUP
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy import String
-import os
 from vobchat.config import get_dash_base_paths
 
 db = SQLAlchemy()
 
 pwd_ctx = CryptContext(
-    schemes=["argon2"],       # argon2id is OWASP’s 1st choice  [oai_citation:0‡OWASP Cheat Sheet Series](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html?utm_source=chatgpt.com) [oai_citation:1‡passlib.readthedocs.io](https://passlib.readthedocs.io/en/stable/lib/passlib.hash.argon2.html?utm_source=chatgpt.com)
-    deprecated="auto"
+    schemes=[
+        "argon2"
+    ],  # argon2id is OWASP’s 1st choice  [oai_citation:0‡OWASP Cheat Sheet Series](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html?utm_source=chatgpt.com) [oai_citation:1‡passlib.readthedocs.io](https://passlib.readthedocs.io/en/stable/lib/passlib.hash.argon2.html?utm_source=chatgpt.com)
+    deprecated="auto",
 )
+
 
 class Base(DeclarativeBase):
     pass
 
+
 class User(Base, UserMixin):
     __tablename__ = "users"
-    __allow_unmapped__ = True          # silence Pylance re: UserMixin attrs
+    __allow_unmapped__ = True  # silence Pylance re: UserMixin attrs
 
-    id:            Mapped[int]  = mapped_column(primary_key=True)
-    email:         Mapped[str]  = mapped_column(String(255), nullable=False)
-    password_hash: Mapped[str]  = mapped_column(String(256), nullable=False)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(256), nullable=False)
 
     @classmethod
     def create(cls, email: str, raw_password: str) -> "User":
-        return cls(
-            email=email,
-            password_hash=pwd_ctx.hash(raw_password)
-        )
+        return cls(email=email, password_hash=pwd_ctx.hash(raw_password))
 
     def verify_password(self, raw_password: str) -> bool:
         return pwd_ctx.verify(raw_password, self.password_hash)
+
+
 def register_app_routes(server):
     """Register app routes for authentication and login."""
-    
 
 
-bp   = Blueprint("auth", __name__)
-lm   = LoginManager()           # initialise in create_app()
+bp = Blueprint("auth", __name__)
+lm = LoginManager()  # initialise in create_app()
 lm.login_view = "auth.login_page"
+
 
 @lm.user_loader
 def load_user(user_id):
     return db.session.get(User, int(user_id))
+
 
 @bp.route("/login", methods=["GET"])
 def login_page():
@@ -57,10 +72,11 @@ def login_page():
     # Use Flask-Login state to decide; avoids loops with stale session ids
     if current_user.is_authenticated:
         route_prefix, url_base = get_dash_base_paths()
-        return redirect((route_prefix or "") + "/")          # already logged in
+        return redirect((route_prefix or "") + "/")  # already logged in
     # Pass the Dash base path so links/actions work behind subpaths
     route_prefix, url_base = get_dash_base_paths()
     return render_template_string(LOGIN_PAGE_NO_SIGNUP, base=url_base)
+
 
 # ---------- sign-up -------------------------------------------------
 @bp.route("/signup", methods=["GET", "POST"])
@@ -85,11 +101,12 @@ def signup():
     # flash("If an account with that e-mail exists, you can now log in.")
     # return redirect(url_for(".login_page"))
 
+
 # ---------- login ---------------------------------------------------
 @bp.route("/login", methods=["POST"])
 def login():
     email = request.form.get("email", "").strip().lower()
-    pwd   = request.form.get("password", "")
+    pwd = request.form.get("password", "")
     next_url = request.form.get("next") or request.args.get("next") or ""
 
     user = db.session.scalar(db.select(User).filter_by(email=email))
@@ -97,12 +114,17 @@ def login():
         login_user(user)
         route_prefix, url_base = get_dash_base_paths()
         # Basic safety: only allow local relative redirects
-        if next_url and next_url.startswith("/") and not next_url.startswith("//"):
+        if (
+            next_url
+            and next_url.startswith("/")
+            and not next_url.startswith("//")
+        ):
             return redirect(next_url)
         return redirect((route_prefix or "") + "/")
 
     flash("Invalid credentials")
     return redirect(url_for(".login_page"))
+
 
 # ---------- logout --------------------------------------------------
 @bp.route("/logout")

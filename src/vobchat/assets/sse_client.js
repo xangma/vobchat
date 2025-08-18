@@ -1,5 +1,19 @@
 // Simple SSE Client - Clean rewrite
-// Single responsibility: Connect to SSE stream and update UI directly
+// Purpose: Connect to the SSE stream and update the UI directly without
+// Dash callbacks for the high-frequency chat + map flows. This file is kept
+// intentionally self-contained so it can operate with minimal coupling.
+//
+// Lifecycle overview:
+// - connect(threadId, workflowInput?): Opens an EventSource to the /sse endpoint
+//   and (optionally) POSTs an initial workflow input to kick off the turn.
+// - handleStateUpdate(state): Receives normalized state deltas and updates
+//   the visible chat, map, and visualization panels. Chat messages are always
+//   ordered and deduped server-side to avoid flicker.
+// - Streaming: During token streaming, the server emits frequent state_update
+//   events with a full messages array including a growing AI bubble. The
+//   llm_busy flag is cleared after the first visible token renders.
+// - Interrupts: When a node requests user action (e.g., place disambiguation),
+//   an 'interrupt' event arrives with options and map hints.
 
 class SimpleSSEClient {
     constructor() {
@@ -11,6 +25,7 @@ class SimpleSSEClient {
         this.lastPlacesSig = null;
         this.llmBusy = false; // server-driven busy flag for thinking indicator
         this.currentOptions = null; // cache of currently visible UI options
+        this.placeStateCache = {}; // local cache to merge partial updates safely
         // Use Dash's official url base path env exposure
         this.basePath = (typeof window !== 'undefined' && window.DASH_URL_BASE_PATHNAME) ? window.DASH_URL_BASE_PATHNAME : '/';
 
@@ -93,7 +108,7 @@ class SimpleSSEClient {
         });
 
         this.eventSource.addEventListener('state_update', (event) => {
-            console.log('SSE: Raw state_update event received:', event.data);
+            // console.log('SSE: Raw state_update event received:', event.data);
             try {
                 const data = JSON.parse(event.data);
                 console.log('SSE: Parsed state_update data:', data);
@@ -164,7 +179,6 @@ class SimpleSSEClient {
     // Simple state update - update stores directly
     handleStateUpdate(state) {
         console.log('SSE: Received state update:', state);
-        console.log('SSE: State update keys:', Object.keys(state));
         if (state.map_update_request) {
             console.log('SSE: Found map_update_request in state:', state.map_update_request);
         } else {
@@ -217,7 +231,7 @@ class SimpleSSEClient {
             this.hideThinkingIndicator();
         }
 
-        // Update stores via Dash (minimal, targeted updates only)
+        // Update stores via Dash (merge targeted updates with cached state)
         if (typeof dash_clientside !== 'undefined' && dash_clientside.set_props) {
             // Only update place-state with essential data if something actually changed
             const updates = {};
@@ -237,12 +251,9 @@ class SimpleSSEClient {
             }
 
             if (hasUpdates) {
-                // Note: We can't access current state outside of a callback context
-                // However, Dash should merge partial updates with existing state automatically
-                // We only send the fields that were actually in the state update
-                dash_clientside.set_props('place-state', {
-                    data: updates
-                });
+                // Merge with our local cache to avoid clobbering existing fields like `cubes`
+                this.placeStateCache = Object.assign({}, this.placeStateCache, updates);
+                dash_clientside.set_props('place-state', { data: this.placeStateCache });
             }
 
             // Only update app-state if visualization needs to show/hide
@@ -265,10 +276,18 @@ class SimpleSSEClient {
         this.currentInterruptData = interruptData;
 
         // Store interrupt data in the sse-interrupt-store for callbacks to access
+        // If this interrupt provides place_coordinates, clear any existing markers first
         if (typeof dash_clientside !== 'undefined' && dash_clientside.set_props) {
-            dash_clientside.set_props('sse-interrupt-store', {
-                data: interruptData
-            });
+            if (interruptData.place_coordinates && interruptData.place_coordinates.length > 0) {
+                // Clear store to remove existing markers before setting new ones
+                dash_clientside.set_props('sse-interrupt-store', { data: {} });
+                // Set new data on next tick so Dash processes the clear first
+                setTimeout(() => {
+                    dash_clientside.set_props('sse-interrupt-store', { data: interruptData });
+                }, 0);
+            } else {
+                dash_clientside.set_props('sse-interrupt-store', { data: interruptData });
+            }
         }
 
         // Handle place disambiguation markers zoom
@@ -289,15 +308,15 @@ class SimpleSSEClient {
 
             // Update place-state with complete state data from interrupt
             if (typeof dash_clientside !== 'undefined' && dash_clientside.set_props) {
-                dash_clientside.set_props('place-state', {
-                    data: {
-                        cubes: JSON.parse(interruptData.cubes),
-                        selected_cubes: JSON.parse(interruptData.selected_cubes || interruptData.cubes),
-                        show_visualization: interruptData.show_visualization || true,
-                        places: interruptData.places || [],
-                        selected_theme: interruptData.selected_theme
-                    }
-                });
+                const newData = {
+                    cubes: JSON.parse(interruptData.cubes),
+                    selected_cubes: JSON.parse(interruptData.selected_cubes || interruptData.cubes),
+                    show_visualization: interruptData.show_visualization || true,
+                    places: interruptData.places || [],
+                    selected_theme: interruptData.selected_theme
+                };
+                this.placeStateCache = Object.assign({}, this.placeStateCache, newData);
+                dash_clientside.set_props('place-state', { data: this.placeStateCache });
             }
         }
 
@@ -463,14 +482,10 @@ class SimpleSSEClient {
 
     // Helper: Update map selection (simplified)
     updateMapSelection(places) {
-        console.log('SSE: Updating map selection with places:', places);
 
         // De-duplicate by skipping when places signature unchanged
         const sig = this._placesSignature(places);
-        if (this.lastPlacesSig === sig) {
-            console.log('SSE: Places unchanged, skipping map selection update');
-            return;
-        }
+        if (this.lastPlacesSig === sig) { return; }
         this.lastPlacesSig = sig;
 
         // Use pure map state if available, otherwise fall back to dash store
@@ -754,10 +769,12 @@ class SimpleSSEClient {
         
         // Update the sse-interrupt-store to trigger marker display
         if (typeof dash_clientside !== 'undefined' && dash_clientside.set_props) {
-            dash_clientside.set_props('sse-interrupt-store', {
-                data: interruptData
-            });
-            console.log('SSE: Set info marker in sse-interrupt-store');
+            // Clear any previous markers then set new info marker request
+            dash_clientside.set_props('sse-interrupt-store', { data: {} });
+            setTimeout(() => {
+                dash_clientside.set_props('sse-interrupt-store', { data: interruptData });
+                console.log('SSE: Set info marker in sse-interrupt-store');
+            }, 0);
         }
         
         // Also zoom to the location or bounds
@@ -916,42 +933,66 @@ class SimpleSSEClient {
                 return;
             }
 
-            // Use the first unit type (they should all be the same for a single selection)
-            const unitType = unitTypes.length > 0 ? unitTypes[0] : null;
-            console.log('SSE: Unit types for fetching:', unitTypes, 'using first:', unitType);
-            if (!unitType) {
-                console.error('SSE: No unit type available');
-                return;
+            // Build id -> unitType map, prefer places when available
+            const idToType = {};
+            if (Array.isArray(places) && places.length >= validUnits.length) {
+                (places || []).forEach(p => {
+                    if (p && p.g_unit != null) idToType[String(p.g_unit)] = p.g_unit_type || null;
+                });
+            } else {
+                for (let i = 0; i < validUnits.length; i++) {
+                    const id = String(validUnits[i]);
+                    idToType[id] = unitTypes[i] || (unitTypes.length === 1 ? unitTypes[0] : null);
+                }
             }
 
-            // Convert units to strings as expected by fetchPolygonsByIds
-            const unitStrings = validUnits.map(String);
+            // Group units by type
+            const byType = {};
+            validUnits.map(String).forEach(id => {
+                const ut = idToType[id];
+                if (!ut) {
+                    console.warn('SSE: No unit type for id, skipping fetch for', id);
+                    return;
+                }
+                (byType[ut] ||= []).push(id);
+            });
+            console.log('SSE: Fetch groups by unit type:', byType);
 
             // Create a minimal map state object with places (single source of truth)
-            const mapState = {
-                places: places || []
-            };
+            const mapState = { places: places || [] };
 
-            console.log('SSE: Calling fetchPolygonsByIds with:', {map, mapState, unitType, unitStrings});
-
-            // If all requested polygons are already on the layer, skip fetching
+            // Check layer for existing IDs and prepare per-type fetches
             const existingLayer = window.polygonManagement.findGeoJSONLayer ?
                 window.polygonManagement.findGeoJSONLayer(map) : null;
-            let allPresent = false;
+            const requestedIds = validUnits.map(String);
+            let allPresent = true;
+            const fetchPromises = [];
             if (existingLayer && existingLayer._layers) {
                 const layerIds = [];
                 Object.values(existingLayer._layers).forEach(l => {
-                    if (l.feature && l.feature.id) {
-                        layerIds.push(String(l.feature.id));
+                    if (l.feature && l.feature.id) layerIds.push(String(l.feature.id));
+                });
+                const globalMissing = requestedIds.filter(id => !layerIds.includes(id));
+                if (globalMissing.length) allPresent = false;
+
+                Object.entries(byType).forEach(([ut, ids]) => {
+                    const missing = ids.filter(id => !layerIds.includes(id));
+                    if (missing.length) {
+                        console.warn('SSE: Missing polygon IDs on layer for', ut, '→', missing);
+                        fetchPromises.push(
+                            window.polygonManagement.fetchPolygonsByIds(map, mapState, ut, missing, null)
+                        );
+                    } else {
+                        console.log('SSE: All', ut, 'polygons present on layer; skipping fetch');
                     }
                 });
-                const missingIds = unitStrings.filter(id => !layerIds.includes(id));
-                allPresent = missingIds.length === 0;
-                if (allPresent) {
-                    console.log('SSE: All requested polygons already on layer; skipping fetch');
-                } else {
-                    console.warn('SSE: Missing polygon IDs on layer, will fetch:', missingIds);
-                }
+            } else {
+                allPresent = false;
+                Object.entries(byType).forEach(([ut, ids]) => {
+                    fetchPromises.push(
+                        window.polygonManagement.fetchPolygonsByIds(map, mapState, ut, ids, null)
+                    );
+                });
             }
 
             const afterEnsurePolygons = (layer) => {
@@ -961,27 +1002,27 @@ class SimpleSSEClient {
                         try {
                             const tsOk = typeof window._lastLocalZoomTs === 'number' && (Date.now() - window._lastLocalZoomTs) < 1500;
                             const sameIds = Array.isArray(window._lastLocalZoomIds) &&
-                                window._lastLocalZoomIds.slice().sort().join(',') === unitStrings.slice().sort().join(',');
+                                window._lastLocalZoomIds.slice().sort().join(',') === requestedIds.slice().sort().join(',');
                             return tsOk && sameIds;
                         } catch (e) { return false; }
                     })();
 
                     let zoomWasPerformed = false;
                     if (!recentLocalZoom) {
-                        console.log('SSE: Considering zoom with units:', unitStrings, 'and place coords:', includePlaceCoordinates);
+                        console.log('SSE: Considering zoom with units:', requestedIds, 'and place coords:', includePlaceCoordinates);
 
                         // Try combined zoom first if we have place coordinates
                         let zoomApplied = false;
                         if (includePlaceCoordinates && includePlaceCoordinates.length > 0) {
                             console.log('SSE: Creating custom zoom bounds with place coordinates');
-                            zoomApplied = this.calculateCombinedZoomBounds(map, layer, unitStrings, includePlaceCoordinates);
+                            zoomApplied = this.calculateCombinedZoomBounds(map, layer, requestedIds, includePlaceCoordinates);
                         }
                         if (zoomApplied) {
                             zoomWasPerformed = true;
                         } else {
                             console.log('SSE: Using standard polygon zoom');
                             try { window._zoomSource = 'sse'; } catch (e) {}
-                            polygonManagement.zoomTo(map, unitStrings, layer);
+                            polygonManagement.zoomTo(map, requestedIds, layer);
                             zoomWasPerformed = true;
                         }
                     } else {
@@ -990,11 +1031,11 @@ class SimpleSSEClient {
 
                     // Only update unit types if they differ from current
                     if (zoomWasPerformed) {
-                        console.log('SSE: Zoom initiated for units:', unitStrings);
+                        console.log('SSE: Zoom initiated for units:', requestedIds);
                     } else {
                         console.log('SSE: No zoom performed (units already centered)');
                     }
-                    if (unitTypes.length > 0 && unitStrings.length > 0) {
+                    if (unitTypes.length > 0 && requestedIds.length > 0) {
                         const uniqueUnitTypes = [...new Set(unitTypes)];
                         const currentUnitTypes = (window.pureMapState?.getUnitTypes?.() || []).slice().sort().join(',');
                         const requestedUnitTypes = uniqueUnitTypes.slice().sort().join(',');
@@ -1025,16 +1066,16 @@ class SimpleSSEClient {
             if (allPresent) {
                 afterEnsurePolygons(existingLayer);
             } else {
-                // Fetch the polygon data first (using the correct parameter signature)
-                window.polygonManagement.fetchPolygonsByIds(map, mapState, unitType, unitStrings, null).then((result) => {
-                    console.log('SSE: Polygons fetched from API, result:', result);
-                    console.log('SSE: Features returned:', result.features?.map(f => f.id));
-                    console.log('SSE: Now zooming to them');
+                Promise.all(fetchPromises).then(results => {
+                    try {
+                        const mergedIds = [].concat(...(results || []).map(r => (r && r.features) ? r.features.map(f => f.id) : []));
+                        console.log('SSE: Polygons fetched from API (grouped):', mergedIds);
+                    } catch (e) {}
                     const layer = window.polygonManagement.findGeoJSONLayer ?
                         window.polygonManagement.findGeoJSONLayer(map) : null;
                     afterEnsurePolygons(layer);
                 }).catch(err => {
-                    console.error('SSE: Failed to fetch polygons:', err);
+                    console.error('SSE: Failed to fetch polygons (grouped):', err);
                     // Fallback: try to zoom anyway and update unit types
                     window.pureMapState.executeWorkflowCommand({ type: 'zoom_to_selection' });
                     if (unitTypes.length > 0) {

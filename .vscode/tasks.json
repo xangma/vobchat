@@ -10,6 +10,15 @@
         "context": "${workspaceFolder}"
       }
     },
+    {
+      
+      "label": "Check unused code",
+      "type": "shell",
+      "command": "conda run -n ai vulture src/vobchat/ --ignore-decorators app.callback,app.clientside_callback,server.route,server.get,bp.route,lm.user_loader,login_required --ignore-names layout,login_view,AddPlace,RemovePlace,AddTheme,RemoveTheme,ShowState,ListThemes,PlaceInfo,Reset,FetchCubes,Chat,UnitTypeInfo,DescribeTheme,n_submit,reset_clicks,chat_display --exclude src/vobchat/gunicorn.conf.py --min-confidence 60",
+      "group": "build",
+      "problemMatcher": []
+    },
+
     // {
     //   "label": "Run docker-compose up",
     //   "type": "docker-compose",

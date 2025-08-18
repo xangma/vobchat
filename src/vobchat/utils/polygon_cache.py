@@ -391,6 +391,8 @@ class PolygonCache:
         """Save a GeoDataFrame to disk as GeoJSON."""
         file_path = self._disk_file_path(cache_key)
         try:
+            # Ensure the directory exists at save time as well (robust against CWD changes)
+            os.makedirs(os.path.dirname(file_path) or ".", exist_ok=True)
             gdf.to_file(file_path, driver="GeoJSON")
         except Exception as e:
             logger.error(f"Error saving file {file_path}: {e}")

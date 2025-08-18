@@ -78,12 +78,12 @@ def update_polygon_selection(state: lg_State):
         places = state.get("places", []) or []
 
         if current_idx >= len(places):
-            logger.info("update_polygon_selection: All places resolved, routing to agent_node")
+            logger.info("update_polygon_selection: All places resolved, routing to start_node")
             
             # Collect selected place coordinates for zoom
             selected_place_coordinates = _collect_selected_place_coordinates(places)
             
-            return Command(goto="agent_node", update={
+            return Command(goto="start_node", update={
                 "units_needing_map_selection": [],
                 "places": places,
                 "selection_idx": None,
@@ -119,7 +119,7 @@ def update_polygon_selection(state: lg_State):
         return Command(goto="resolve_place_and_unit")
 
     # All places processed, move to next workflow step
-    return Command(goto="agent_node")
+    return Command(goto="start_node")
 
 # -----------------------------------------------------------------------------
 # Node - RequestMapSelection_node
@@ -129,7 +129,7 @@ def update_polygon_selection(state: lg_State):
 # def request_map_selection(state: lg_State):
 #     needed = state.get("units_needing_map_selection", [])
 #     if not needed:
-#         return Command(goto="agent_node")
+#         return Command(goto="start_node")
 
 #     unit = needed[0]
 #     place_name = next(
@@ -223,7 +223,7 @@ def resolve_place_and_unit(state: lg_State):
                 if place_entry is None or not place_entry.get("candidate_rows"):
                     # No place found
                     _append_ai(state, f"I couldn't find '{place['name']}'. Skipping...")
-                    return Command(goto="agent_node", update={"current_place_index": idx + 1})
+                    return Command(goto="start_node", update={"current_place_index": idx + 1})
                 else:
                     # Disambiguation in progress - interrupt triggered, state is preserved
                     # Just return the current state, the interrupt has already been triggered
@@ -250,7 +250,7 @@ def resolve_place_and_unit(state: lg_State):
             
             logger.error(f"Error in place disambiguation for {place.get('name')}: {e}", exc_info=True)
             _append_ai(state, f"Sorry, I encountered an error looking up '{place['name']}'. Skipping...")
-            return Command(goto="agent_node", update={"current_place_index": idx + 1})
+            return Command(goto="start_node", update={"current_place_index": idx + 1})
         finally:
             # Clean up temporary state
             state.pop("place_entry", None)
@@ -287,7 +287,7 @@ def resolve_place_and_unit(state: lg_State):
             
             logger.error(f"Error in unit disambiguation for {place.get('name')}: {e}", exc_info=True)
             # Skip this place and continue
-            return Command(goto="agent_node", update={"current_place_index": idx + 1})
+            return Command(goto="start_node", update={"current_place_index": idx + 1})
 
 
     # ── done with this place ───────────────────────────────────────────────

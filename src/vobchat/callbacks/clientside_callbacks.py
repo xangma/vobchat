@@ -290,6 +290,7 @@ def register_simple_clientside_callbacks(app: Dash):
             const unit_types = map_state.unit_types || ['MOD_REG'];
             const selected_polygons = getSelectedPolygons(map_state);
             const year_range = map_state.year_range || [currentYear, currentYear];
+            
 
             // Year slider visibility
             const timeless_types = Object.keys(UNIT_TYPES).filter(k => UNIT_TYPES[k].timeless);
@@ -334,20 +335,47 @@ def register_simple_clientside_callbacks(app: Dash):
                 return style;
             }});
 
-            // Counts
+            // Counts (robust per-type): derive directly from places array
             const counts = {{}};
             Object.keys(UNIT_TYPES).forEach(ut => {{
                 counts[ut] = 0;
                 counts[ut + '_g_units'] = [];
             }});
-            const selected_types = getSelectedUnitTypes(map_state);
-            for (let i = 0; i < selected_polygons.length; i++) {{
-                const unit_type = selected_types[i];
-                if (counts.hasOwnProperty(unit_type)) {{
-                    counts[unit_type]++;
-                    counts[unit_type + '_g_units'].push(selected_polygons[i]);
+
+            try {{
+                const places = map_state?.places || [];
+                const seen = new Set();
+                for (let i = 0; i < places.length; i++) {{
+                    const pl = places[i];
+                    if (!pl || pl.g_unit == null) continue;
+                    const sid = String(pl.g_unit);
+                    let ut = pl.g_unit_type;
+
+                    if (!ut || !UNIT_TYPES.hasOwnProperty(ut)) {{
+                        try {{
+                            const feat = window.polygonManagement?._cache?.featureById?.[sid];
+                            const t = feat?.properties?.g_unit_type;
+                            if (t && UNIT_TYPES.hasOwnProperty(t)) {{
+                                ut = t;
+                            }}
+                        }} catch (e) {{ /* no-op */ }}
+                    }}
+
+                    if (!ut || !UNIT_TYPES.hasOwnProperty(ut)) {{
+                        continue;
+                    }}
+
+                    if (seen.has(sid)) {{
+                        continue;
+                    }}
+                    seen.add(sid);
+
+                    if (counts.hasOwnProperty(ut)) {{
+                        counts[ut] += 1;
+                        counts[ut + '_g_units'].push(sid);
+                    }}
                 }}
-            }}
+            }} catch (e) {{ /* no-op */ }}
 
             return [
                 container_style, min_year, max_year, slider_marks, slider_value,
