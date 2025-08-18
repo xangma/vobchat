@@ -484,8 +484,9 @@ def get_all_cube_data(
             return "[]"
 
         # Pivot the data to create columns for each cube
+        # Keep g_unit in the index so downstream code can map unit_type
         pivot_df = df.pivot(
-            index=["g_name", "year"], columns="cellref", values="value"
+            index=["g_unit", "g_name", "year"], columns="cellref", values="value"
         ).reset_index()
         logger.debug(
             f"[get_all_cube_data] Returning {len(pivot_df)} rows for unit {g_unit}"
