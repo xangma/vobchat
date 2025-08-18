@@ -6,7 +6,7 @@ import json
 import io
 import plotly.graph_objects as go
 import plotly.express as px
-from dash import no_update
+from dash import no_update, html
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 from vobchat.tools import get_all_cube_data
@@ -156,9 +156,80 @@ def register_simple_visualization_callbacks(app):
                         row[cube_col] if cube_col in cubes_df.columns else f"Cube {cid}"
                     )
 
-            options = [
-                {"label": label, "value": cid} for cid, label in option_labels.items()
-            ]
+            # Determine if multiple unit types are selected overall
+            selected_unit_types = set(
+                [
+                    p.get("g_unit_type")
+                    for p in (place_state.get("places") or [])
+                    if p.get("g_unit_type")
+                ]
+            )
+
+            # Build cube_id -> unit_type coverage (which unit types have this cube)
+            unit_type_map = {}
+            for p in place_state.get("places", []) or []:
+                if p and p.get("g_unit") is not None and p.get("g_unit_type"):
+                    try:
+                        unit_type_map[int(p.get("g_unit"))] = p.get("g_unit_type")
+                    except Exception:
+                        unit_type_map[str(p.get("g_unit"))] = p.get("g_unit_type")
+
+            coverage = {}
+            if "g_unit" in cubes_df.columns:
+                for _, row in cubes_df.iterrows():
+                    cid = row[cube_id_col]
+                    gun = row.get("g_unit")
+                    try:
+                        gun = int(gun)
+                    except Exception:
+                        pass
+                    utype = unit_type_map.get(gun)
+                    coverage.setdefault(cid, set())
+                    if utype:
+                        coverage[cid].add(utype)
+
+            # Palette to match map unit type colors
+            palette = {
+                "LG_DIST": "orange",
+                "MOD_DIST": "brown",
+                "MOD_REG": "teal",
+                "UTLA": "#4e79a7",
+                "LTLA": "#f28e2b",
+            }
+
+            def label_with_indicator(text: str, utype: str | None):
+                if utype and len(selected_unit_types) > 1:
+                    color = palette.get(utype)
+                    if color:
+                        return html.Span(
+                            [
+                                text,
+                                html.Span(
+                                    style={
+                                        "display": "inline-block",
+                                        "width": "10px",
+                                        "height": "10px",
+                                        "borderRadius": "50%",
+                                        "backgroundColor": color,
+                                        "marginLeft": "6px",
+                                        "verticalAlign": "middle",
+                                    }
+                                ),
+                            ]
+                        )
+                return text
+
+            # Build final options with indicator when cube is unique to one unit type
+            options = []
+            for cid, base_label in option_labels.items():
+                types = list(coverage.get(cid, []))
+                indicator_utype = types[0] if len(types) == 1 else None
+                options.append(
+                    {
+                        "label": label_with_indicator(base_label, indicator_utype),
+                        "value": cid,
+                    }
+                )
 
             # Determine best default selection: prefer cubes available for all selected units
             selected_units = [
@@ -343,24 +414,11 @@ def register_simple_visualization_callbacks(app):
             if chart_data.empty:
                 return empty_chart("No valid data after filtering")
 
-            # Map g_unit -> unit_type from place_state
-            unit_type_map = {}
-            for p in places:
-                u = p.get("g_unit")
-                if u is not None and p.get("g_unit_type"):
-                    try:
-                        unit_type_map[int(u)] = p.get("g_unit_type")
-                    except Exception:
-                        unit_type_map[str(u)] = p.get("g_unit_type")
-
             # Create display names and plot
             chart_data["display_name"] = (
                 chart_data["g_name"] + " - " + chart_data["measurement"]
             )
-            # Attach unit_type for each row
-            chart_data["unit_type"] = chart_data["g_unit"].map(
-                lambda u: unit_type_map.get(int(u)) if pd.notna(u) else None
-            )
+
             chart_data = chart_data.sort_values(["g_name", "measurement", "year"])
 
             fig = px.line(
