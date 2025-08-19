@@ -177,3 +177,5 @@ class lg_State(TypedDict):
     ]  # Message from interrupt to be added to state on resume
     # conversational memory (optional, used by conversational agent)
     memory_summary: Optional[str]
+    # index of the last message included in the summary (to avoid re-summarizing)
+    memory_last_index: Optional[int]

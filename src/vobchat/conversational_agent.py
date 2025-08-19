@@ -28,8 +28,13 @@ import logging
 
 from vobchat.llm_factory import get_llm
 from vobchat.configure_logging import get_llm_callback
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import HumanMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import (
+    HumanMessage,
+    SystemMessage,
+    BaseMessage,
+    trim_messages,
+)
 from langgraph.types import Command
 
 from .state_schema import lg_State, get_selected_place_names, get_selected_units
@@ -41,6 +46,12 @@ logger = logging.getLogger(__name__)
 
 # Guardrail: limit number of actions executed per turn
 MAX_ACTIONS = int(os.getenv("VOBCHAT_PLANNER_MAX_ACTIONS", "4"))
+
+# How we manage chat history for the model context
+_MAX_HISTORY_TOKENS = int(os.getenv("VOBCHAT_MAX_HISTORY_TOKENS", "1200"))
+# Keep at least this many latest turns verbatim when summarizing
+_KEEP_RECENT_MSGS = int(os.getenv("VOBCHAT_KEEP_RECENT_MSGS", "6"))
+_SUMMARY_MIN_MESSAGES = int(os.getenv("VOBCHAT_SUMMARY_MIN_MESSAGES", "14"))
 
 
 # --------------------------------------------------------------------------------------
@@ -138,6 +149,10 @@ CONTEXT
 - Recent conversation (last turns):\n{recent_conversation}
 - Domain hints (if any):\n{domain_hints}
 - Memory summary: {memory_summary}
+\n+Extracted (from subagents):
+- Places: {extracted_places}
+- Themes: {extracted_themes}
+- Action candidates: {extracted_actions}
 
 USER_MESSAGE
 {user_text}
@@ -215,6 +230,88 @@ def _summarize_recent_conversation(
     if len(text) > max_chars:
         text = text[-max_chars:]
     return text if text else "(none)"
+
+
+# --------------------------------------------------------------------------------------
+# Memory helpers: trimming and summarization
+# --------------------------------------------------------------------------------------
+
+
+def _trim_for_model_input(state: lg_State) -> list[BaseMessage]:
+    """Return a list of messages trimmed for the model context.
+
+    This does not mutate state. It optionally injects a system message with a
+    compact memory summary at the front so the model gets long-term context
+    even when earlier messages are trimmed away.
+    """
+    messages: list[BaseMessage] = list(state.get("messages", []) or [])
+    # Use the app LLM as token counter to estimate tokens
+    model = get_llm()
+    trimmer = trim_messages(
+        max_tokens=_MAX_HISTORY_TOKENS,
+        strategy="last",
+        token_counter=model,
+        include_system=True,
+        allow_partial=False,
+        start_on="human",
+    )
+    trimmed = trimmer.invoke(messages) if messages else []
+    mem = (state.get("memory_summary") or "").strip()
+    if mem:
+        # Prepend a light system hint with the summary
+        sys = SystemMessage(
+            content=("Conversation memory summary (for context): " + mem[:2000])
+        )
+        return [sys] + list(trimmed)
+    return list(trimmed)
+
+
+def _maybe_update_memory_summary(state: lg_State) -> dict:
+    """If the history is long, update the memory summary incrementally.
+
+    Summarize older messages up to the last K recent messages. Combine with any
+    existing summary. Returns a partial state update dict (may be empty).
+    """
+    try:
+        messages: list[BaseMessage] = list(state.get("messages", []) or [])
+        if len(messages) < _SUMMARY_MIN_MESSAGES:
+            return {}
+        # Determine which slice to summarize
+        last_idx = state.get("memory_last_index") or 0
+        cutoff = max(0, len(messages) - _KEEP_RECENT_MSGS)
+        if cutoff <= last_idx:
+            # Nothing new to summarize since last time
+            return {}
+        to_summarize = messages[last_idx:cutoff]
+        if not to_summarize:
+            return {}
+
+        # Build a concise update summary using the base model
+        summarizer = get_llm()
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "You summarize chats into durable, factual memory. "
+                    "Capture user preferences, decisions, places, themes, and important facts. "
+                    "Be concise and objective; omit chit-chat.\n"
+                    "Existing summary (may be empty): {existing}\n"
+                    "Return a single paragraph no longer than ~120 words.",
+                ),
+                MessagesPlaceholder("history"),
+            ]
+        )
+        existing = (state.get("memory_summary") or "").strip()
+        # Invoke the summarizer on the slice of messages
+        new_summary_msg = summarizer.invoke(
+            prompt.invoke({"existing": existing, "history": to_summarize})
+        )
+        new_summary = (getattr(new_summary_msg, "content", "") or "").strip()
+        if not new_summary:
+            return {}
+        return {"memory_summary": new_summary, "memory_last_index": cutoff}
+    except Exception:
+        return {}
 
 
 # --------------------------------------------------------------------------------------
@@ -490,9 +587,17 @@ def _collect_entity_candidates(state: lg_State, max_items: int = 12) -> list[dic
                 break
         if not id_col:
             return []
-        label_col = "Cube" if "Cube" in df.columns else ("cube" if "cube" in df.columns else None)
+        label_col = (
+            "Cube"
+            if "Cube" in df.columns
+            else ("cube" if "cube" in df.columns else None)
+        )
 
-        uniq = df[[id_col] + ([label_col] if label_col else [])].drop_duplicates().head(max_items)
+        uniq = (
+            df[[id_col] + ([label_col] if label_col else [])]
+            .drop_duplicates()
+            .head(max_items)
+        )
         items: list[dict] = []
         for _, r in uniq.iterrows():
             eid = str(r[id_col])
@@ -584,11 +689,15 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
                 parts.append("(" + ", ".join(details) + ")")
             user_text = " ".join(parts)
 
+    # Possibly update long-term memory summary when history grows
+    mem_update = _maybe_update_memory_summary(state)
+
     if not user_text:
         logger.info(
             "conversational_agent_node: no messages and no UI intent → nothing to do"
         )
-        return {}
+        # If we updated memory, persist it even if there is no immediate action
+        return mem_update or {}
 
     # Prepare context
     ctx = _summarize_selection(state)
@@ -622,6 +731,7 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
     is_map_click = str(lip_args.get("source") or "").strip().lower() == "map_click"
 
     actions: List[PlannedAction] = []
+    subagent_actions: List[PlannedAction] = []
     if is_map_click and lip_intent in ("AddPlace", "RemovePlace"):
         # Build a single planned action directly from the UI payload
         try:
@@ -641,21 +751,49 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
             # If anything goes wrong, fall back to extraction below
             actions = []
 
-    # Phase A: Use subagent-based extraction to build a deterministic intent skeleton
-    if not actions:
-        try:
-            extracted = extract_intent_with_subagents(
-                user_text, state.get("messages", [])
-            )
-        except Exception as e:
-            logger.warning(
-                f"conversational_agent_node: subagent extraction failed → {e}"
-            )
-            extracted = None
+    # Build subagent extraction summaries for planner context (even if actions already exist)
+    extracted_places_txt = "(none)"
+    extracted_themes_txt = "(none)"
+    extracted_actions_txt = "(none)"
+    sub_extracted = None
+    try:
+        sub_extracted = extract_intent_with_subagents(
+            user_text, state.get("messages", [])
+        )
+        ex_places = []
+        ex_themes = []
+        ex_actions = []
+        if sub_extracted and getattr(sub_extracted, "intents", None):
+            for it in sub_extracted.intents:
+                nm = it.intent.value if hasattr(it.intent, "value") else str(it.intent)
+                # Collect places
+                if nm in ("AddPlace", "PlaceInfo"):
+                    p = it.arguments.get("place") or it.arguments.get("places")
+                    if isinstance(p, list):
+                        ex_places.extend([str(x) for x in p if x])
+                    elif p:
+                        ex_places.append(str(p))
+                # Collect themes
+                if nm in ("AddTheme", "DescribeTheme"):
+                    tq = it.arguments.get("theme_query")
+                    if tq:
+                        ex_themes.append(str(tq))
+                # Summarize action candidates
+                ex_actions.append(f"{nm}:{json.dumps(it.arguments or {})}")
+        if ex_places:
+            extracted_places_txt = ", ".join(ex_places)
+        if ex_themes:
+            extracted_themes_txt = ", ".join(ex_themes)
+        if ex_actions:
+            extracted_actions_txt = "; ".join(ex_actions)
+    except Exception:
+        pass
+
+    # Phase A: Build deterministic subagent intent skeleton from extracted signals
     reply = None
-    if not actions and extracted and getattr(extracted, "intents", None):
+    if sub_extracted and getattr(sub_extracted, "intents", None):
         # Translate extracted intents to PlannedAction deterministically
-        for intent_obj in extracted.intents:
+        for intent_obj in sub_extracted.intents:
             try:
                 name = (
                     intent_obj.intent.value
@@ -665,7 +803,7 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
                 args = dict(intent_obj.arguments or {})
                 # Build PlannedAction if the intent exists in our ActionName enum
                 if name in [a.value for a in ActionName]:
-                    actions.append(
+                    subagent_actions.append(
                         PlannedAction(intent=ActionName(name), arguments=args)
                     )
             except Exception:
@@ -674,14 +812,10 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
         logger.info(
             {
                 "event": "built_actions_from_subagent",
-                "actions": _safe_actions_for_log(actions),
+                "actions": _safe_actions_for_log(subagent_actions),
             }
         )
-        # Let the intent handler decide all explain-data cases; no planner override here.
-        # Cap number of actions from subagent translation
-        if actions:
-            actions = actions[:MAX_ACTIONS]
-    elif not actions:
+    elif False and not actions:
         # Phase A fallback to planner LLM only when no structured intents were extracted
         logger.info(
             "conversational_agent_node: no subagent intents → requesting plan from LLM"
@@ -706,6 +840,9 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
                         "recent_conversation": recent_conv,
                         "domain_hints": domain_hints,
                         "memory_summary": memory_summary,
+                        "extracted_places": extracted_places_txt,
+                        "extracted_themes": extracted_themes_txt,
+                        "extracted_actions": extracted_actions_txt,
                         "user_text": user_text,
                     }
                 )
@@ -740,6 +877,9 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
                     "recent_conversation": recent_conv,
                     "domain_hints": domain_hints,
                     "memory_summary": memory_summary,
+                    "extracted_places": extracted_places_txt,
+                    "extracted_themes": extracted_themes_txt,
+                    "extracted_actions": extracted_actions_txt,
                     "user_text": user_text,
                 }
             )
@@ -803,6 +943,9 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
                             "recent_conversation": recent_conv,
                             "domain_hints": domain_hints,
                             "memory_summary": memory_summary,
+                            "extracted_places": extracted_places_txt,
+                            "extracted_themes": extracted_themes_txt,
+                            "extracted_actions": extracted_actions_txt,
                             "user_text": user_text,
                         }
                     )
@@ -837,6 +980,9 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
                         "recent_conversation": recent_conv,
                         "domain_hints": domain_hints,
                         "memory_summary": memory_summary,
+                        "extracted_places": extracted_places_txt,
+                        "extracted_themes": extracted_themes_txt,
+                        "extracted_actions": extracted_actions_txt,
                         "user_text": user_text,
                     }
                 )
@@ -865,6 +1011,155 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
                     f"conversational_agent_node: fallback planning failed → {e2}"
                 )
                 return {}
+
+    # Planner-first: Always request a plan using subagent signals and merge with subagent actions
+    planner_actions: List[PlannedAction] = []
+    try:
+        app_overview = (
+            "VobChat is a conversational app (Dash + Flask) that helps you "
+            "select places and a statistics theme, then fetch and visualize "
+            "relevant data cubes. It supports UK place/postcode lookup, theme "
+            "selection, map-based unit selection, and showing your current selection."
+        )
+        # Log formatted prompt for planner
+        try:
+            _msgs_pf = _PLANNER_PROMPT.format_messages(
+                {
+                    "app_overview": app_overview,
+                    "selected_places": ctx["selected_places"],
+                    "selected_theme": ctx["selected_theme"],
+                    "selected_units": ctx["selected_units"],
+                    "ui_options": ui_opts_summary,
+                    "ui_option_labels": ui_option_labels,
+                    "recent_conversation": recent_conv,
+                    "domain_hints": domain_hints,
+                    "memory_summary": memory_summary,
+                    "extracted_places": extracted_places_txt,
+                    "extracted_themes": extracted_themes_txt,
+                    "extracted_actions": extracted_actions_txt,
+                    "user_text": user_text,
+                }
+            )
+            log_llm_interaction(
+                name="planner_pf",
+                prompt_vars={
+                    "app_overview": app_overview,
+                    "selected_places": ctx["selected_places"],
+                    "selected_theme": ctx["selected_theme"],
+                    "selected_units": ctx["selected_units"],
+                    "ui_options": ui_opts_summary,
+                    "ui_option_labels": ui_option_labels,
+                    "recent_conversation": recent_conv,
+                    "domain_hints": domain_hints,
+                    "memory_summary": memory_summary,
+                    "extracted_places": extracted_places_txt,
+                    "extracted_themes": extracted_themes_txt,
+                    "extracted_actions": extracted_actions_txt,
+                    "user_text": user_text,
+                },
+                formatted_messages=_msgs_pf,
+                extra={"reasoning_enabled": True},
+            )
+        except Exception:
+            pass
+
+        plan_pf: AssistantPlan = chain.invoke(
+            {
+                "app_overview": app_overview,
+                "selected_places": ctx["selected_places"],
+                "selected_theme": ctx["selected_theme"],
+                "selected_units": ctx["selected_units"],
+                "ui_options": ui_opts_summary,
+                "ui_option_labels": ui_option_labels,
+                "recent_conversation": recent_conv,
+                "domain_hints": domain_hints,
+                "memory_summary": memory_summary,
+                "extracted_places": extracted_places_txt,
+                "extracted_themes": extracted_themes_txt,
+                "extracted_actions": extracted_actions_txt,
+                "user_text": user_text,
+            }
+        )
+        planner_actions = (plan_pf.actions or [])[:MAX_ACTIONS]
+        # Prefer any final_reply from the planner; later logic will use it if no actions
+        if not reply:
+            reply = (plan_pf.final_reply or "").strip() if plan_pf.final_reply else None
+        try:
+            log_llm_interaction(
+                name="planner_pf_result",
+                output=plan_pf,
+                extra={"truncated_actions": len(planner_actions), "reply": reply},
+            )
+        except Exception:
+            pass
+    except Exception:
+        # Do not fail the turn if planner errors; proceed with subagent actions only
+        planner_actions = []
+
+    # Merge policy: mutating actions first; otherwise prefer planner reply/actions, then subagents
+    def _intent_str(pa: PlannedAction) -> str:
+        try:
+            return pa.intent.value if hasattr(pa.intent, "value") else str(pa.intent)
+        except Exception:
+            return str(getattr(pa, "intent", ""))
+
+    def _is_mutating(pa: PlannedAction) -> bool:
+        return _intent_str(pa) in {
+            "AddPlace",
+            "RemovePlace",
+            "AddTheme",
+            "RemoveTheme",
+            "Reset",
+            "FetchCubes",
+        }
+
+    def _dedupe(planned: List[PlannedAction]) -> List[PlannedAction]:
+        seen = set()
+        out: List[PlannedAction] = []
+        for a in planned:
+            key = (
+                _intent_str(a),
+                json.dumps(a.arguments or {}, sort_keys=True, default=str),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(a)
+        return out
+
+    tool_backed_non_mutating = {
+        "ListThemes",
+        "PlaceInfo",
+        "DescribeTheme",
+        "DataEntityInfo",
+        "ExplainVisibleData",
+    }
+
+    def _is_tool_backed(pa: PlannedAction) -> bool:
+        return _intent_str(pa) in tool_backed_non_mutating
+
+    sub_mut = [a for a in subagent_actions if _is_mutating(a)]
+    sub_non = [a for a in subagent_actions if not _is_mutating(a)]
+    plan_mut = [a for a in planner_actions if _is_mutating(a)]
+    plan_non = [a for a in planner_actions if not _is_mutating(a)]
+
+    if plan_mut or sub_mut:
+        actions = _dedupe(plan_mut + sub_mut)[:MAX_ACTIONS]
+    else:
+        # Prefer tool-backed non-mutating actions (like PlaceInfo) over a generic reply
+        if any(_is_tool_backed(a) for a in plan_non) or any(
+            _is_tool_backed(a) for a in sub_non
+        ):
+            preferred = [a for a in plan_non if _is_tool_backed(a)] + [
+                a for a in sub_non if _is_tool_backed(a)
+            ]
+            actions = _dedupe(preferred)[:MAX_ACTIONS]
+        elif reply:
+            actions = []
+        elif plan_non:
+            actions = _dedupe(plan_non)[:MAX_ACTIONS]
+        else:
+            actions = _dedupe(sub_non)[:MAX_ACTIONS]
 
     # Normalize actions to plain payload dicts, order them, and cap to MAX_ACTIONS
     payloads: List[dict] = _actions_to_payloads(actions)
@@ -947,13 +1242,15 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
         else:
             try:
                 reply_llm = get_llm()
+                # Use trimmed message history + memory summary for contextual replies
                 streaming_prompt = ChatPromptTemplate.from_messages(
                     [
                         (
                             "system",
-                            "You are VobChat, a concise, helpful UK statistics assistant. Reply directly; no JSON or code fences.",
+                            "You are VobChat, a concise, helpful UK statistics assistant. "
+                            "Reply directly; no JSON or code fences. Use the conversation context to be helpful.",
                         ),
-                        ("user", "{user_text}"),
+                        MessagesPlaceholder("messages"),
                     ]
                 )
                 streaming_chain = (streaming_prompt | reply_llm).with_config(
@@ -964,16 +1261,19 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
                     }
                 )
                 parts: list[str] = []
+                trimmed_history = _trim_for_model_input(state)
                 try:
-                    msgs_reply = streaming_prompt.format_messages({"user_text": user_text})
+                    msgs_reply = streaming_prompt.format_messages(
+                        {"messages": trimmed_history}
+                    )
                     log_llm_interaction(
                         name="reply_stream",
-                        prompt_vars={"user_text": user_text},
+                        prompt_vars={"messages_count": len(trimmed_history)},
                         formatted_messages=msgs_reply,
                     )
                 except Exception:
                     pass
-                for chunk in streaming_chain.stream({"user_text": user_text}):
+                for chunk in streaming_chain.stream({"messages": trimmed_history}):
                     try:
                         t = getattr(chunk, "content", "") or ""
                         if t:
@@ -997,6 +1297,7 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
             "messages": [msg],
             "intent_queue": queue,
             "last_intent_payload": None,
+            **(mem_update or {}),
         }
 
     logger.info(
@@ -1008,6 +1309,7 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
         update={
             "intent_queue": queue,
             "last_intent_payload": first,  # <-- already a plain dict
+            **(mem_update or {}),
         },
     )
 

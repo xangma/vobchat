@@ -30,6 +30,36 @@ from .configure_logging import log_llm_interaction
 logger = logging.getLogger(__name__)
 
 
+def _summarize_recent_conversation(
+    messages: List, max_messages: int = 6, max_chars: int = 600
+) -> str:
+    """Return a compact summary of the last few conversation turns.
+
+    Includes role and truncated content. Avoids dumping large or sensitive text.
+    """
+    try:
+        msgs = list(messages or [])
+    except Exception:
+        msgs = []
+    if not msgs:
+        return "(none)"
+    recent = msgs[-max_messages:]
+    lines: List[str] = []
+    for m in recent:
+        try:
+            role = getattr(m, "type", None) or getattr(m, "role", None) or "message"
+            content = (getattr(m, "content", None) or "").strip()
+            if len(content) > 200:
+                content = content[:200] + "…"
+            lines.append(f"{role}: {content}")
+        except Exception:
+            continue
+    text = "\n".join(lines)
+    if len(text) > max_chars:
+        text = text[-max_chars:]
+    return text if text else "(none)"
+
+
 def _get_theme_labels() -> List[str]:
     """Return theme labels for dynamic prompt inclusion.
 
@@ -120,7 +150,17 @@ Examples:
 Reply with JSON only.
 """,
         ),
-        ("user", "{text}"),
+        (
+            "user",
+            """
+Context:
+Recent conversation (last turns):
+{recent_conversation}
+
+USER_TEXT
+{text}
+""",
+        ),
     ]
 )
 
@@ -208,7 +248,20 @@ Reply with JSON only.
     )
 
     return ChatPromptTemplate.from_messages(
-        [("system", system_message), ("user", "{text}")]
+        [
+            ("system", system_message),
+            (
+                "user",
+                """
+Context:
+Recent conversation (last turns):
+{recent_conversation}
+
+USER_TEXT
+{text}
+""",
+            ),
+        ]
     )
 
 
@@ -289,6 +342,7 @@ Classification rules (be strict and prefer concrete actions):
 - Use state for queries about the current selection (e.g., "what have I selected").
 - Use reset for starting over/clearing selection.
 - Use chat only when the user is just chatting and not asking to do anything.
+ - Use the recent conversation to resolve deictics like "that place" or "that theme" to the most recently mentioned explicit entity. If resolution is not possible, prefer a clarifying PlaceInfo/DescribeTheme action instead of guessing.
 
 Examples (JSON only; set higher confidence for the correct action):
 "show <theme> stats for <place>" → {{"actions": [{{"action": "add", "target": "<place>", "confidence": 1.0}}]}}
@@ -300,7 +354,17 @@ Examples (JSON only; set higher confidence for the correct action):
 "explain this data" → {{"actions": [{{"action": "explain_visible", "confidence": 1.0}}]}}
 """,
         ),
-        ("user", "{text}"),
+        (
+            "user",
+            """
+Context:
+Recent conversation (last turns):
+{recent_conversation}
+
+USER_TEXT
+{text}
+""",
+        ),
     ]
 )
 
@@ -336,50 +400,74 @@ def extract_intent_with_subagents(
     try:
         logger.info(f"Extracting intent with subagents for: '{user_text}'")
 
+        # Prepare recent conversation context for subagents
+        recent_conv = _summarize_recent_conversation(messages)
+
         # Run all subagents in parallel (for now, sequentially), with logging
         try:
-            msgs = _PLACE_EXTRACTION_PROMPT.format_messages({"text": user_text})
+            msgs = _PLACE_EXTRACTION_PROMPT.format_messages(
+                {"text": user_text, "recent_conversation": recent_conv}
+            )
             log_llm_interaction(
                 name="place_extractor",
-                prompt_vars={"text": user_text},
+                prompt_vars={
+                    "text": user_text,
+                    "recent_conversation": recent_conv[:180],
+                },
                 formatted_messages=msgs,
                 extra={"reasoning_enabled": _REASONING_ENV},
             )
         except Exception:
             pass
-        place_result = _place_extraction_chain.invoke({"text": user_text})
+        place_result = _place_extraction_chain.invoke(
+            {"text": user_text, "recent_conversation": recent_conv}
+        )
         try:
             log_llm_interaction(name="place_extractor_result", output=place_result)
         except Exception:
             pass
 
         try:
-            msgs_t = _THEME_EXTRACTION_PROMPT.format_messages({"text": user_text})
+            msgs_t = _THEME_EXTRACTION_PROMPT.format_messages(
+                {"text": user_text, "recent_conversation": recent_conv}
+            )
             log_llm_interaction(
                 name="theme_extractor",
-                prompt_vars={"text": user_text},
+                prompt_vars={
+                    "text": user_text,
+                    "recent_conversation": recent_conv[:180],
+                },
                 formatted_messages=msgs_t,
                 extra={"reasoning_enabled": _REASONING_ENV},
             )
         except Exception:
             pass
-        theme_result = _theme_extraction_chain.invoke({"text": user_text})
+        theme_result = _theme_extraction_chain.invoke(
+            {"text": user_text, "recent_conversation": recent_conv}
+        )
         try:
             log_llm_interaction(name="theme_extractor_result", output=theme_result)
         except Exception:
             pass
 
         try:
-            msgs_a = _ACTION_EXTRACTION_PROMPT.format_messages({"text": user_text})
+            msgs_a = _ACTION_EXTRACTION_PROMPT.format_messages(
+                {"text": user_text, "recent_conversation": recent_conv}
+            )
             log_llm_interaction(
                 name="action_extractor",
-                prompt_vars={"text": user_text},
+                prompt_vars={
+                    "text": user_text,
+                    "recent_conversation": recent_conv[:180],
+                },
                 formatted_messages=msgs_a,
                 extra={"reasoning_enabled": _REASONING_ENV},
             )
         except Exception:
             pass
-        action_result = _action_extraction_chain.invoke({"text": user_text})
+        action_result = _action_extraction_chain.invoke(
+            {"text": user_text, "recent_conversation": recent_conv}
+        )
         try:
             log_llm_interaction(name="action_extractor_result", output=action_result)
         except Exception:

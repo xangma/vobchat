@@ -95,4 +95,7 @@ def Reset_node(state: lg_State) -> Command:
         "selection_idx": reset_state.get("selection_idx"),
         "options": reset_state.get("options", []),
         "map_update_request": reset_state.get("map_update_request"),
+        # Clear conversation memory too
+        "memory_summary": None,
+        "memory_last_index": None,
     })
