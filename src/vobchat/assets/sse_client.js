@@ -233,25 +233,34 @@ class SimpleSSEClient {
 
         // Update stores via Dash (merge targeted updates with cached state)
         if (typeof dash_clientside !== 'undefined' && dash_clientside.set_props) {
-            // Only update place-state with essential data if something actually changed
+            // Only update place-state when values actually changed to avoid loops
             const updates = {};
             let hasUpdates = false;
 
-            if (state.places !== undefined) {
+            const deepEqual = (a, b) => {
+                try {
+                    if (a === b) return true;
+                    if (Array.isArray(a) && Array.isArray(b) && a.length !== b.length) return false;
+                    return JSON.stringify(a) === JSON.stringify(b);
+                } catch (e) {
+                    return false;
+                }
+            };
+
+            if (state.places !== undefined && !deepEqual(this.placeStateCache.places, state.places)) {
                 updates.places = state.places;
                 hasUpdates = true;
             }
-            if (state.cubes !== undefined) {
+            if (state.cubes !== undefined && !deepEqual(this.placeStateCache.cubes, state.cubes)) {
                 updates.cubes = state.cubes;
                 hasUpdates = true;
             }
-            if (state.selected_theme !== undefined) {
+            if (state.selected_theme !== undefined && !deepEqual(this.placeStateCache.selected_theme, state.selected_theme)) {
                 updates.selected_theme = state.selected_theme;
                 hasUpdates = true;
             }
 
             if (hasUpdates) {
-                // Merge with our local cache to avoid clobbering existing fields like `cubes`
                 this.placeStateCache = Object.assign({}, this.placeStateCache, updates);
                 dash_clientside.set_props('place-state', { data: this.placeStateCache });
             }

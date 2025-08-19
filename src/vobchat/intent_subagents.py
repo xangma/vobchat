@@ -95,27 +95,27 @@ _PLACE_EXTRACTION_PROMPT = ChatPromptTemplate.from_messages(
 Extract UK place names and postcodes from user text.
 
 Extract:
-- UK cities/towns: London, Manchester, Birmingham, Portsmouth, etc.
-- UK postcodes: SW1A 1AA, M1 1AE, OX1 3QD format
+- UK cities/towns.
+- UK postcodes.
 
 Rules:
 - Extract only explicit place names mentioned
-- Include place names in action contexts: "add london", "remove manchester", "include bristol"
+- Include place names in action contexts: "add <place_name>", "remove <place_name>", "include <place_name>"
 - Don't extract from "my selected places", "current selection"
 - For postcodes, set is_postcode=true
 - PRESERVE EXACT SPELLING of place names as they appear in the text
 
 Examples:
-"population stats for portsmouth and newport" → [{{"name": "portsmouth", "is_postcode": false, "confidence": 1.0}}, {{"name": "newport", "is_postcode": false, "confidence": 1.0}}]
-"housing data for london" → [{{"name": "london", "is_postcode": false, "confidence": 1.0}}]
-"SW1A 1AA" → [{{"name": "SW1A 1AA", "is_postcode": true, "confidence": 1.0}}]
-"stats for london" → [{{"name": "london", "is_postcode": false, "confidence": 1.0}}]
-"add manchester and birmingham" → [{{"name": "manchester", "is_postcode": false, "confidence": 1.0}}, {{"name": "birmingham", "is_postcode": false, "confidence": 1.0}}]
-"fetch education data for aberdeen and inverness" → [{{"name": "aberdeen", "is_postcode": false, "confidence": 1.0}}, {{"name": "inverness", "is_postcode": false, "confidence": 1.0}}]
-"housing stats for my selected places and also add birmingham" → [{{"name": "birmingham", "is_postcode": false, "confidence": 1.0}}]
-"remove london" → [{{"name": "london", "is_postcode": false, "confidence": 1.0}}]
-"where's bristol?" → [{{"name": "bristol", "is_postcode": false, "confidence": 1.0}}]
-"set theme to education" → [] (no places mentioned)
+"<theme> stats for <place_name> and <place_name>" → [{{"name": "<place_name>", "is_postcode": false, "confidence": 1.0}}, {{"name": "<place_name>", "is_postcode": false, "confidence": 1.0}}]
+"<theme> data for <place_name>" → [{{"name": "<place_name>", "is_postcode": false, "confidence": 1.0}}]
+"<uk_postcode>" → [{{"name": "<uk_postcode>", "is_postcode": true, "confidence": 1.0}}]
+"stats for <place_name>" → [{{"name": "<place_name>", "is_postcode": false, "confidence": 1.0}}]
+"add <place_name> and <place_name>" → [{{"name": "<place_name>", "is_postcode": false, "confidence": 1.0}}, {{"name": "<place_name>", "is_postcode": false, "confidence": 1.0}}]
+"fetch <theme> data for <place_name> and <place_name>" → [{{"name": "<place_name>", "is_postcode": false, "confidence": 1.0}}, {{"name": "<place_name>", "is_postcode": false, "confidence": 1.0}}]
+"<theme> stats for my selected places and also add <place_name>" → [{{"name": "<place_name>", "is_postcode": false, "confidence": 1.0}}]
+"remove <place_name>" → [{{"name": "<place_name>", "is_postcode": false, "confidence": 1.0}}]
+"where's <place_name>?" → [{{"name": "<place_name>", "is_postcode": false, "confidence": 1.0}}]
+"set theme to <theme>" → [] (no places mentioned)
 
 Reply with JSON only.
 """,
@@ -177,29 +177,28 @@ Extract themes when you see:
 
 Rules:
 - Extract ONLY ONE theme per query (most specific)
-- Don't extract from pure place queries: "add manchester", "show me cambridge" 
-- Don't extract from postcodes alone: "SW1A 1AA", "M1 1AE"
+- Don't extract from pure place queries: "add <place_name>", "show me <place>" 
+- Don't extract from postcodes alone: "<uk_postcode>"
 - Don't extract themes from queries that ONLY contain postcodes
 - Don't extract themes from location queries like "where's X?"
 - Don't extract themes from listing queries: "what stats are there?", "what themes available?"
-- DO extract themes from description queries: "what is population?", "describe housing"
+- DO extract themes from description queries: "what is <theme>?", "describe <theme>"
 
 Examples:
-"population stats for portsmouth" → [{{"theme_query": "population", "confidence": 1.0}}]
-"housing data for london" → [{{"theme_query": "housing", "confidence": 1.0}}] 
-"stats for london" → [{{"theme_query": "stats", "confidence": 1.0}}]
-"use employment statistics" → [{{"theme_query": "employment", "confidence": 1.0}}]
-"housing for manchester" → [{{"theme_query": "housing", "confidence": 1.0}}]
-"population in london" → [{{"theme_query": "population", "confidence": 1.0}}]
-"what is agriculture and land use?" → [{{"theme_query": "agriculture and land use", "confidence": 1.0}}]
-"describe transport" → [{{"theme_query": "transport", "confidence": 1.0}}]
-"tell me about population" → [{{"theme_query": "population", "confidence": 1.0}}]
-"add manchester" → [] (no theme)
-"SW1A 1AA" → [] (no theme)
-"M1 1AE" → [] (no theme)
-"show data for M1 1AE" → [] (postcode only query)
-"show me cambridge" → [] (no theme)
-"where's bristol?" → [] (location query)
+"<theme> stats for <place_name>" → [{{"theme_query": "<theme>", "confidence": 1.0}}]
+"<theme> data for <place_name>" → [{{"theme_query": "<theme>", "confidence": 1.0}}]
+"stats for <place_name>" → [{{"theme_query": "stats", "confidence": 1.0}}]
+"use <theme>" → [{{"theme_query": "<theme>", "confidence": 1.0}}]
+"<theme> for <place_name>" → [{{"theme_query": "<theme>", "confidence": 1.0}}]
+"<theme> in <place_name>" → [{{"theme_query": "<theme>", "confidence": 1.0}}]
+"what is <theme>?" → [{{"theme_query": "<theme>", "confidence": 1.0}}]
+"describe <theme>" → [{{"theme_query": "<theme>", "confidence": 1.0}}]
+"tell me about <theme>" → [{{"theme_query": "<theme>", "confidence": 1.0}}]
+"add <place_name>" → [] (no theme)
+"<uk_postcode>" → [] (no theme)
+"show data for <uk_postcode>" → [] (postcode only query)
+"show me <place_name>" → [] (no theme)
+"where's <place_name>?" → [] (location query)
 "what stats are there?" → [] (listing query)
 "what statistics do you have?" → [] (listing query)
 "what data is available?" → [] (listing query)
@@ -236,6 +235,7 @@ class ActionType(str, Enum):
     REMOVE = "remove"
     STATE = "state"
     DESCRIBE = "describe"
+    EXPLAIN_VISIBLE = "explain_visible"
     RESET = "reset"
     INFO = "info"
     CHAT = "chat"
@@ -274,27 +274,30 @@ Classify the user's intent into one/multiple of these actions:
 - add: Adding/selecting places and/or data/statistical themes.
 - remove: Removing/deselecting places and/or data themes from selection.
 - state: Current selected places and/or data themes.
-- describe: Return information about a place or the definition of a unit type/data theme.
+- describe: Return information about a place or the definition of a unit type/data theme/data entity.
+- explain_visible: Explain the data currently shown/visualised by summarising all visible data entities.
 - reset: Start over/clear everything.
 - info: Provide a list of available data themes.
 - chat: General conversation/anything else.
 
 Classification rules (be strict and prefer concrete actions):
 - If the user asks to "show/get/display/fetch/see" (or similar) "stats/data/statistics/figures" for one or more places, classify as add (not describe).
-- When both a place and a theme are present (e.g., "population stats for portsmouth"), classify as add (so downstream logic can AddPlace and AddTheme).
-- Use describe only for definition/explanation requests (e.g., "tell me about manchester" for place info, or "what is the population theme?").
+- When both a place and a theme are present (e.g., "<theme> stats for <place>"), classify as add (so downstream logic can AddPlace and AddTheme).
+- Use describe only for definition/explanation requests (e.g., "tell me about <place>" for place info, or "what is the <theme> theme?").
+- If the user asks to explain/describe the data currently shown (e.g., "explain this data", "what does this show", "explain the chart/graph"), use explain_visible.
 - Use info for listing available options (e.g., "what themes are available?").
 - Use state for queries about the current selection (e.g., "what have I selected").
 - Use reset for starting over/clearing selection.
 - Use chat only when the user is just chatting and not asking to do anything.
 
 Examples (JSON only; set higher confidence for the correct action):
-"show population stats for portsmouth" → {{"actions": [{{"action": "add", "target": "place", "confidence": 1.0}}]}}
-"population stats for portsmouth and newport" → {{"actions": [{{"action": "add", "target": "place", "confidence": 1.0}}]}}
-"show data for M1 1AE" → {{"actions": [{{"action": "add", "target": "place", "confidence": 1.0}}]}}
-"tell me about manchester" → {{"actions": [{{"action": "describe", "target": "manchester", "confidence": 1.0}}]}}
-"what is the population theme?" → {{"actions": [{{"action": "describe", "target": "population", "confidence": 1.0}}]}}
+"show <theme> stats for <place>" → {{"actions": [{{"action": "add", "target": "<place>", "confidence": 1.0}}]}}
+"<theme> stats for <place> and <place>" → {{"actions": [{{"action": "add", "target": "<place>", "confidence": 1.0}}]}}
+"show data for <uk_postcode>" → {{"actions": [{{"action": "add", "target": "<place>", "confidence": 1.0}}]}}
+"tell me about <place>" → {{"actions": [{{"action": "describe", "target": "<place>", "confidence": 1.0}}]}}
+"what is the <theme> theme?" → {{"actions": [{{"action": "describe", "target": "<theme>", "confidence": 1.0}}]}}
 "what themes are available?" → {{"actions": [{{"action": "info", "confidence": 1.0}}]}}
+"explain this data" → {{"actions": [{{"action": "explain_visible", "confidence": 1.0}}]}}
 """,
         ),
         ("user", "{text}"),
@@ -538,6 +541,11 @@ def _combine_subagent_results(
                     arguments={"theme_query": themes.themes[0].theme_query},
                 )
             )
+
+    elif primary_action == ActionType.EXPLAIN_VISIBLE:
+        intents.append(
+            SingleIntent(intent=AssistantIntent.EXPLAIN_VISIBLE_DATA, arguments={})
+        )
 
     elif primary_action == ActionType.RESET:
         intents.append(SingleIntent(intent=AssistantIntent.RESET, arguments={}))

@@ -60,6 +60,8 @@ from vobchat.nodes import (
     RemoveTheme_node,
     DescribeTheme_node,
     UnitTypeInfo_node,
+    DataEntityInfo_node,
+    ExplainVisibleData_node,
     ask_followup_node,
     postcode_tool_call,
     multi_place_tool_call,
@@ -209,6 +211,8 @@ def create_workflow(lg_state: TypedDict):
 
     workflow.add_node("DescribeTheme_node", DescribeTheme_node)
     workflow.add_node("UnitTypeInfo_node", UnitTypeInfo_node)
+    workflow.add_node("DataEntityInfo_node", DataEntityInfo_node)
+    workflow.add_node("ExplainVisibleData_node", ExplainVisibleData_node)
     workflow.add_node("ask_followup_node", ask_followup_node)
     workflow.add_node("resolve_place_and_unit", resolve_place_and_unit)
 
@@ -221,6 +225,8 @@ def create_workflow(lg_state: TypedDict):
         "ListThemes_node",
         "DescribeTheme_node",
         "UnitTypeInfo_node",
+        "DataEntityInfo_node",
+        "ExplainVisibleData_node",
         "RemoveTheme_node",
         "Reset_node",
         "AddPlace_node",

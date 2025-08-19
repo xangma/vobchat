@@ -33,10 +33,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 
 from .state_schema import lg_State, get_selected_place_names, get_selected_units
-from .intent_handling import (
-    extract_intent,
-    AssistantIntent,
-)  # reuse subagent-based extraction
+from .intent_subagents import extract_intent_with_subagents
 from .nodes.utils import _append_ai
 from .configure_logging import log_llm_interaction
 
@@ -64,6 +61,8 @@ class ActionName(str, Enum):
     Chat = "Chat"
     UnitTypeInfo = "UnitTypeInfo"
     DescribeTheme = "DescribeTheme"
+    DataEntityInfo = "DataEntityInfo"
+    ExplainVisibleData = "ExplainVisibleData"
 
 
 class PlannedAction(BaseModel):
@@ -107,6 +106,8 @@ Available actions (intents) you can propose in JSON:
 - ListThemes {{}}
 - UnitTypeInfo {{unit_type: str}} (use when the user asks what a unit type is, e.g., "what is Local Government District" or "what is LG_DIST")
 - DescribeTheme {{theme_query: str}} (use when asked to explain/describe a theme)
+- DataEntityInfo {{entity_id: str}} (use when asked to explain a data entity by ID, e.g., codes like N_*, T_*, U_*, V_*)
+- ExplainVisibleData {{}} (use when the user asks to explain/describe the data currently shown/visualised; summarise all visible data entities.)
 - PlaceInfo {{place: str}}
 - Reset {{}}
 - FetchCubes {{}}
@@ -233,6 +234,7 @@ def _build_domain_hints(state: lg_State, user_text: str, max_chars: int = 800) -
         _place_candidates_hint,
         _unit_type_candidates_hint,
         _ready_to_fetch_hint,
+        _visible_cubes_hint,
     ]
     parts: List[str] = []
     for prov in providers:
@@ -396,6 +398,116 @@ def _ready_to_fetch_hint(state: lg_State) -> Optional[str]:
         return None
 
 
+def _visible_cubes_hint(state: lg_State, max_items: int = 8) -> Optional[str]:
+    """If visualization is visible and cube ids exist, hint current cubes.
+
+    Uses `state['show_visualization']` and `state['selected_cubes']`. Parses
+    the cubes JSON (records) to extract unique cube ids and labels.
+    """
+    try:
+        if not state.get("show_visualization"):
+            return None
+        cubes_json = state.get("selected_cubes")
+        if not cubes_json:
+            return None
+        import io as _io
+        import pandas as _pd
+
+        df = _pd.read_json(_io.StringIO(cubes_json), orient="records")
+        if df.empty:
+            return None
+        # Determine id, label, and text columns
+        id_col = None
+        for c in ("Cube_ID", "cube_id", "CubeID", "ent_ID", "ent_id"):
+            if c in df.columns:
+                id_col = c
+                break
+        if not id_col:
+            return None
+        label_col = (
+            "Cube"
+            if "Cube" in df.columns
+            else ("cube" if "cube" in df.columns else None)
+        )
+        text_col = None
+        for c in ("Cube_Text", "cube_text", "text"):
+            if c in df.columns:
+                text_col = c
+                break
+        # Build unique list up to max_items
+        cols = [id_col]
+        if label_col:
+            cols.append(label_col)
+        if text_col:
+            cols.append(text_col)
+        uniq = df[cols].drop_duplicates()
+        items = []
+        for _, r in uniq.head(max_items).iterrows():
+            cid = str(r[id_col])
+            label_val = (
+                str(r[label_col])
+                if label_col and r.get(label_col) is not None
+                else None
+            )
+            text_val = (
+                str(r[text_col]) if text_col and r.get(text_col) is not None else None
+            )
+            if label_val and text_val:
+                items.append(f"{label_val} ({cid}) — {text_val}")
+            elif label_val:
+                items.append(f"{label_val} ({cid})")
+            elif text_val:
+                items.append(f"{cid} — {text_val}")
+            else:
+                items.append(cid)
+        if not items:
+            return None
+        more = "…" if len(uniq) > len(items) else ""
+        return "Visible cubes: " + "; ".join(items) + more
+    except Exception:
+        return None
+
+
+def _collect_entity_candidates(state: lg_State, max_items: int = 12) -> list[dict]:
+    """Return a structured list of currently visible/plotted data entities.
+
+    Items: {id, label}. Uses the same parsing rules as _visible_cubes_hint.
+    """
+    try:
+        cubes_json = state.get("selected_cubes") or state.get("cubes")
+        if not cubes_json:
+            return []
+        import io as _io
+        import pandas as _pd
+
+        df = _pd.read_json(_io.StringIO(cubes_json), orient="records")
+        if df is None or df.empty:
+            return []
+        id_col = None
+        for c in ("Cube_ID", "cube_id", "CubeID", "ent_ID", "ent_id"):
+            if c in df.columns:
+                id_col = c
+                break
+        if not id_col:
+            return []
+        label_col = "Cube" if "Cube" in df.columns else ("cube" if "cube" in df.columns else None)
+
+        uniq = df[[id_col] + ([label_col] if label_col else [])].drop_duplicates().head(max_items)
+        items: list[dict] = []
+        for _, r in uniq.iterrows():
+            eid = str(r[id_col])
+            lab = None
+            if label_col and r.get(label_col) is not None:
+                lab = str(r[label_col])
+            items.append({"id": eid, "label": lab or eid})
+        return items
+    except Exception:
+        return []
+
+
+# No planner heuristics for explain-visible-data; the intent handler decides.
+
+
 def _summarize_ui_options(state: lg_State) -> str:
     """Return a compact summary of current UI option buttons.
 
@@ -532,7 +644,9 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
     # Phase A: Use subagent-based extraction to build a deterministic intent skeleton
     if not actions:
         try:
-            extracted = extract_intent(user_text, state.get("messages", []))
+            extracted = extract_intent_with_subagents(
+                user_text, state.get("messages", [])
+            )
         except Exception as e:
             logger.warning(
                 f"conversational_agent_node: subagent extraction failed → {e}"
@@ -563,6 +677,7 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
                 "actions": _safe_actions_for_log(actions),
             }
         )
+        # Let the intent handler decide all explain-data cases; no planner override here.
         # Cap number of actions from subagent translation
         if actions:
             actions = actions[:MAX_ACTIONS]
@@ -762,34 +877,35 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
         pass
 
     if not payloads:
-        # No actionable items → always stream a natural reply for better UX.
-        # Use planner's final_reply only as a fallback if streaming fails or yields nothing.
-        try:
-            reply_llm = get_llm()
-            streaming_prompt = ChatPromptTemplate.from_messages(
-                [
-                    (
-                        "system",
-                        "You are VobChat, a concise, helpful UK statistics assistant. Reply directly to the user in natural language. Do not include JSON or code fences.",
-                    ),
-                    ("user", "{user_text}"),
-                ]
-            )
-            streaming_chain = (streaming_prompt | reply_llm).with_config(
-                {"tags": ["reply_stream"], "run_name": "reply_stream"}
-            )
-            parts: list[str] = []
-            for chunk in streaming_chain.stream({"user_text": user_text}):
-                try:
-                    txt = getattr(chunk, "content", "") or ""
-                    if txt:
-                        parts.append(txt)
-                except Exception:
-                    continue
-            final_txt_streamed = ("".join(parts)).strip()
-            final_txt = final_txt_streamed or (reply or "").strip()
-        except Exception:
-            final_txt = (reply or "").strip()
+        # No actionable items → Prefer the planner's final_reply if available for consistency.
+        final_txt = (reply or "").strip()
+        if not final_txt:
+            # If the planner did not provide a reply, stream a natural reply from the user text.
+            try:
+                reply_llm = get_llm()
+                streaming_prompt = ChatPromptTemplate.from_messages(
+                    [
+                        (
+                            "system",
+                            "You are VobChat, a concise, helpful UK statistics assistant. Reply directly to the user in natural language. Do not include JSON or code fences.",
+                        ),
+                        ("user", "{user_text}"),
+                    ]
+                )
+                streaming_chain = (streaming_prompt | reply_llm).with_config(
+                    {"tags": ["reply_stream"], "run_name": "reply_stream"}
+                )
+                parts: list[str] = []
+                for chunk in streaming_chain.stream({"user_text": user_text}):
+                    try:
+                        txt = getattr(chunk, "content", "") or ""
+                        if txt:
+                            parts.append(txt)
+                    except Exception:
+                        continue
+                final_txt = ("".join(parts)).strip()
+            except Exception:
+                final_txt = ""
 
         msg = _append_ai(state, final_txt)
         logger.info(
@@ -818,7 +934,7 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
     target_node = _intent_to_node(intent)
 
     if intent == "Chat" or not target_node:
-        # Just reply (prefer Chat.text if present; else final_reply)
+        # Just reply: Prefer Chat.text first, then planner final_reply. Only stream if neither exists.
         chat_txt = None
         try:
             chat_txt = (first.get("arguments") or {}).get("text")
@@ -826,48 +942,51 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
             chat_txt = None
         txt = (chat_txt or reply or "").strip()
 
-        try:
-            reply_llm = get_llm()
-            streaming_prompt = ChatPromptTemplate.from_messages(
-                [
-                    (
-                        "system",
-                        "You are VobChat, a concise, helpful UK statistics assistant. Reply directly; no JSON or code fences.",
-                    ),
-                    ("user", "{user_text}"),
-                ]
-            )
-            streaming_chain = (streaming_prompt | reply_llm).with_config(
-                {
-                    "tags": ["reply_stream"],
-                    "run_name": "reply_stream",
-                    "callbacks": [get_llm_callback()],
-                }
-            )
-            parts: list[str] = []
-            try:
-                msgs_reply = streaming_prompt.format_messages({"user_text": user_text})
-                log_llm_interaction(
-                    name="reply_stream",
-                    prompt_vars={"user_text": user_text},
-                    formatted_messages=msgs_reply,
-                )
-            except Exception:
-                pass
-            for chunk in streaming_chain.stream({"user_text": user_text}):
-                try:
-                    t = getattr(chunk, "content", "") or ""
-                    if t:
-                        parts.append(t)
-                except Exception:
-                    continue
-            final_txt = ("".join(parts)).strip() or txt
-            try:
-                log_llm_interaction(name="reply_stream_result", output=final_txt)
-            except Exception:
-                pass
-        except Exception:
+        if txt:
             final_txt = txt
+        else:
+            try:
+                reply_llm = get_llm()
+                streaming_prompt = ChatPromptTemplate.from_messages(
+                    [
+                        (
+                            "system",
+                            "You are VobChat, a concise, helpful UK statistics assistant. Reply directly; no JSON or code fences.",
+                        ),
+                        ("user", "{user_text}"),
+                    ]
+                )
+                streaming_chain = (streaming_prompt | reply_llm).with_config(
+                    {
+                        "tags": ["reply_stream"],
+                        "run_name": "reply_stream",
+                        "callbacks": [get_llm_callback()],
+                    }
+                )
+                parts: list[str] = []
+                try:
+                    msgs_reply = streaming_prompt.format_messages({"user_text": user_text})
+                    log_llm_interaction(
+                        name="reply_stream",
+                        prompt_vars={"user_text": user_text},
+                        formatted_messages=msgs_reply,
+                    )
+                except Exception:
+                    pass
+                for chunk in streaming_chain.stream({"user_text": user_text}):
+                    try:
+                        t = getattr(chunk, "content", "") or ""
+                        if t:
+                            parts.append(t)
+                    except Exception:
+                        continue
+                final_txt = ("".join(parts)).strip()
+                try:
+                    log_llm_interaction(name="reply_stream_result", output=final_txt)
+                except Exception:
+                    pass
+            except Exception:
+                final_txt = ""
 
         msg = _append_ai(state, final_txt)
         logger.info(
@@ -989,6 +1108,8 @@ def _intent_to_node(intent: Optional[str]) -> Optional[str]:
         "Chat": None,
         "UnitTypeInfo": "UnitTypeInfo_node",
         "DescribeTheme": "DescribeTheme_node",
+        "DataEntityInfo": "DataEntityInfo_node",
+        "ExplainVisibleData": "ExplainVisibleData_node",
     }
     return mapping.get(intent)
 
@@ -1005,6 +1126,8 @@ def _order_payloads(payloads: List[dict]) -> List[dict]:
         "AddTheme": 30,
         "RemoveTheme": 40,
         "DescribeTheme": 50,
+        "DataEntityInfo": 55,
+        "ExplainVisibleData": 57,
         "PlaceInfo": 60,
         "ListThemes": 70,
         "ShowState": 80,

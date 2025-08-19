@@ -28,6 +28,7 @@ import logging
 from typing import Dict, List, Union
 
 import pandas as pd
+
 # type: ignore – provided by langgraph
 from langgraph.types import Command, interrupt
 
@@ -42,7 +43,9 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 
 
-def _year_filter(df: pd.DataFrame, *, min_year: int | None, max_year: int | None) -> pd.DataFrame:
+def _year_filter(
+    df: pd.DataFrame, *, min_year: int | None, max_year: int | None
+) -> pd.DataFrame:
     """Return a copy of df filtered to a year range.
 
     Args:
@@ -63,6 +66,7 @@ def _year_filter(df: pd.DataFrame, *, min_year: int | None, max_year: int | None
     if max_year is not None:
         out = out[out["Start"] <= max_year]
     return out
+
 
 # -----------------------------------------------------------------------------
 # Node – FindCubes_node
@@ -109,25 +113,27 @@ def find_cubes_node(state: lg_State) -> Dict[str, Union[str, list, dict]]:
     existing = pd.DataFrame()
     if existing_json:
         try:
-            existing = pd.read_json(io.StringIO(
-                existing_json), orient="records")
+            existing = pd.read_json(io.StringIO(existing_json), orient="records")
         except ValueError:
             existing = pd.DataFrame()
 
     if not existing.empty:
         # Ensure we actually have theme + unit columns; otherwise ignore cache
-        theme_col = "Theme_ID" if "Theme_ID" in existing.columns else (
-            "theme_id" if "theme_id" in existing.columns else None)
+        theme_col = (
+            "Theme_ID"
+            if "Theme_ID" in existing.columns
+            else ("theme_id" if "theme_id" in existing.columns else None)
+        )
         if theme_col and "g_unit" in existing.columns:
             existing = existing[existing[theme_col] == theme_id]
-            existing = _year_filter(
-                existing, min_year=min_year, max_year=max_year)
+            existing = _year_filter(existing, min_year=min_year, max_year=max_year)
             existing = existing[existing["g_unit"].isin(units)]
         else:
             existing = pd.DataFrame()
 
-    have_units = set(existing["g_unit"].unique()
-                     ) if "g_unit" in existing.columns else set()
+    have_units = (
+        set(existing["g_unit"].unique()) if "g_unit" in existing.columns else set()
+    )
     need_units = [u for u in units if u not in have_units]
     logger.info("FindCubes_node – need fresh cubes for units: %s", need_units)
 
@@ -135,8 +141,7 @@ def find_cubes_node(state: lg_State) -> Dict[str, Union[str, list, dict]]:
     fresh: List[pd.DataFrame] = []
     for u in need_units:
         try:
-            raw = find_cubes_for_unit_theme(
-                {"g_unit": str(u), "theme_id": theme_id})
+            raw = find_cubes_for_unit_theme({"g_unit": str(u), "theme_id": theme_id})
             df = pd.read_json(io.StringIO(raw), orient="records")
             if "g_unit" not in df.columns:
                 df["g_unit"] = u
@@ -146,20 +151,24 @@ def find_cubes_node(state: lg_State) -> Dict[str, Union[str, list, dict]]:
                 fresh.append(df)
         except Exception as exc:  # noqa: BLE001 – external call can fail
             logger.warning("Cube fetch failed for unit %s: %s", u, exc)
-            warn_msg = _append_ai(state, f"Trouble fetching data for one area (ID {u}).")
+            warn_msg = _append_ai(
+                state, f"Trouble fetching data for one area (ID {u})."
+            )
             # Return the warning as a delta so it is persisted before continuing
             return {"messages": [warn_msg]}
 
     if existing.empty and not fresh:
         msg = _append_ai(
-            state, f"No data found for theme ‘{theme_label}’ in the chosen areas.")
+            state, f"No data found for theme ‘{theme_label}’ in the chosen areas."
+        )
         return {"messages": [msg], "selected_cubes": None}
 
     # 4️⃣  Merge + store ----------------------------------------------------------
-    combined = pd.concat([existing, *fresh],
-                         ignore_index=True) if fresh else existing
+    combined = pd.concat([existing, *fresh], ignore_index=True) if fresh else existing
     # Handle NaN values properly for JSON serialization
-    cubes_json = combined.to_json(orient="records", force_ascii=False, default_handler=str)
+    cubes_json = combined.to_json(
+        orient="records", force_ascii=False, default_handler=str
+    )
 
     # 5️⃣  Interrupt for visualisation -------------------------------------------
     # Create the message but don't append yet (will be lost due to interrupt)
@@ -170,12 +179,16 @@ def find_cubes_node(state: lg_State) -> Dict[str, Union[str, list, dict]]:
     #     + "."
     # )
 
-    interrupt({
-        "cube_data_ready": True,
-        "theme_label": theme_label,
-        "cubes": cubes_json,
-        "places": state.get("places", []),
-        "selected_theme": theme_json,
-        # "message": data_message,
-        # "messages": serialize_messages(state.get("messages", []))
-    })
+    interrupt(
+        {
+            "cube_data_ready": True,
+            "theme_label": theme_label,
+            "cubes": cubes_json,
+            "places": state.get("places", []),
+            "selected_theme": theme_json,
+            "selected_cubes": cubes_json,
+            "show_visualization": True,
+            # "message": data_message,
+            # "messages": serialize_messages(state.get("messages", []))
+        }
+    )

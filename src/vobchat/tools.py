@@ -113,6 +113,7 @@ def find_cubes_for_unit_theme(
         ncube.theme_ID as theme_ID,
         ncube.ent_ID as cube_ID,
         ncube.labl as cube,
+        min(ncube.text) as cube_text,
         min(data.end_date_decimal) as start,
         max(data.end_date_decimal) as end,
         count(data.g_data) as count
@@ -148,6 +149,7 @@ def find_cubes_for_unit_theme(
                 "Theme_ID",
                 "Cube_ID",
                 "Cube",
+                "Cube_Text",
                 "Start",
                 "End",
                 "Count",
@@ -500,7 +502,7 @@ def get_all_cube_data(
             f"[get_all_cube_data] Database error for unit {g_unit}: {e}"
         )
         # Return empty result instead of crashing
-        return "[]"
+    return "[]"
 
 
 # tool to choose theme from sentence
@@ -1003,3 +1005,273 @@ def get_unit_type_info(
         "statuses": statuses,
     }
     return json.dumps(out)
+
+
+@tool
+def find_data_entity_id(query: Annotated[str, "Data entity code (e.g., N_*) or label to look up"]) -> str:
+    """
+    Resolve a data entity by code or by (case-insensitive) label.
+
+    Returns JSON like {"ent_id": "N_SOCIAL_GRADE_TOT_M", "labl": "Social Grade Total", "ent_type": "N"}
+    or {} if not found.
+    """
+    try:
+        q = (query or "").strip()
+        if not q:
+            return json.dumps({})
+
+        dbtool = QuerySQLDataBaseTool(db=db)
+        safe = q.replace("'", "''")
+
+        # 1) Try by ent_id (case-insensitive exact)
+        q_id_variants = [
+            f"SELECT ent_id, labl, ent_type FROM hgis.g_data_ent WHERE UPPER(ent_id) = UPPER('{safe}') LIMIT 1;",
+            f"SELECT ent_id, labl, ent_type FROM g_data_ent WHERE UPPER(ent_id) = UPPER('{safe}') LIMIT 1;",
+        ]
+        for sql in q_id_variants:
+            try:
+                res = dbtool.db._execute(sql)
+                df = pd.DataFrame(res)
+                if not df.empty:
+                    row = df.iloc[0]
+                    return json.dumps(
+                        {
+                            "ent_id": str(row.get("ent_id") or row.get(0)),
+                            "labl": str(row.get("labl") or row.get(1) or ""),
+                            "ent_type": str(row.get("ent_type") or row.get(2) or ""),
+                        }
+                    )
+            except Exception:
+                continue
+
+        # 2) Try by label (case-insensitive exact)
+        q_label_exact = [
+            f"SELECT ent_id, labl, ent_type FROM hgis.g_data_ent WHERE LOWER(labl) = LOWER('{safe}') LIMIT 1;",
+            f"SELECT ent_id, labl, ent_type FROM g_data_ent WHERE LOWER(labl) = LOWER('{safe}') LIMIT 1;",
+        ]
+        for sql in q_label_exact:
+            try:
+                res = dbtool.db._execute(sql)
+                df = pd.DataFrame(res)
+                if not df.empty:
+                    row = df.iloc[0]
+                    return json.dumps(
+                        {
+                            "ent_id": str(row.get("ent_id") or row.get(0)),
+                            "labl": str(row.get("labl") or row.get(1) or ""),
+                            "ent_type": str(row.get("ent_type") or row.get(2) or ""),
+                        }
+                    )
+            except Exception:
+                continue
+
+        # 3) Try ILIKE (prefix/substring), prefer shorter labels and nCubes
+        q_label_like = [
+            f"""
+            SELECT ent_id, labl, ent_type
+            FROM hgis.g_data_ent
+            WHERE labl ILIKE '%{safe}%'
+            ORDER BY (CASE WHEN ent_type='N' THEN 0 ELSE 1 END), char_length(labl) ASC
+            LIMIT 1;
+            """,
+            f"""
+            SELECT ent_id, labl, ent_type
+            FROM g_data_ent
+            WHERE labl ILIKE '%{safe}%'
+            ORDER BY (CASE WHEN ent_type='N' THEN 0 ELSE 1 END), char_length(labl) ASC
+            LIMIT 1;
+            """,
+        ]
+        for sql in q_label_like:
+            try:
+                res = dbtool.db._execute(sql)
+                df = pd.DataFrame(res)
+                if not df.empty:
+                    row = df.iloc[0]
+                    return json.dumps(
+                        {
+                            "ent_id": str(row.get("ent_id") or row.get(0)),
+                            "labl": str(row.get("labl") or row.get(1) or ""),
+                            "ent_type": str(row.get("ent_type") or row.get(2) or ""),
+                        }
+                    )
+            except Exception:
+                continue
+
+        return json.dumps({})
+    except Exception as e:
+        logger.error(f"[find_data_entity_id] Error: {e}", exc_info=True)
+        return json.dumps({})
+
+
+@tool
+def get_data_entity_info(entity_id: Annotated[str, "ID of the data entity (e.g., N_..., T_..., U_..., V_...)"]) -> str:
+    """
+    Fetch core information for a data entity (from g_data_ent and g_data_ent_type),
+    including higher/lower related entities.
+
+    Returns JSON with keys: entity, higher_entities, lower_entities.
+    """
+    try:
+        dbtool = QuerySQLDataBaseTool(db=db)
+
+        def exec_df(sql_list: list[str]) -> pd.DataFrame:
+            for q in sql_list:
+                try:
+                    res = dbtool.db._execute(q)
+                    df = pd.DataFrame(res)
+                    if df is not None and not df.empty:
+                        return df
+                except Exception:
+                    continue
+            return pd.DataFrame()
+
+        safe_id = str(entity_id).replace("'", "''")
+
+        # Step 1: fetch entity row (without type join, for robustness)
+        q_entity_variants = [
+            f"""
+            SELECT e.ent_type              AS ent_type,
+                   e.labl                  AS ent_name,
+                   e.short_labl            AS ent_short_name,
+                   e.text                  AS ent_text,
+                   e.additivity            AS ent_additivity,
+                   e.continuous            AS rate_continuous,
+                   e.top_ID                AS rate_top,
+                   e.bottom_ID             AS rate_bottom,
+                   e.mult                  AS rate_mult,
+                   e.root_unit             AS cube_root_unit,
+                   e.root_name             AS cube_root_name,
+                   e.theme_id              AS theme_id,
+                   e.rate_type             AS rate_type,
+                   e.cube_display          AS cube_display,
+                   e.cube_download         AS cube_download
+            FROM   hgis.g_data_ent e
+            WHERE  e.ent_ID = '{safe_id}'
+            LIMIT 1;
+            """,
+            f"""
+            SELECT e.ent_type,
+                   e.labl          AS ent_name,
+                   e.short_labl    AS ent_short_name,
+                   e.text          AS ent_text,
+                   e.additivity    AS ent_additivity,
+                   e.continuous    AS rate_continuous,
+                   e.top_ID        AS rate_top,
+                   e.bottom_ID     AS rate_bottom,
+                   e.mult          AS rate_mult,
+                   e.root_unit     AS cube_root_unit,
+                   e.root_name     AS cube_root_name,
+                   e.theme_id      AS theme_id,
+                   e.rate_type     AS rate_type,
+                   e.cube_display  AS cube_display,
+                   e.cube_download AS cube_download
+            FROM   g_data_ent e
+            WHERE  UPPER(e.ent_ID) = UPPER('{safe_id}')
+            LIMIT 1;
+            """,
+        ]
+        df_entity = exec_df(q_entity_variants)
+
+        entity: dict = {}
+        ent_type_code = None
+        if not df_entity.empty:
+            row0 = df_entity.iloc[0].to_dict()
+            entity = {k: row0.get(k) for k in [
+                "ent_type",
+                "ent_name",
+                "ent_short_name",
+                "ent_text",
+                "ent_additivity",
+                "rate_continuous",
+                "rate_top",
+                "rate_bottom",
+                "rate_mult",
+                "cube_root_unit",
+                "cube_root_name",
+                "theme_id",
+                "rate_type",
+                "cube_display",
+                "cube_download",
+            ]}
+            ent_type_code = entity.get("ent_type")
+
+        # Step 2: add type metadata from ent_type table
+        type_name = None
+        type_text = None
+        if ent_type_code:
+            q_type_variants = [
+                f"SELECT labl AS type_name, text AS type_text FROM hgis.g_data_ent_type WHERE ent_type = '{ent_type_code}' LIMIT 1;",
+                f"SELECT labl AS type_name, text AS type_text FROM g_data_ent_type WHERE ent_type = '{ent_type_code}' LIMIT 1;",
+            ]
+            df_type = exec_df(q_type_variants)
+            if not df_type.empty:
+                t0 = df_type.iloc[0].to_dict()
+                type_name = t0.get("type_name")
+                type_text = t0.get("type_text")
+        if entity is None:
+            entity = {}
+        entity["ent_type"] = ent_type_code
+        if type_name is not None:
+            entity["type_name"] = type_name
+        if type_text is not None:
+            entity["type_text"] = type_text
+
+        # Step 3: relationships (higher/lower)
+        q_higher_variants = [
+            f"""
+            SELECT e.ent_ID as higher_id, e.labl as higher_name, e.ent_type as higher_type
+            FROM   hgis.g_data_ent e, hgis.g_data_rel r
+            WHERE  r.rel_ID = e.ent_ID AND r.ent_ID = '{safe_id}'
+            ORDER BY r.rel_seq;
+            """,
+            f"""
+            SELECT e.ent_ID as higher_id, e.labl as higher_name, e.ent_type as higher_type
+            FROM   g_data_ent e, g_data_rel r
+            WHERE  r.rel_ID = e.ent_ID AND r.ent_ID = '{safe_id}'
+            ORDER BY r.rel_seq;
+            """,
+        ]
+        df_hi = exec_df(q_higher_variants)
+        higher = []
+        if not df_hi.empty:
+            for _, r in df_hi.iterrows():
+                higher.append(
+                    {
+                        "id": str(r.get("higher_id") if "higher_id" in df_hi.columns else r.get(0) or ""),
+                        "name": str(r.get("higher_name") if "higher_name" in df_hi.columns else r.get(1) or ""),
+                        "type": str(r.get("higher_type") if "higher_type" in df_hi.columns else r.get(2) or ""),
+                    }
+                )
+
+        q_lower_variants = [
+            f"""
+            SELECT e.ent_ID as lower_id, e.labl as lower_name, e.ent_type as lower_type
+            FROM   hgis.g_data_ent e, hgis.g_data_rel r
+            WHERE  r.ent_ID = e.ent_ID AND r.rel_ID = '{safe_id}'
+            ORDER BY r.rel_seq;
+            """,
+            f"""
+            SELECT e.ent_ID as lower_id, e.labl as lower_name, e.ent_type as lower_type
+            FROM   g_data_ent e, g_data_rel r
+            WHERE  r.ent_ID = e.ent_ID AND r.rel_ID = '{safe_id}'
+            ORDER BY r.rel_seq;
+            """,
+        ]
+        df_lo = exec_df(q_lower_variants)
+        lower = []
+        if not df_lo.empty:
+            for _, r in df_lo.iterrows():
+                lower.append(
+                    {
+                        "id": str(r.get("lower_id") if "lower_id" in df_lo.columns else r.get(0) or ""),
+                        "name": str(r.get("lower_name") if "lower_name" in df_lo.columns else r.get(1) or ""),
+                        "type": str(r.get("lower_type") if "lower_type" in df_lo.columns else r.get(2) or ""),
+                    }
+                )
+
+        out = {"entity": entity or {}, "higher_entities": higher, "lower_entities": lower}
+        return json.dumps(out, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"[get_data_entity_info] Error for {entity_id}: {e}", exc_info=True)
+        return json.dumps({})

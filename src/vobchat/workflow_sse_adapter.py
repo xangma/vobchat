@@ -278,6 +278,32 @@ class WorkflowSSEAdapter:
                         llm_busy = False
                     except Exception:
                         logger.debug("Could not clear llm_busy before interrupt")
+                # Persist key fields from the interrupt into the workflow state so
+                # downstream nodes can read them (e.g., ExplainVisibleData needs
+                # selected_cubes available on the server side).
+                try:
+                    interrupt_payload = st.tasks[-1].interrupts[0].value or {}
+                    persist: Dict[str, Any] = {}
+                    # If cubes are included, store them as selected_cubes in state
+                    if isinstance(interrupt_payload, dict):
+                        sc = interrupt_payload.get("selected_cubes")
+                        c = interrupt_payload.get("cubes")
+                        if sc or c:
+                            persist["selected_cubes"] = sc or c
+                    if persist:
+                        try:
+                            await self.wf.aupdate_state(cfg, persist)
+                            logger.info(
+                                "workflow_sse_adapter: persisted keys from interrupt: %s",
+                                list(persist.keys()),
+                            )
+                        except Exception:
+                            logger.warning(
+                                "workflow_sse_adapter: failed to persist interrupt keys",
+                                exc_info=True,
+                            )
+                except Exception:
+                    logger.debug("workflow_sse_adapter: no interrupt payload to persist")
                 await simple_sse_manager.interrupt(
                     thread_id, st.tasks[-1].interrupts[0].value
                 )

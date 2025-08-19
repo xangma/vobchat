@@ -27,6 +27,8 @@ from .interaction_nodes import ask_followup_node
 from .data_nodes import find_cubes_node
 from .info_nodes import (
     UnitTypeInfo_node,
+    DataEntityInfo_node,
+    ExplainVisibleData_node,
 )
 from .workflow_place_nodes import (
     update_polygon_selection,
@@ -56,6 +58,8 @@ __all__ = [
     # Data nodes
     "find_cubes_node",
     "UnitTypeInfo_node",
+    "DataEntityInfo_node",
+    "ExplainVisibleData_node",
     # Workflow place nodes
     "update_polygon_selection",
     # 'request_map_selection',

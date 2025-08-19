@@ -25,6 +25,8 @@ class AssistantIntent(str, Enum):
     """Canonical intents that the agent routes inside the graph."""
 
     DESCRIBE_THEME = "DescribeTheme"
+    DATA_ENTITY_INFO = "DataEntityInfo"
+    EXPLAIN_VISIBLE_DATA = "ExplainVisibleData"
     ADD_PLACE = "AddPlace"
     REMOVE_PLACE = "RemovePlace"
     ADD_THEME = "AddTheme"
@@ -46,9 +48,7 @@ class AssistantIntent(str, Enum):
 class SingleIntent(BaseModel):
     """A single intent with optional arguments extracted from a message."""
 
-    intent: AssistantIntent = Field(
-        ..., description="The recognized intent name."
-    )
+    intent: AssistantIntent = Field(..., description="The recognized intent name.")
     arguments: Dict[str, Any] = Field(
         default_factory=dict,
         description="For AddPlace either {'place': str} or {'places': list[str]}",
@@ -59,33 +59,7 @@ class AssistantIntentPayload(BaseModel):
     """Minimal contract returned by the intent extractor before routing.
 
     Example:
-        {"intents": [{"intent": "AddPlace", "arguments": {"place": "London"}}]}
+        {"intents": [{"intent": "AddPlace", "arguments": {"place": "<place_name>"}}]}
     """
 
     intents: List[SingleIntent]
-
-
-# -------------------------------------------------------------------------------------
-import os
-
-
-def extract_intent(
-    user_text: str, messages: list[AnyMessage]
-) -> AssistantIntentPayload:
-    """Extract intents from `user_text` using specialized subagents.
-
-    Args:
-        user_text: The latest user utterance to classify.
-        messages: Recent conversation history (may be used by subagents).
-
-    Returns:
-        AssistantIntentPayload: One or more intents with minimal arguments ready
-        for workflow routing.
-    """
-    # Delegate to the more robust subagent approach which separates place/theme/
-    # action extraction. This is preferable to a single all-in-one prompt and
-    # makes downstream routing easier to reason about.
-    from .intent_subagents import extract_intent_with_subagents
-
-    logger.info("Using subagent approach for intent extraction")
-    return extract_intent_with_subagents(user_text, messages)
