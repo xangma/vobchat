@@ -143,9 +143,37 @@ def find_cubes_for_unit_theme(
             dbtool = QuerySQLDataBaseTool(db=fresh_db)
 
             res = dbtool.db._execute(query)
+            # If no rows, return an empty, well-formed JSON array
+            if not res:
+                return pd.DataFrame(
+                    columns=[
+                        "Theme_ID",
+                        "Cube_ID",
+                        "Cube",
+                        "Cube_Text",
+                        "Start",
+                        "End",
+                        "Count",
+                    ]
+                ).to_json(orient="records", force_ascii=False, default_handler=str)
+
+            # Build DataFrame robustly regardless of driver return shape (dicts or tuples)
             df = pd.DataFrame(res)
-            # Convert column names to match what we expect
-            df.columns = [
+            if df.empty:
+                return pd.DataFrame(
+                    columns=[
+                        "Theme_ID",
+                        "Cube_ID",
+                        "Cube",
+                        "Cube_Text",
+                        "Start",
+                        "End",
+                        "Count",
+                    ]
+                ).to_json(orient="records", force_ascii=False, default_handler=str)
+
+            # Normalize column names case-insensitively; if unnamed (0..6), assign explicitly
+            expected = [
                 "Theme_ID",
                 "Cube_ID",
                 "Cube",
@@ -154,6 +182,32 @@ def find_cubes_for_unit_theme(
                 "End",
                 "Count",
             ]
+            try:
+                # If columns are numeric range (no names), set expected names
+                if list(df.columns) == list(range(len(expected))):
+                    df.columns = expected
+                else:
+                    # Lower all names and map to expected
+                    lower_map = {str(c).lower(): c for c in df.columns}
+                    rename_map = {}
+                    for exp in expected:
+                        key = exp.lower()
+                        if key in lower_map:
+                            rename_map[lower_map[key]] = exp
+                    if rename_map:
+                        df = df.rename(columns=rename_map)
+                    # Ensure all expected columns exist even if missing in result
+                    for col in expected:
+                        if col not in df.columns:
+                            df[col] = None
+                    # Reorder columns to expected order
+                    df = df[expected]
+            except Exception:
+                # Last resort: coerce to expected columns without failing
+                for col in expected:
+                    if col not in df.columns:
+                        df[col] = None
+                df = df[expected]
             logger.debug(
                 f"[find_cubes_for_unit_theme] Query returned: \n\n{df}"
             )

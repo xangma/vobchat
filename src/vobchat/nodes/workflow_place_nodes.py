@@ -78,21 +78,41 @@ def update_polygon_selection(state: lg_State):
         places = state.get("places", []) or []
 
         if current_idx >= len(places):
-            logger.info("update_polygon_selection: All places resolved, routing to start_node")
-            
+            logger.info("update_polygon_selection: All places resolved, routing to next step")
+
             # Collect selected place coordinates for zoom
             selected_place_coordinates = _collect_selected_place_coordinates(places)
-            
-            return Command(goto="start_node", update={
-                "units_needing_map_selection": [],
-                "places": places,
-                "selection_idx": None,
-                "map_update_request": {
-                    "action": "update_map_selection",
-                    "places": state.get("places", []),
-                    "selected_place_coordinates": selected_place_coordinates
-                }
-            })
+
+            # If no theme is selected yet, prompt the user to pick one for the selected units
+            if not state.get("selected_theme"):
+                return Command(
+                    goto="resolve_theme",
+                    update={
+                        "units_needing_map_selection": [],
+                        "places": places,
+                        "selection_idx": None,
+                        "map_update_request": {
+                            "action": "update_map_selection",
+                            "places": state.get("places", []),
+                            "selected_place_coordinates": selected_place_coordinates,
+                        },
+                    },
+                )
+
+            # Otherwise, proceed back to the agent/start
+            return Command(
+                goto="start_node",
+                update={
+                    "units_needing_map_selection": [],
+                    "places": places,
+                    "selection_idx": None,
+                    "map_update_request": {
+                        "action": "update_map_selection",
+                        "places": state.get("places", []),
+                        "selected_place_coordinates": selected_place_coordinates,
+                    },
+                },
+            )
 
         # Collect selected place coordinates for zoom (including partially processed places)
         places_list = state.get("places", []) or []

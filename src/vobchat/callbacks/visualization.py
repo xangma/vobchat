@@ -77,19 +77,12 @@ def register_simple_visualization_callbacks(app):
 
                 if places and selected_theme:
                     try:
-                        # Get first place's g_unit for theme lookup
+                        # Get first place's g_unit for cube lookup under the selected theme
                         first_unit = next(
                             (p.get("g_unit") for p in places if p.get("g_unit")), None
                         )
                         if first_unit:
-                            from vobchat.tools import find_themes_for_unit
-
-                            theme_cubes_json = find_themes_for_unit(str(first_unit))
-                            theme_cubes_df = pd.read_json(
-                                io.StringIO(theme_cubes_json), orient="records"
-                            )
-
-                            # Filter to current theme
+                            # Parse the selected theme to extract ent_id
                             if isinstance(selected_theme, str):
                                 theme_data = json.loads(selected_theme)
                             else:
@@ -107,17 +100,25 @@ def register_simple_visualization_callbacks(app):
                                 ent_id = theme_data[0].get("ent_id")
 
                             if ent_id:
-                                current_theme_cubes = theme_cubes_df[
-                                    theme_cubes_df["ent_id"] == ent_id
-                                ]
-                                if not current_theme_cubes.empty:
-                                    cubes = current_theme_cubes.to_json(
-                                        orient="records",
-                                        force_ascii=False,
-                                        default_handler=str,
+                                # Fetch cubes for this unit + theme
+                                try:
+                                    from vobchat.tools import find_cubes_for_unit_theme
+
+                                    # LangChain tool: invoke with a single input dict
+                                    cubes_json = find_cubes_for_unit_theme.invoke(
+                                        {"g_unit": str(first_unit), "theme_id": str(ent_id)}
                                     )
-                                    logger.info(
-                                        f"Generated {len(current_theme_cubes)} cube options from theme"
+                                    cubes_df = pd.read_json(
+                                        io.StringIO(cubes_json), orient="records"
+                                    )
+                                    if not cubes_df.empty:
+                                        cubes = cubes_json
+                                        logger.info(
+                                            f"Generated {len(cubes_df)} cube options from unit+theme"
+                                        )
+                                except Exception as e:
+                                    logger.warning(
+                                        f"Error fetching cubes for unit {first_unit} and theme {ent_id}: {e}"
                                     )
                     except Exception as e:
                         logger.warning(f"Error generating cube options: {e}")
@@ -227,7 +228,7 @@ def register_simple_visualization_callbacks(app):
                 options.append(
                     {
                         "label": label_with_indicator(base_label, indicator_utype),
-                        "value": cid,
+                        "value": str(cid),
                     }
                 )
 
@@ -287,15 +288,22 @@ def register_simple_visualization_callbacks(app):
 
             # Preserve current selection if valid; otherwise choose best default
             cube_ids_all = list(option_labels.keys())
-            if current_cube_selection and all(
-                cube in cube_ids_all for cube in current_cube_selection
-            ):
-                cube_value = current_cube_selection
+            cube_ids_all_str = [str(cid) for cid in cube_ids_all]
+            if current_cube_selection and isinstance(current_cube_selection, list):
+                # Sanitize current selection and keep only valid string IDs
+                current_sanitized = [str(c) for c in current_cube_selection if c is not None]
+                current_sanitized = [c for c in current_sanitized if c in cube_ids_all_str]
+                if current_sanitized:
+                    cube_value = current_sanitized
+                else:
+                    cube_value = [str(best_cube)] if best_cube is not None else (
+                        cube_ids_all_str[:1] if cube_ids_all_str else []
+                    )
             else:
                 cube_value = (
-                    [best_cube]
-                    if best_cube
-                    else (cube_ids_all[:1] if cube_ids_all else [])
+                    [str(best_cube)]
+                    if best_cube is not None
+                    else (cube_ids_all_str[:1] if cube_ids_all_str else [])
                 )
 
             logger.info(f"Showing visualization with {len(options)} cube options")
@@ -365,9 +373,12 @@ def register_simple_visualization_callbacks(app):
             if not selected_units:
                 return empty_chart("No valid areas found")
 
-            # Ensure selected_cubes is a list
+            # Ensure selected_cubes is a list of strings and drop Nones
             if not isinstance(selected_cubes, list):
                 selected_cubes = [selected_cubes]
+            selected_cubes = [str(c) for c in selected_cubes if c is not None]
+            if not selected_cubes:
+                return empty_chart("No data filters selected")
 
             # Fetch data for each unit
             all_data_list = []
