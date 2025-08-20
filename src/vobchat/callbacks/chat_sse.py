@@ -149,7 +149,7 @@ def register_simple_chat_callbacks(app, compiled_workflow):
                         else None,
                         "source": "map_click",
                     },
-                }
+                },
             }
 
         elif "map-click-remove-trigger" in trigger and map_remove_payload:
@@ -172,7 +172,7 @@ def register_simple_chat_callbacks(app, compiled_workflow):
                         else None,
                         "source": "map_click",
                     },
-                }
+                },
             }
 
         # If we have workflow input, signal SSE client to connect with workflow input
@@ -302,6 +302,10 @@ def register_simple_chat_callbacks(app, compiled_workflow):
         if not any(n_clicks_list):
             raise PreventUpdate
 
+        # Ensure thread id exists
+        if not thread_id:
+            thread_id = str(uuid4())
+
         # Find which marker was clicked
         ctx = dash.callback_context
         if not ctx.triggered:
@@ -337,9 +341,9 @@ def register_simple_chat_callbacks(app, compiled_workflow):
         # Prepare workflow input with the selection
         workflow_input = {
             "selection_idx": selected_index,
-            "current_node": interrupt_data.get("current_node"),
-            "current_place_index": interrupt_data.get("current_place_index"),
-            "places": interrupt_data.get("places", []),
+            "current_node": interrupt_data.get("current_node") if interrupt_data else None,
+            "current_place_index": interrupt_data.get("current_place_index") if interrupt_data else None,
+            "places": (interrupt_data.get("places", []) if interrupt_data else []),
         }
 
         # Start workflow with selection
@@ -356,6 +360,48 @@ def register_simple_chat_callbacks(app, compiled_workflow):
         }
 
         return thread_id, sse_status, markers_cleared, interrupt_cleared
+
+    # Trigger theme resolution from theme status click
+    @app.callback(
+        Output("sse-connection-status", "data", allow_duplicate=True),
+        Output("thread-id", "data", allow_duplicate=True),
+        Input("theme-status", "n_clicks"),
+        State("thread-id", "data"),
+        State("map-state", "data"),
+        prevent_initial_call=True,
+    )
+    def handle_theme_status_click(n_clicks, thread_id, map_state):
+        if not n_clicks:
+            raise PreventUpdate
+
+        # Ensure we have a thread id
+        if not thread_id:
+            thread_id = str(uuid4())
+
+        # Include current places if available so backend can scope themes
+        places_from_client = []
+        try:
+            if isinstance(map_state, dict):
+                places_from_client = map_state.get("places", []) or []
+        except Exception:
+            places_from_client = []
+
+        workflow_input = {
+            "places": places_from_client,
+            "last_intent_payload": {
+                "intent": AssistantIntent.ADD_THEME.value,
+                "arguments": {"source": "theme_panel", "force": True},
+            },
+        }
+
+        sse_status = {
+            "connect_sse": True,
+            "thread_id": thread_id,
+            "workflow_input": workflow_input,
+            "timestamp": time.time(),
+        }
+
+        return sse_status, thread_id
 
 
 def start_workflow_background(

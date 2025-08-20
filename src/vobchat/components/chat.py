@@ -65,7 +65,50 @@ def create_chat_layout():
                         html.Div(
                             id="options-container",
                             style={"marginBottom": "10px"}
-                        )
+                        ),
+
+                        # Theme UI overlay: status + selection panel (anchored bottom-right)
+                        html.Div(
+                            id="theme-ui-container",
+                            style={
+                                "position": "absolute",
+                                "right": "10px",
+                                "bottom": "10px",
+                                "zIndex": 20,
+                            },
+                            children=[
+                                # Status pill/button (click to open selection panel)
+                                html.Div(
+                                    id="theme-status",
+                                    n_clicks=0,
+                                    children=[
+                                        html.Span(id="theme-status-label", children="Theme: (none)")
+                                    ],
+                                    className="theme-status-pill",
+                                ),
+                                # Hidden selection panel; buttons injected by SSE client
+                                html.Div(
+                                    id="theme-selection-panel",
+                                    className="theme-selection-panel",
+                                    style={"display": "none"},
+                                    children=[
+                                        html.Div(
+                                            className="theme-panel-header",
+                                            children=[
+                                                html.Span("Select a theme"),
+                                                html.Button(
+                                                    "×",
+                                                    id="theme-panel-close",
+                                                    n_clicks=0,
+                                                    className="theme-panel-close"
+                                                ),
+                                            ],
+                                        ),
+                                        html.Div(id="theme-selection-buttons")
+                                    ],
+                                ),
+                            ],
+                        ),
                     ]
                 ),
 

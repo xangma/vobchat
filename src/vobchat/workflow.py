@@ -315,6 +315,15 @@ def create_workflow(lg_state: TypedDict):
         if intent in ["AddPlace", "RemovePlace"]:
             return Command(goto="conversational_agent_node")
 
+        # Route theme intents directly to their handler so UI clicks work
+        if intent in ["AddTheme", "RemoveTheme", "ListThemes", "DescribeTheme"]:
+            target = _intent_to_node(intent)
+            if target:
+                logger.debug(
+                    "start_node: routing direct theme intent %s to %s", intent, target
+                )
+                return Command(goto=target)
+
         # PRIORITY 3: If we have a current_node and selection_idx (button click),
         # but no new intent, resume from that node
         if current_node and selection_idx is not None:

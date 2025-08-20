@@ -191,7 +191,7 @@ def _ask_user_to_choose(state: lg_State, df: pd.DataFrame, prompt: str):
         options.append(
             {
                 "option_type": "theme_query",
-                "label": f"{row.labl} ({row.ent_id})",
+                "label": f"{row.labl}",
                 "value": row.ent_id,
             }
         )
@@ -240,7 +240,7 @@ def resolve_theme(state: lg_State):
         selected_theme = pd.DataFrame([{"ent_id": code, "labl": label}]).to_json(
             orient="records", force_ascii=False, default_handler=str
         )
-        msg = _append_ai(state, f"Theme set to {label} ({code}).")
+        msg = _append_ai(state, f"Theme set to {label}.")
         return Command(
             goto="find_cubes_node",
             update={
@@ -284,7 +284,7 @@ def resolve_theme(state: lg_State):
             selected_theme = pd.DataFrame([theme]).to_json(
                 orient="records", force_ascii=False, default_handler=str
             )
-            msg = _append_ai(state, f"Theme set to {theme.labl} ({theme.ent_id}).")
+            msg = _append_ai(state, f"Theme set to {theme.labl}.")
             return Command(
                 goto="find_cubes_node",
                 update={
@@ -310,7 +310,7 @@ def resolve_theme(state: lg_State):
     if len(df) == 1:
         theme = df.iloc[0]
         selected_theme = pd.DataFrame([theme]).to_json(orient="records")
-        msg = _append_ai(state, f"Theme set to {theme.labl} ({theme.ent_id}).")
+        msg = _append_ai(state, f"Theme set to {theme.labl}.")
         return Command(
             goto="find_cubes_node",
             update={
@@ -340,15 +340,18 @@ def AddTheme_node(state: lg_State) -> dict | Command:
     theme_query = args.get("theme_query", "").strip()
 
     # If a theme is already set and user didn't provide a new query,
-    # avoid routing into resolve_theme. Acknowledge current theme instead.
-    if not theme_query and state.get("selected_theme"):
+    # avoid routing into resolve_theme unless explicitly requested by UI.
+    # The theme panel may set arguments like {source: 'theme_panel', force: True}.
+    if not theme_query and state.get("selected_theme") and not (
+        str(args.get("source") or "").strip().lower() == "theme_panel" or bool(args.get("force"))
+    ):
         try:
             df = pd.read_json(io.StringIO(state["selected_theme"]), orient="records")
             if not df.empty:
                 labl = df.iloc[0].get("labl")
                 code = df.iloc[0].get("ent_id")
                 if labl and code:
-                    msg = _append_ai(state, f"Theme is already set to {labl} ({code}).")
+                    msg = _append_ai(state, f"Theme is already set to {labl}.")
                     return {"messages": [msg], "last_intent_payload": {}}
         except Exception:
             # Fall through if parsing fails
@@ -368,13 +371,14 @@ def AddTheme_node(state: lg_State) -> dict | Command:
             },
         )
     else:
-        logger.warning("AddTheme_node: No theme_query in arguments")
-        # Route to resolve_theme anyway to show available themes
+        # Route to resolve_theme to show available themes for browsing/reselection
+        logger.info(
+            "AddTheme_node: No explicit theme_query; opening theme selection panel"
+        )
         return Command(
             goto="resolve_theme",
             update={
                 "last_intent_payload": {},  # Clear after processing
-                # No message delta here
             },
         )
 

@@ -36,6 +36,62 @@ class SimpleSSEClient {
         };
 
         console.log('Simple SSE Client initialized');
+
+        // Robustly attach theme UI handlers; Dash may mount after DOMContentLoaded
+        const attachThemeHandlers = () => {
+            const panelEl = document.getElementById('theme-selection-panel');
+            const statusEl = document.getElementById('theme-status');
+            const closeEl = document.getElementById('theme-panel-close');
+
+            if (statusEl && !statusEl._themeHandlersAttached) {
+                statusEl._themeHandlersAttached = true;
+                statusEl.addEventListener('click', () => {
+                    // Toggle panel if we already have theme options
+                    if (panelEl && this.currentOptions && Array.isArray(this.currentOptions) && this.currentOptions.some(o => o.option_type === 'theme_query')) {
+                        panelEl.style.display = panelEl.style.display === 'none' ? 'block' : 'none';
+                        return;
+                    }
+                    // Otherwise, ask backend to present theme options via interrupt
+                    if (this.threadId) {
+                        this.postWorkflowInput({
+                            last_intent_payload: { intent: 'AddTheme', arguments: { source: 'theme_panel', force: true } }
+                        }).catch(err => console.error('SSE: Theme status click post failed', err));
+                    } else {
+                        console.warn('SSE: No active thread for theme panel request');
+                    }
+                });
+            }
+            if (closeEl && !closeEl._themeHandlersAttached) {
+                closeEl._themeHandlersAttached = true;
+                closeEl.addEventListener('click', (e) => {
+                    try { e.preventDefault(); e.stopPropagation(); } catch (_) {}
+                    if (panelEl) panelEl.style.display = 'none';
+                });
+            }
+
+            return Boolean(statusEl && statusEl._themeHandlersAttached && closeEl && closeEl._themeHandlersAttached);
+        };
+
+        const initThemeUI = () => {
+            if (attachThemeHandlers()) return;
+            if (this._themeObserver) return;
+            // Observe DOM insertions and attach when elements appear
+            this._themeObserver = new MutationObserver(() => {
+                if (attachThemeHandlers()) {
+                    try { this._themeObserver.disconnect(); } catch (_) {}
+                    this._themeObserver = null;
+                }
+            });
+            try {
+                this._themeObserver.observe(document.body, { childList: true, subtree: true });
+            } catch (_) {}
+        };
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initThemeUI);
+        } else {
+            initThemeUI();
+        }
     }
 
     connect(threadId, workflowInput = null) {
@@ -52,6 +108,20 @@ class SimpleSSEClient {
             this.clearButtons();
             this.hideVisualization();
             this.hideThinkingIndicator?.();
+            // Also reset theme status label immediately
+            try {
+                const labelEl = document.getElementById('theme-status-label');
+                if (labelEl) labelEl.textContent = 'Theme: (none)';
+                const themePanel = document.getElementById('theme-selection-panel');
+                const themeButtons = document.getElementById('theme-selection-buttons');
+                const optionsContainer = document.getElementById('options-container');
+                if (themePanel) themePanel.style.display = 'none';
+                if (themeButtons) themeButtons.innerHTML = '';
+                if (optionsContainer) optionsContainer.innerHTML = '';
+                this.currentOptions = null;
+                const chatInput = document.getElementById('chat-input');
+                if (chatInput) chatInput.value = '';
+            } catch (_) {}
         }
 
         let url = this.joinPath(this.basePath, `/sse/${threadId}`);
@@ -204,6 +274,33 @@ class SimpleSSEClient {
         // Handle messages array to update chat display (deduped)
         if (state.messages && Array.isArray(state.messages)) {
             this.updateChatDisplay(state.messages);
+        }
+
+        // Update theme status label if selected_theme provided
+        if (Object.prototype.hasOwnProperty.call(state, 'selected_theme')) {
+            try {
+                const labelEl = document.getElementById('theme-status-label');
+                let labelText = 'Theme: (none)';
+                if (state.selected_theme) {
+                    const df = JSON.parse(state.selected_theme);
+                    if (Array.isArray(df) && df.length > 0) {
+                        const lab = df[0].labl || df[0].label || null;
+                        const code = df[0].ent_id || df[0].id || null;
+                        if (lab && code) labelText = `Theme: ${lab}`;
+                        else if (lab) labelText = `Theme: ${lab}`;
+                        else if (code) labelText = `Theme: ${code}`;
+                    } else if (df && typeof df === 'object') {
+                        const lab = df.labl || df.label || null;
+                        const code = df.ent_id || df.id || null;
+                        if (lab && code) labelText = `Theme: ${lab}`;
+                        else if (lab) labelText = `Theme: ${lab}`;
+                        else if (code) labelText = `Theme: ${code}`;
+                    }
+                }
+                if (labelEl) labelEl.textContent = labelText;
+            } catch (e) {
+                // no-op if parsing fails
+            }
         }
 
         // Update visualization if we have cube data
@@ -546,11 +643,20 @@ class SimpleSSEClient {
 
     // Helper: Show interrupt buttons
     showButtons(options) {
-        const container = document.getElementById('options-container');
+        // Determine target container: theme options go to theme panel; others to options-container
+        const hasThemeOptions = Array.isArray(options) && options.some(o => o.option_type === 'theme_query');
+        const themePanel = document.getElementById('theme-selection-panel');
+        const themeButtons = document.getElementById('theme-selection-buttons');
+        const optionsContainer = document.getElementById('options-container');
+        const container = hasThemeOptions && themeButtons ? themeButtons : optionsContainer;
         if (!container) return;
 
-        // Clear existing buttons
-        container.innerHTML = '';
+        // Clear appropriate container(s)
+        if (themeButtons) themeButtons.innerHTML = '';
+        if (!hasThemeOptions && optionsContainer) optionsContainer.innerHTML = '';
+
+        // Show/hide theme panel
+        if (themePanel) themePanel.style.display = hasThemeOptions ? 'block' : 'none';
 
         // Create new buttons
         options.forEach(option => {
@@ -609,8 +715,14 @@ class SimpleSSEClient {
                     this.sendSelection(selectionInput);
                 }
 
-                // Clear buttons after selection
-                this.clearButtons();
+                // Clear relevant buttons after selection
+                if (option.option_type === 'theme_query') {
+                    if (themeButtons) themeButtons.innerHTML = '';
+                    if (themePanel) themePanel.style.display = 'none';
+                    this.currentOptions = null;
+                } else {
+                    this.clearButtons();
+                }
             };
 
             container.appendChild(button);
@@ -661,9 +773,11 @@ class SimpleSSEClient {
     // Helper: Clear buttons
     clearButtons() {
         const container = document.getElementById('options-container');
-        if (container) {
-            container.innerHTML = '';
-        }
+        const themeButtons = document.getElementById('theme-selection-buttons');
+        const themePanel = document.getElementById('theme-selection-panel');
+        if (container) container.innerHTML = '';
+        if (themeButtons) themeButtons.innerHTML = '';
+        if (themePanel) themePanel.style.display = 'none';
         // Clear cached options when buttons are cleared
         this.currentOptions = null;
     }
