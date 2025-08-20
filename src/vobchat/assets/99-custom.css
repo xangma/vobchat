@@ -163,7 +163,29 @@
     cursor: pointer;
 }
 
+.theme-panel-clear {
+    border: 1px solid #e9ecef;
+    background: #f8f9fa;
+    color: #333;
+    font-size: 12px;
+    padding: 3px 8px;
+    border-radius: 12px;
+    cursor: pointer;
+    margin-right: auto; /* push title to the right spacing */
+    margin-left: 8px;
+}
+.theme-panel-clear:hover {
+    background: #e9ecef;
+}
+
 /* Add padding to the buttons/content area */
 #theme-selection-buttons {
     padding: 8px;
+}
+
+/* Selected theme highlight */
+.theme-option-btn.selected {
+    border-color: #0d6efd !important;
+    background-color: #0d6efd !important;
+    color: #fff !important;
 }

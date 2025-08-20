@@ -97,6 +97,12 @@ def create_chat_layout():
                                             children=[
                                                 html.Span("Select a theme"),
                                                 html.Button(
+                                                    "Clear",
+                                                    id="theme-panel-clear",
+                                                    n_clicks=0,
+                                                    className="theme-panel-clear"
+                                                ),
+                                                html.Button(
                                                     "×",
                                                     id="theme-panel-close",
                                                     n_clicks=0,

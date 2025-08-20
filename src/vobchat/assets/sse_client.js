@@ -42,6 +42,7 @@ class SimpleSSEClient {
             const panelEl = document.getElementById('theme-selection-panel');
             const statusEl = document.getElementById('theme-status');
             const closeEl = document.getElementById('theme-panel-close');
+            const clearEl = document.getElementById('theme-panel-clear');
 
             if (statusEl && !statusEl._themeHandlersAttached) {
                 statusEl._themeHandlersAttached = true;
@@ -69,7 +70,27 @@ class SimpleSSEClient {
                 });
             }
 
-            return Boolean(statusEl && statusEl._themeHandlersAttached && closeEl && closeEl._themeHandlersAttached);
+            if (clearEl && !clearEl._themeHandlersAttached) {
+                clearEl._themeHandlersAttached = true;
+                clearEl.addEventListener('click', (e) => {
+                    try { e.preventDefault(); e.stopPropagation(); } catch (_) {}
+                    // Optimistically update UI
+                    const labelEl = document.getElementById('theme-status-label');
+                    if (labelEl) labelEl.textContent = 'Theme: (none)';
+                    if (panelEl) panelEl.style.display = 'none';
+                    this.currentOptions = null;
+                    // Send RemoveTheme intent to backend
+                    if (this.threadId) {
+                        this.postWorkflowInput({
+                            last_intent_payload: { intent: 'RemoveTheme', arguments: { source: 'theme_panel' } }
+                        }).catch(err => console.error('SSE: Theme clear post failed', err));
+                    } else {
+                        console.warn('SSE: No active thread for theme clear request');
+                    }
+                });
+            }
+
+            return Boolean(statusEl && statusEl._themeHandlersAttached && closeEl && closeEl._themeHandlersAttached && clearEl && clearEl._themeHandlersAttached);
         };
 
         const initThemeUI = () => {
@@ -658,10 +679,25 @@ class SimpleSSEClient {
         // Show/hide theme panel
         if (themePanel) themePanel.style.display = hasThemeOptions ? 'block' : 'none';
 
+        // Read currently-selected theme id for highlighting
+        const getSelectedThemeId = () => {
+            try {
+                const st = this.placeStateCache?.selected_theme;
+                if (!st) return null;
+                const parsed = JSON.parse(st);
+                if (Array.isArray(parsed) && parsed.length > 0) return String(parsed[0].ent_id || parsed[0].id || '');
+                if (parsed && typeof parsed === 'object') return String(parsed.ent_id || parsed.id || '');
+            } catch (_) {}
+            return null;
+        };
+        const selectedThemeId = getSelectedThemeId();
+
         // Create new buttons
         options.forEach(option => {
             const button = document.createElement('button');
-            button.className = 'btn btn-outline-primary me-2 mb-2';
+            const isTheme = option.option_type === 'theme_query';
+            const isSelectedTheme = isTheme && selectedThemeId && String(option.value) === String(selectedThemeId);
+            button.className = `btn ${isSelectedTheme ? 'btn-primary theme-option-btn selected' : 'btn-outline-primary theme-option-btn'} me-2 mb-2`;
             button.textContent = option.label;
 
             // Apply unit type color if provided
