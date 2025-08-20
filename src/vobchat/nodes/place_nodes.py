@@ -50,6 +50,7 @@ from vobchat.state_schema import (
 from vobchat.tools import (
     find_units_by_postcode,
     find_places_by_name,
+    find_places_by_name_like,
     get_place_information,
 )
 from vobchat.utils.constants import UNIT_TYPES
@@ -216,6 +217,16 @@ def _disambiguate_place_name(
                 }
             )
             df = pd.read_json(io.StringIO(res_json), orient="records")
+            if df.empty:
+                # Fallback: fuzzy lookup using ILIKE to suggest nearby matches
+                fuzzy_json = find_places_by_name_like.invoke(
+                    {
+                        "place_name": place_name,
+                        "county": "0",
+                        "unit_type": "0",
+                    }
+                )
+                df = pd.read_json(io.StringIO(fuzzy_json), orient="records")
             place_entry["candidate_rows"] = df.to_dict("records")
         except Exception as e:
             logger.warning(f"Failed to look up place '{place_name}': {e}")
@@ -255,7 +266,7 @@ def _disambiguate_place_name(
                 except (ValueError, TypeError):
                     pass
         else:
-            # Multiple matches - need disambiguation
+            # Multiple matches (or fuzzy suggestions) - need disambiguation
             if sel is not None and isinstance(sel, int) and 0 <= sel < len(rows):
                 # User made a selection
                 r = rows[sel]
@@ -308,8 +319,14 @@ def _disambiguate_place_name(
                         except (ValueError, TypeError):
                             pass
 
+                # Tailor message: exact duplicates vs fuzzy suggestions
+                base_msg = (
+                    f"More than one **{place_name}** - which do you mean?"
+                    if any(r.get("g_place") == place_entry.get("g_place") for r in rows)
+                    else f"I couldn't find an exact match for '{place_name}'. Did you mean:"
+                )
                 interrupt_data = {
-                    "message": f"More than one **{place_name}** - which do you mean?",
+                    "message": base_msg,
                     "options": _make_options(rows, kind="place"),
                     "place_coordinates": place_coordinates,
                     "current_node": current_node,
@@ -392,7 +409,10 @@ def AddPlace_node(state: lg_State) -> Dict[str, Union[str, list, dict]] | Comman
 
     # 2️⃣  Add to state -----------------------------------------------------------
     plural = ", ".join(names)
-    msg = _append_ai(state, f"Okay – adding {plural}. Let me look them up…")
+    if polygon_ids:
+        msg = _append_ai(state, f"Added {plural}.")
+    else:
+        msg = _append_ai(state, f"Okay – adding {plural}. Let me look them up…")
 
     for i, nm in enumerate(names):
         gut = unit_types[i] if i < len(unit_types) else None

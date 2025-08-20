@@ -83,8 +83,10 @@ def update_polygon_selection(state: lg_State):
             # Collect selected place coordinates for zoom
             selected_place_coordinates = _collect_selected_place_coordinates(places)
 
-            # If no theme is selected yet, prompt the user to pick one for the selected units
-            if not state.get("selected_theme"):
+            # If there are selected places and no theme is selected yet,
+            # prompt the user to pick one for the selected units.
+            # Do not route to resolve_theme when there are no places, or when a theme already exists.
+            if places and not state.get("selected_theme"):
                 return Command(
                     goto="resolve_theme",
                     update={

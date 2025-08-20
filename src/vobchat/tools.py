@@ -361,6 +361,80 @@ def find_places_by_name(
 
 
 @tool
+def find_places_by_name_like(
+    place_name: Annotated[str, "Name (or part) of the place to search for"],
+    county: Annotated[str, "County code, default is '0'"] = "0",
+    unit_type: Annotated[str, "Unit type code, default is '0'"] = "0",
+    nation: Annotated[str, "Nation code, default is '0'"] = "0",
+    domain: Annotated[str, "Domain code, default is '0'"] = "0",
+    state: Annotated[str, "State code, default is '0'"] = "0",
+) -> str:
+    """
+    Fuzzy place lookup using ILIKE on place names. Returns similar columns as find_places_by_name.
+    """
+    types_tuple = (
+        tuple(UNIT_TYPES.keys()) if unit_type == "0" else (f"('{unit_type}')")
+    )
+    safe = (place_name or "").replace("'", "''")
+    query = f"""
+        SELECT
+            p.g_place,
+            p.g_name,
+            p.g_county,
+            p.g_nation,
+            p.g_domain,
+            p.g_state,
+            p.county_name,
+            p.nation_name,
+            p.domain_name,
+            p.state_name,
+            p.x_uk,
+            p.y_uk,
+            public.ST_Y(public.ST_Transform(p.g_point, 4326)) AS lat,
+            public.ST_X(public.ST_Transform(p.g_point, 4326)) AS lon,
+            array_agg(n.g_unit) AS g_unit,
+            array_agg(COALESCE(g.g_unit_type, 'NONE')) AS g_unit_type
+        FROM
+            g_place p
+        JOIN
+            g_name n ON p.g_place = n.g_place
+        LEFT JOIN
+            g_unit g ON n.g_unit = g.g_unit
+        WHERE
+        (g.g_unit_type IS NULL OR g.g_unit_type in {types_tuple})
+        AND n.g_name ILIKE UPPER('%{safe}%')
+        AND ({county}::integer = 0 OR p.g_county = {county}::integer)
+        AND ({nation}::integer = 0 OR p.g_nation = {nation}::integer)
+        AND ({domain}::integer = 0 OR p.g_domain = {domain}::integer)
+        AND ({state}::integer = 0 OR p.g_state = {state}::integer)
+        AND g.g_point_source = 'Own centroid'
+        AND p.g_point IS NOT NULL
+        GROUP BY
+            p.g_place,
+            p.g_name,
+            p.g_county,
+            p.g_nation,
+            p.g_domain,
+            p.g_state,
+            p.county_name,
+            p.nation_name,
+            p.domain_name,
+            p.state_name,
+            p.x_uk,
+            p.y_uk,
+            p.g_point
+        ORDER BY char_length(p.g_name) ASC
+        LIMIT 41;
+    """
+    logger.debug(f"[find_places_by_name_like] Running query:\n{query}")
+    dbtool = QuerySQLDataBaseTool(db=db)
+    res = dbtool.db._execute(query)
+    df = pd.DataFrame(res)
+    logger.debug(f"[find_places_by_name_like] Query returned: \n\n{df}")
+    return df.to_json(orient="records", force_ascii=False, default_handler=str)
+
+
+@tool
 def find_themes_for_unit(
     unit: Annotated[str, "unit identifier for the cube"],
 ) -> str:

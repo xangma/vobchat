@@ -692,6 +692,33 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
     # Possibly update long-term memory summary when history grows
     mem_update = _maybe_update_memory_summary(state)
 
+    # Single entry point fast-path: if this turn comes from a map click
+    # (explicit AddPlace/RemovePlace with source=map_click), bypass planner
+    # and route directly to the appropriate node.
+    try:
+        lip = state.get("last_intent_payload") or {}
+        lip_intent = (lip or {}).get("intent")
+        lip_args = dict((lip or {}).get("arguments") or {})
+        is_map_click = (
+            str(lip_args.get("source") or "").strip().lower() == "map_click"
+        )
+        if is_map_click and lip_intent in ("AddPlace", "RemovePlace"):
+            target = _intent_to_node(lip_intent)
+            if target:
+                logger.info(
+                    {
+                        "event": "map_click_bypass",
+                        "goto": target,
+                        "intent": lip_intent,
+                    }
+                )
+                return Command(
+                    goto=target,
+                    update={"last_intent_payload": lip, **(mem_update or {})},
+                )
+    except Exception:
+        pass
+
     if not user_text:
         logger.info(
             "conversational_agent_node: no messages and no UI intent → nothing to do"
@@ -1143,23 +1170,42 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
     plan_mut = [a for a in planner_actions if _is_mutating(a)]
     plan_non = [a for a in planner_actions if not _is_mutating(a)]
 
-    if plan_mut or sub_mut:
-        actions = _dedupe(plan_mut + sub_mut)[:MAX_ACTIONS]
+    # Heuristic: If PlaceInfo is present (subagent or planner non-mutating),
+    # and the only mutating proposal is AddPlace, prefer PlaceInfo.
+    def _is_intent(a, name: str) -> bool:
+        try:
+            return _intent_str(a) == name
+        except Exception:
+            return False
+
+    prefer_placeinfo = any(_is_intent(a, "PlaceInfo") for a in sub_non) or any(
+        _is_intent(a, "PlaceInfo") for a in plan_non
+    )
+    if prefer_placeinfo and plan_mut and all(
+        _is_intent(a, "AddPlace") for a in plan_mut
+    ) and not sub_mut:
+        chosen_pi = [a for a in sub_non if _is_intent(a, "PlaceInfo")]
+        if not chosen_pi:
+            chosen_pi = [a for a in plan_non if _is_intent(a, "PlaceInfo")]
+        actions = _dedupe(chosen_pi)[:MAX_ACTIONS]
     else:
-        # Prefer tool-backed non-mutating actions (like PlaceInfo) over a generic reply
-        if any(_is_tool_backed(a) for a in plan_non) or any(
-            _is_tool_backed(a) for a in sub_non
-        ):
-            preferred = [a for a in plan_non if _is_tool_backed(a)] + [
-                a for a in sub_non if _is_tool_backed(a)
-            ]
-            actions = _dedupe(preferred)[:MAX_ACTIONS]
-        elif reply:
-            actions = []
-        elif plan_non:
-            actions = _dedupe(plan_non)[:MAX_ACTIONS]
+        if plan_mut or sub_mut:
+            actions = _dedupe(plan_mut + sub_mut)[:MAX_ACTIONS]
         else:
-            actions = _dedupe(sub_non)[:MAX_ACTIONS]
+            # Prefer tool-backed non-mutating actions (like PlaceInfo) over a generic reply
+            if any(_is_tool_backed(a) for a in plan_non) or any(
+                _is_tool_backed(a) for a in sub_non
+            ):
+                preferred = [a for a in plan_non if _is_tool_backed(a)] + [
+                    a for a in sub_non if _is_tool_backed(a)
+                ]
+                actions = _dedupe(preferred)[:MAX_ACTIONS]
+            elif reply:
+                actions = []
+            elif plan_non:
+                actions = _dedupe(plan_non)[:MAX_ACTIONS]
+            else:
+                actions = _dedupe(sub_non)[:MAX_ACTIONS]
 
     # Normalize actions to plain payload dicts, order them, and cap to MAX_ACTIONS
     payloads: List[dict] = _actions_to_payloads(actions)

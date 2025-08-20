@@ -365,8 +365,8 @@ def create_workflow(lg_state: TypedDict):
             )
 
         # PRIORITY 5: If we have a current_node but no selection_idx, we're
-        # waiting for user input — do not restart (keeps long-running nodes
-        # in control until the user provides a button/index selection).
+        # waiting for user input — keep that node in control unless conditions
+        # make it stale. Handle special cases to avoid being stuck:
         if current_node:
             # Special-case: avoid looping back into resolve_place_and_unit when
             # there is nothing left to resolve (all places have g_unit set or
@@ -386,6 +386,20 @@ def create_workflow(lg_state: TypedDict):
             ):
                 logger.info(
                     "start_node: clearing stale resolve_place_and_unit pointer (all places resolved)"
+                )
+                return Command(
+                    goto="conversational_agent_node",
+                    update={"current_node": None, "selection_idx": None},
+                )
+            # Special-case: avoid being stuck in resolve_theme when a theme is
+            # already selected or when there are no places selected.
+            try:
+                theme_is_set = bool(state.get("selected_theme"))
+            except Exception:
+                theme_is_set = False
+            if current_node == "resolve_theme" and (theme_is_set or not places):
+                logger.info(
+                    "start_node: clearing stale resolve_theme pointer (theme set or no places)"
                 )
                 return Command(
                     goto="conversational_agent_node",

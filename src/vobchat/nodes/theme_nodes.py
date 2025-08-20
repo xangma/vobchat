@@ -339,6 +339,23 @@ def AddTheme_node(state: lg_State) -> dict | Command:
     # Extract theme query from intent
     theme_query = args.get("theme_query", "").strip()
 
+    # If a theme is already set and user didn't provide a new query,
+    # avoid routing into resolve_theme. Acknowledge current theme instead.
+    if not theme_query and state.get("selected_theme"):
+        try:
+            df = pd.read_json(io.StringIO(state["selected_theme"]), orient="records")
+            if not df.empty:
+                labl = df.iloc[0].get("labl")
+                code = df.iloc[0].get("ent_id")
+                if labl and code:
+                    msg = _append_ai(state, f"Theme is already set to {labl} ({code}).")
+                    return {"messages": [msg], "last_intent_payload": {}}
+        except Exception:
+            # Fall through if parsing fails
+            pass
+        msg = _append_ai(state, "A theme is already set.")
+        return {"messages": [msg], "last_intent_payload": {}}
+
     if theme_query:
         logger.info(f"AddTheme_node: Setting extracted_theme to '{theme_query}'")
         # Set extracted_theme and route to resolve_theme
