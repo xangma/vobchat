@@ -352,10 +352,11 @@ class PolygonCache:
             # Check if the cache is valid
             if cache_key in self._cache and self._is_cache_valid(self._cache[cache_key][1]):
                 return self._convert_to_gdf(self._cache[cache_key][0])
-            # Check if the feature IDs are already cached
-            if all(str(id) in self._features_by_id for id in feature_ids):
-                # Retrieve from cache
-                gdf = gpd.GeoDataFrame(list(self._features_by_id[id] for id in feature_ids))
+            # Check if the feature IDs are already cached (string keys)
+            if all(str(fid) in self._features_by_id for fid in feature_ids):
+                # Retrieve from cache using string keys consistently
+                rows = [self._features_by_id[str(fid)] for fid in feature_ids]
+                gdf = gpd.GeoDataFrame(rows)
                 gdf.set_index('g_unit', inplace=True, drop=False)
                 return gdf
 

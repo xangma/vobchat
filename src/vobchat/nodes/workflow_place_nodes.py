@@ -84,22 +84,41 @@ def update_polygon_selection(state: lg_State):
             selected_place_coordinates = _collect_selected_place_coordinates(places)
 
             # If there are selected places and no theme is selected yet,
-            # prompt the user to pick one for the selected units.
-            # Do not route to resolve_theme when there are no places, or when a theme already exists.
+            # prefer executing any queued intents (e.g., AddTheme) via start_node.
+            # Only directly route to resolve_theme when there is no queued action.
+            try:
+                queue = list(state.get("intent_queue", []) or [])
+            except Exception:
+                queue = []
             if places and not state.get("selected_theme"):
-                return Command(
-                    goto="resolve_theme",
-                    update={
-                        "units_needing_map_selection": [],
-                        "places": places,
-                        "selection_idx": None,
-                        "map_update_request": {
-                            "action": "update_map_selection",
-                            "places": state.get("places", []),
-                            "selected_place_coordinates": selected_place_coordinates,
+                if queue:
+                    return Command(
+                        goto="start_node",
+                        update={
+                            "units_needing_map_selection": [],
+                            "places": places,
+                            "selection_idx": None,
+                            "map_update_request": {
+                                "action": "update_map_selection",
+                                "places": state.get("places", []),
+                                "selected_place_coordinates": selected_place_coordinates,
+                            },
                         },
-                    },
-                )
+                    )
+                else:
+                    return Command(
+                        goto="resolve_theme",
+                        update={
+                            "units_needing_map_selection": [],
+                            "places": places,
+                            "selection_idx": None,
+                            "map_update_request": {
+                                "action": "update_map_selection",
+                                "places": state.get("places", []),
+                                "selected_place_coordinates": selected_place_coordinates,
+                            },
+                        },
+                    )
 
             # Otherwise, proceed back to the agent/start
             return Command(
