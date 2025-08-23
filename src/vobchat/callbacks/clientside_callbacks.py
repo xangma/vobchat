@@ -259,6 +259,21 @@ def register_simple_clientside_callbacks(app: Dash):
                 new_state.show_unselected = !new_state.show_unselected;
                 new_toggle_text = new_state.show_unselected ? "Hide unselected polygons" : "Show unselected polygons";
                 state_changed = true;
+
+                // Immediately refresh polygons to reflect visibility change
+                setTimeout(() => {
+                    try {
+                        const mapElement = document.getElementById('leaflet-map');
+                        const map = mapElement?._leaflet_map;
+                        if (map && window.polygonManagement && window.polygonManagement.updateMapWithBounds) {
+                            const bounds = map.getBounds();
+                            const yearRange = new_state.year_range ? { min: new_state.year_range[0], max: new_state.year_range[1] } : null;
+                            if (window.VOB_DEBUG) console.log('Toggle unselected: refreshing polygons. show_unselected =', new_state.show_unselected);
+                            window.polygonManagement.updateMapWithBounds(map, new_state.unit_types || ['MOD_REG'], bounds, new_state, yearRange)
+                                .catch(err => console.error('Toggle unselected: Error updating polygons:', err));
+                        }
+                    } catch (e) { /* no-op */ }
+                }, 0);
             }
 
             if (state_changed) {

@@ -144,7 +144,8 @@ def create_map_layout(assets_folder):
                                 'position': 'absolute',
                                 'top': '55px',
                                 'right': '10px',
-                                'zIndex': '1000'
+                                'zIndex': '1000',
+                                'display': 'none',  # Temporarily hidden per request
                             }
                         )
                     ]
