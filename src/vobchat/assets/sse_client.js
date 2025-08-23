@@ -308,12 +308,25 @@ class SimpleSSEClient {
                                 }
                             } catch (_) { }
                             const storeNow = window.vobUtils?.getMapState?.() || {};
-                            const unitTypes = window.vobUtils.getUnitTypes(map, this.placeStateCache, storeNow);
-                            const uniqueUnitTypes = Array.isArray(unitTypes) ? [...new Set(unitTypes)] : [];
+                            // Respect the currently active unit_types in map-state; fallback to last resolved place
+                            let unitTypes = Array.isArray(storeNow.unit_types) && storeNow.unit_types.length ? storeNow.unit_types : null;
+                            if (!unitTypes) {
+                                const allUTs = window.vobUtils.getUnitTypes(map, this.placeStateCache, storeNow);
+                                const uniqueAll = Array.isArray(allUTs) ? [...new Set(allUTs)] : [];
+                                let lastUT = null;
+                                try {
+                                    const places = Array.isArray(this.placeStateCache.places) ? this.placeStateCache.places : [];
+                                    for (let i = places.length - 1; i >= 0; i--) {
+                                        const p = places[i];
+                                        if (p && p.g_unit != null && p.g_unit_type) { lastUT = p.g_unit_type; break; }
+                                    }
+                                } catch (_) {}
+                                unitTypes = lastUT ? [lastUT] : uniqueAll;
+                            }
                             const yrRange = storeNow.year_range ? { min: storeNow.year_range[0], max: storeNow.year_range[1] } : null;
                             // Ensure next bbox fetch hydrates withTheme
                             try { if (window.polygonManagement._flags) window.polygonManagement._flags.forceNextHydration = true; } catch (_) {}
-                            window.polygonManagement.updateMapWithBounds(map, uniqueUnitTypes, map.getBounds(), Object.assign({}, storeNow, { unit_types: uniqueUnitTypes }), yrRange)
+                            window.polygonManagement.updateMapWithBounds(map, unitTypes, map.getBounds(), Object.assign({}, storeNow, { unit_types: unitTypes }), yrRange)
                                 .catch(() => { /* silent */ });
                         }
                     } catch (_) { }
@@ -599,13 +612,28 @@ class SimpleSSEClient {
             } catch (_) { }
             // Sync places + unit_types to map-state; hideout selection is derived elsewhere
             try {
-                const unitTypes = window.vobUtils.getUnitTypes(
-                    document.getElementById('leaflet-map')?._leaflet_map,
-                    { places: effectivePlaces },
-                    storeNow
-                );
-                const uniqueUnitTypes = Array.isArray(unitTypes) ? [...new Set(unitTypes)] : [];
-                window.vobUtils.syncMapState({ unit_types: uniqueUnitTypes, places: effectivePlaces });
+                const mapRef = document.getElementById('leaflet-map')?._leaflet_map;
+                const unitTypesAll = window.vobUtils.getUnitTypes(mapRef, { places: effectivePlaces }, storeNow);
+                const uniqueAll = Array.isArray(unitTypesAll) ? [...new Set(unitTypesAll)] : [];
+                // Prefer last resolved place's unit type for the active button state
+                let lastUT = null;
+                try {
+                    for (let i = (effectivePlaces || []).length - 1; i >= 0; i--) {
+                        const p = effectivePlaces[i];
+                        if (p && p.g_unit != null && p.g_unit_type) { lastUT = p.g_unit_type; break; }
+                    }
+                } catch (_) {}
+                const unit_types = lastUT ? [lastUT] : uniqueAll;
+                window.vobUtils.syncMapState({ unit_types, places: effectivePlaces });
+                // Refresh the layer now to reflect active unit type (clears other types from view)
+                try {
+                    if (mapRef && window.polygonManagement && window.polygonManagement.updateMapWithBounds) {
+                        const storeRef = window.vobUtils?.getMapState?.() || {};
+                        const yr = storeRef.year_range ? { min: storeRef.year_range[0], max: storeRef.year_range[1] } : null;
+                        window.polygonManagement.updateMapWithBounds(mapRef, unit_types, mapRef.getBounds(), Object.assign({}, storeRef, { unit_types }), yr)
+                            .catch(() => { /* silent */ });
+                    }
+                } catch (_) {}
             } catch (_) { }
  
             this.lastPlacesSig = this._placesSignature(effectivePlaces);
