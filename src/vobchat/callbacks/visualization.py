@@ -106,7 +106,10 @@ def register_simple_visualization_callbacks(app):
 
                                     # LangChain tool: invoke with a single input dict
                                     cubes_json = find_cubes_for_unit_theme.invoke(
-                                        {"g_unit": str(first_unit), "theme_id": str(ent_id)}
+                                        {
+                                            "g_unit": str(first_unit),
+                                            "theme_id": str(ent_id),
+                                        }
                                     )
                                     cubes_df = pd.read_json(
                                         io.StringIO(cubes_json), orient="records"
@@ -291,13 +294,19 @@ def register_simple_visualization_callbacks(app):
             cube_ids_all_str = [str(cid) for cid in cube_ids_all]
             if current_cube_selection and isinstance(current_cube_selection, list):
                 # Sanitize current selection and keep only valid string IDs
-                current_sanitized = [str(c) for c in current_cube_selection if c is not None]
-                current_sanitized = [c for c in current_sanitized if c in cube_ids_all_str]
+                current_sanitized = [
+                    str(c) for c in current_cube_selection if c is not None
+                ]
+                current_sanitized = [
+                    c for c in current_sanitized if c in cube_ids_all_str
+                ]
                 if current_sanitized:
                     cube_value = current_sanitized
                 else:
-                    cube_value = [str(best_cube)] if best_cube is not None else (
-                        cube_ids_all_str[:1] if cube_ids_all_str else []
+                    cube_value = (
+                        [str(best_cube)]
+                        if best_cube is not None
+                        else (cube_ids_all_str[:1] if cube_ids_all_str else [])
                     )
             else:
                 cube_value = (
@@ -426,9 +435,7 @@ def register_simple_visualization_callbacks(app):
                 return empty_chart("No valid data after filtering")
 
             # Create display names and plot
-            chart_data["display_name"] = (
-                chart_data["g_name"] + " - " + chart_data["measurement"]
-            )
+            chart_data["display_name"] = chart_data["measurement"]
 
             chart_data = chart_data.sort_values(["g_name", "measurement", "year"])
 
@@ -437,6 +444,7 @@ def register_simple_visualization_callbacks(app):
                 x="year",
                 y="value",
                 color="display_name",
+                symbol="g_name",  # Different marker per place
                 title="Historical Data Visualization",
                 markers=True,
             )
@@ -462,7 +470,7 @@ def register_simple_visualization_callbacks(app):
                 margin={"l": 50, "r": 50, "t": 80, "b": 50},
                 height=None,
                 autosize=True,
-                legend_title_text="Series",
+                legend_title_text="Series (marker = place)",
             )
 
             if (chart_data["value"].dropna() >= 0).all():
