@@ -4,9 +4,9 @@ window.map_leaflet = Object.assign({}, window.map_leaflet, {
         const withTheme = (context && context.hideout) ? (context.hideout.withTheme || []).map(String) : [];
         // Neutral greys used when no theme shading applies
         const GREY_FILL = '#9a9c9eff';
-        const NEUTRAL_FILL_OPACITY = 0.5;
-        const THEME_FILL_OPACITY = 0.5;
-        const SELECTED_FILL_OPACITY = 0.5;
+        const NEUTRAL_FILL_OPACITY = 0.0;
+        const THEME_FILL_OPACITY = 0.2;
+        const SELECTED_FILL_OPACITY = 0.7;
 
         const unitColors = {
             'CONSTITUENCY': 'green',
@@ -33,7 +33,7 @@ window.map_leaflet = Object.assign({}, window.map_leaflet, {
 
         if (isSelected) {
             // Strong highlight for selected polygons, but keep unit-type outline color
-            return { color: outlineColor, fillColor: 'red', fillOpacity: SELECTED_FILL_OPACITY, weight: 3 };
+            return { color: outlineColor, fillColor: outlineColor, fillOpacity: SELECTED_FILL_OPACITY, weight: 3 };
         }
         // Default: neutral grey; if feature has data for selected theme, shade by unit color
         const hasThemeData = Array.isArray(withTheme) && withTheme.includes(featureIdStr);
