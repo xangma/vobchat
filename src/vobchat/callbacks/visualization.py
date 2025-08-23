@@ -444,7 +444,7 @@ def register_simple_visualization_callbacks(app):
                 x="year",
                 y="value",
                 color="display_name",
-                symbol="g_name",  # Different marker per place
+                line_dash="g_name",  # Different marker per place
                 title="Historical Data Visualization",
                 markers=True,
             )
