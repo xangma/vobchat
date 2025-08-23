@@ -131,14 +131,7 @@ def register_simple_chat_callbacks(app, compiled_workflow):
         # Handle map clicks
         elif "map-click-add-trigger" in trigger and map_add_payload:
             logger.info(f"Map add click: {map_add_payload}")
-            places_from_client = []
-            try:
-                if isinstance(map_state, dict):
-                    places_from_client = map_state.get("places", []) or []
-            except Exception:
-                places_from_client = []
             workflow_input = {
-                "places": places_from_client,
                 "last_intent_payload": {
                     "intent": AssistantIntent.ADD_PLACE.value,
                     "arguments": {
@@ -154,14 +147,7 @@ def register_simple_chat_callbacks(app, compiled_workflow):
 
         elif "map-click-remove-trigger" in trigger and map_remove_payload:
             logger.info(f"Map remove click: {map_remove_payload}")
-            places_from_client = []
-            try:
-                if isinstance(map_state, dict):
-                    places_from_client = map_state.get("places", []) or []
-            except Exception:
-                places_from_client = []
             workflow_input = {
-                "places": places_from_client,
                 "last_intent_payload": {
                     "intent": AssistantIntent.REMOVE_PLACE.value,
                     "arguments": {

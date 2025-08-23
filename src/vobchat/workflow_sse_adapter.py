@@ -118,6 +118,10 @@ class WorkflowSSEAdapter:
         # --------------------------------------------------------------
         # Proactively signal that the assistant is working
         try:
+            # Track last UI state we actually sent in this run to avoid spamming
+            # identical snapshots (e.g., repeated {messages: [], places: []}).
+            import json as _json
+            last_ui_digest: str | None = None
             await simple_sse_manager.state(thread_id, {"llm_busy": True})
         except Exception:
             logger.debug("Could not send initial llm_busy state")
@@ -262,7 +266,14 @@ class WorkflowSSEAdapter:
                                 render_messages = state_serialized
                                 ui_state["messages"] = state_serialized
                         if ui_state:
-                            await simple_sse_manager.state(thread_id, ui_state)
+                            # Compute a digest to suppress duplicates within this run
+                            try:
+                                digest = _json.dumps(ui_state, sort_keys=True, ensure_ascii=False, default=str)
+                            except Exception:
+                                digest = str(ui_state)
+                            if digest != last_ui_digest:
+                                last_ui_digest = digest
+                                await simple_sse_manager.state(thread_id, ui_state)
                     except Exception:
                         continue
                     continue

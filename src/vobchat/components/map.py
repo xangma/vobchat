@@ -17,45 +17,10 @@ so it is available as a JS function referenced by the GeoJSON layer.
 import dash_bootstrap_components as dbc
 import dash_leaflet as dl
 from dash import html, dcc
-from dash_extensions.javascript import Namespace, assign
+from dash_extensions.javascript import Namespace
 from datetime import datetime
-import json
 from vobchat.utils.constants import UNIT_TYPES
 
-color_dict = {k: v['color'] for k, v in UNIT_TYPES.items()}
-
-style_function = f"""
-function(feature, context) {{
-    // Add a fallback for context or hideout if they're undefined
-    const sel = (context && context.hideout) ? context.hideout.selected || [] : [];
-
-    // Mapping unit types to outline colors:
-    const unitColors = {color_dict};
-
-    let unitType = feature.properties.g_unit_type || 'MOD_REG';
-    let outlineColor = unitColors[unitType] || 'black';
-
-    // Ensure consistent string comparison for feature ID matching
-    const featureIdStr = String(feature.id);
-    const isSelected = sel.includes(featureIdStr);
-
-    if (isSelected) {{
-        return {{
-            color: 'red',
-            fillColor: 'red',
-            fillOpacity: 0.5,
-            weight: 2
-        }};
-    }} else {{
-        return {{
-            color: outlineColor,
-            fillColor: 'transparent',
-            fillOpacity: 0.0,
-            weight: 2
-        }};
-    }}
-}}
-"""
 
 
 def create_map_layout(assets_folder):

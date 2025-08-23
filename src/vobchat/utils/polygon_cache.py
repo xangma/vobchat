@@ -139,7 +139,8 @@ class PolygonCache:
         bbox_geom: Polygon,
         start_year: Optional[int] = None,
         end_year: Optional[int] = None,
-        exclude_ids: Optional[List[str]] = None
+        exclude_ids: Optional[List[str]] = None,
+        theme_id: Optional[str] = None
     ) -> pd.DataFrame:
         """
         Query the database for polygons of a specific unit type within a bounding box.
@@ -177,6 +178,21 @@ class PolygonCache:
         # Create a WKT representation of the bounding box for the spatial filter
         bbox_wkt = bbox_geom_proj.wkt
         user_lang = 'eng'
+        # Theme availability expression: mark units that have any data for the theme
+        theme_select = "0 AS has_theme"
+        if theme_id:
+            safe_theme = str(theme_id).replace("'", "''")
+            theme_select = f"""
+                CASE WHEN EXISTS (
+                    SELECT 1
+                    FROM hgis.g_data d
+                    JOIN hgis.g_data_map m ON d.cellref = m.cellref
+                    JOIN hgis.g_data_ent nc ON nc.ent_id = m.ncuberef
+                    WHERE d.g_unit = g.g_unit
+                      AND nc.theme_ID = '{safe_theme}'
+                ) THEN 1 ELSE 0 END AS has_theme
+            """
+
         query = f"""
         WITH unit_name AS (
             SELECT g_unit,
@@ -199,7 +215,8 @@ class PolygonCache:
                 g.g_unit_type,
                 un.g_name                      AS unit_name,
                 util.get_start_year(g.g_duration) AS start_year,
-                util.get_end_year(g.g_duration)   AS end_year
+                util.get_end_year(g.g_duration)   AS end_year,
+                {theme_select}
         FROM    hgis.g_foot g
         JOIN    unit_name  un
             ON un.g_unit = g.g_unit AND un.rn = 1
@@ -226,7 +243,8 @@ class PolygonCache:
         bbox_geom: Polygon,
         start_year: Optional[int] = None,
         end_year: Optional[int] = None,
-        exclude_ids: Optional[List[str]] = None
+        exclude_ids: Optional[List[str]] = None,
+        theme_id: Optional[str] = None
     ) -> gpd.GeoDataFrame:
         """
         Get polygons within a bounding box, filtered by unit type and optional year range.
@@ -243,7 +261,7 @@ class PolygonCache:
             gpd.GeoDataFrame: GeoDataFrame containing polygons within the bounding box
         """
         # Query database for features in this bbox, excluding ones the client already has
-        df = self._query_database_by_bbox(unit_type, bbox_geom, start_year, end_year, exclude_ids)
+        df = self._query_database_by_bbox(unit_type, bbox_geom, start_year, end_year, exclude_ids, theme_id)
 
         if df.empty:
             logger.info(f"No features found for {unit_type} in the specified bounding box")

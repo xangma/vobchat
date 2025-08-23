@@ -26,7 +26,8 @@ def register_bounding_box_routes(server):
         end_year: Optional[int] = None,
         exclude_ids: Optional[List[str]] = None,
         client_has_data: bool = False,
-        request_id: str = ""
+        request_id: str = "",
+        theme_id: Optional[str] = None,
     ):
         """
         Process a bounding box request regardless of HTTP method (GET or POST).
@@ -59,6 +60,7 @@ def register_bounding_box_routes(server):
             
             # Initialize the result GeoJSON
             result_geojson = {"type": "FeatureCollection", "features": []}
+            with_theme_units: set[str] = set()
             total_features = 0
             
             # Get polygons for each unit type and filter by bounding box
@@ -69,7 +71,7 @@ def register_bounding_box_routes(server):
                     continue
                     
                 # Get polygons from the cache with bounding box filter
-                gdf = polygon_cache.get_polygons_by_bbox(unit_type, bbox_geom, start_year, end_year, exclude_ids)
+                gdf = polygon_cache.get_polygons_by_bbox(unit_type, bbox_geom, start_year, end_year, exclude_ids, theme_id)
                 
                 # Skip if no polygons found for this unit type
                 if gdf.empty:
@@ -77,11 +79,25 @@ def register_bounding_box_routes(server):
                     
                 # Convert to GeoJSON and merge with result
                 geojson = json.loads(gdf.to_json())
+                # Collect withTheme units from has_theme property when theme_id provided
+                if theme_id:
+                    try:
+                        for f in geojson.get("features", []):
+                            props = f.get("properties", {})
+                            has_theme = props.get("has_theme")
+                            # Feature id is set to g_unit in polygon_cache
+                            if has_theme in (True, 1, "1") and f.get("id") is not None:
+                                with_theme_units.add(str(f.get("id")))
+                    except Exception:
+                        logger.warning("Failed to collect withTheme units from bbox response", exc_info=True)
                 result_geojson["features"].extend(geojson["features"])
                 total_features += len(geojson["features"])
                 
             logger.info(f"Request {request_id}: Returned {total_features} polygons within bounding box")
             
+            if theme_id:
+                # Attach distinct unit IDs that have theme data
+                result_geojson["withThemeUnits"] = sorted(list(with_theme_units))
             return jsonify(result_geojson)
             
         except Exception as e:
@@ -144,6 +160,7 @@ def register_bounding_box_routes(server):
                 end_year = data.get('end_year')
                 exclude_ids = data.get('exclude_ids', [])
                 request_id = data.get('request_id', '')
+                theme_id = data.get('theme_id')
                 client_has_data = data.get('client_has_data', False)
                 
                 # Process the request using the shared function
@@ -154,7 +171,8 @@ def register_bounding_box_routes(server):
                     end_year=end_year,
                     exclude_ids=exclude_ids,
                     client_has_data=client_has_data,
-                    request_id=request_id
+                    request_id=request_id,
+                    theme_id=theme_id
                 )
                 
             except Exception as e:
@@ -194,10 +212,11 @@ def register_bounding_box_routes(server):
                 # Get exclude_ids parameter - these are IDs the client already has
                 exclude_ids_str = request.args.get('exclude_ids')
                 exclude_ids = exclude_ids_str.split(',') if exclude_ids_str else []
-                
+
                 # Add a client_cache parameter to track if client already has data
                 client_has_data = request.args.get('client_has_data', 'false').lower() == 'true'
                 request_id = request.args.get('request_id', '')
+                theme_id = request.args.get('theme_id')
                 
                 # Process the request using the shared function
                 return process_bbox_request(
@@ -207,7 +226,8 @@ def register_bounding_box_routes(server):
                     end_year=end_year,
                     exclude_ids=exclude_ids,
                     client_has_data=client_has_data,
-                    request_id=request_id
+                    request_id=request_id,
+                    theme_id=theme_id
                 )
                 
             except Exception as e:

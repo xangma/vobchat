@@ -22,55 +22,32 @@
 (() => {
   'use strict';
 
-  /* ──────────────────────────────────────────────────────────
-     Constants + simple utilities
-     ─────────────────────────────────────────────────────── */
   const LOG_PREFIX = '%c[polygon‑mgmt]';
   const LOG_STYLE = 'color:#4E9F3D;font-weight:600';
   const DEBOUNCE_MS = 250;
   const ZOOM_PADDING = [20, 20];
   const MAX_ZOOM = 14;
-
-  const LOG = (...args) => console.log(LOG_PREFIX, LOG_STYLE, ...args);
-  const WARN = (...args) => console.warn(LOG_PREFIX, LOG_STYLE, ...args);
-  const ERR = (...args) => console.error(LOG_PREFIX, LOG_STYLE, ...args);
-
-  const debounce = (fn, ms = DEBOUNCE_MS) => {
-    let t;
-    return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
-  };
-
-  /**
-   * Extract selected polygon IDs from places array (single source of truth).
-   * Mirrors the backend helper function get_selected_units().
-   */
-  const getSelectedPolygonsFromPlaces = (mapState) => {
-    const places = mapState?.places || [];
-    return places
-      .filter(place => place.g_unit !== null && place.g_unit !== undefined)
-      .map(place => String(place.g_unit));
-  };
-
-  /**
-   * Grab the JSON payload of a `dcc.Store(id="map-state")` component.
-   * Dash renders the store as a <script type="application/json"> element
-   * whose textContent holds the serialised JSON.
-   */
-  const getMapState = () => {
-    try {
-      const el = document.getElementById('map-state');
-      if (!el) return null;
-      const txt = (el.textContent || '').trim();
-      return txt ? JSON.parse(txt) : null;
-    } catch (e) {
-      WARN('Could not parse map‑state store', e);
-      return null;
+  const isDebug = () => (typeof window !== 'undefined' && !!window.VOB_DEBUG);
+  const LOG = (...args) => { if (isDebug()) console.log(LOG_PREFIX, LOG_STYLE, ...args); };
+  const TRACE = (label, payload = undefined) => {
+    // Keep TRACE but do not print stack to reduce noise
+    if (!isDebug()) return;
+    if (payload !== undefined) {
+      console.log(LOG_PREFIX, LOG_STYLE, `${label}`, payload);
+    } else {
+      console.log(LOG_PREFIX, LOG_STYLE, `${label}`);
     }
   };
+  const ERR = (...args) => console.error(LOG_PREFIX, LOG_STYLE, ...args);
+  const debounce = (fn, ms = DEBOUNCE_MS) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 
-  /* ──────────────────────────────────────────────────────────
-     Runtime flags & in‑memory cache
-     ─────────────────────────────────────────────────────── */
+  const getSelectedPolygonsFromPlaces = (mapState) =>
+    (mapState?.places || [])
+      .filter(p => p.g_unit !== null && p.g_unit !== undefined)
+      .map(p => String(p.g_unit));
+
+  const getSelectedThemeId = () => window.vobUtils?.getSelectedThemeId?.() || null;
+
   const flags = {
     listenersAttached: false,
     attachedMapId: null,
@@ -81,7 +58,6 @@
     suppressedMoveendCount: 0,
     suppressedThisZoomCount: 0,
     zoomSource: null,
-    // instrumentation
     zoomSessionId: null,
     zoomSessionsStarted: 0,
     zoomSessionsCompleted: 0,
@@ -90,16 +66,10 @@
     moveendProcessedCount: 0,
     fetchByIdsCalls: 0,
     updateByBoundsCalls: 0,
-    refreshStylesCalls: 0
+    refreshStylesCalls: 0,
+    forceNextHydration: false
   };
 
-  /**
-   * Cache structure:
-   *   featureById:        { [id]: GeoJSONFeature }
-   *   featuresByUnitType: { [unitType]: Set<id> }
-   *   pendingRequests:    { [cacheKey]: Promise }
-   *   geojsonLayer:       L.GeoJSON | null
-   */
   const cache = {
     featureById: Object.create(null),
     featuresByUnitType: Object.create(null),
@@ -107,182 +77,152 @@
     geojsonLayer: null
   };
 
-  /* ──────────────────────────────────────────────────────────
-     Internal helpers – mostly pure functions
-     ─────────────────────────────────────────────────────── */
-
   const getBoundsKey = bounds => {
-    const sw = bounds.getSouthWest();
-    const ne = bounds.getNorthEast();
+    const sw = bounds.getSouthWest(); const ne = bounds.getNorthEast();
     return [sw.lng, sw.lat, ne.lng, ne.lat].map(v => v.toFixed(4)).join('_');
   };
-
   const getCachedFeatureIds = unitTypes => {
     const ids = new Set();
-    unitTypes.forEach(t => {
-      const set = cache.featuresByUnitType[t];
-      if (set) set.forEach(id => ids.add(id));
-    });
+    unitTypes.forEach(t => { const set = cache.featuresByUnitType[t]; if (set) set.forEach(id => ids.add(id)); });
     return [...ids];
   };
 
   const findGeoJSONLayer = map => {
-    if (cache.geojsonLayer && map.hasLayer(cache.geojsonLayer)) return cache.geojsonLayer;
-
-    // Dash usually injects the GeoJSON layer with id="geojson-layer"
+    TRACE('findGeoJSONLayer(): enter', { mapId: map?._leaflet_id, haveCached: !!cache.geojsonLayer });
+    if (cache.geojsonLayer && map?.hasLayer(cache.geojsonLayer)) return cache.geojsonLayer;
     const el = document.getElementById('geojson-layer');
-    console.log('findGeoJSONLayer:', el, map._layers);
-    if (el && map._layers[el._leaflet_id]) {
-      cache.geojsonLayer = map._layers[el._leaflet_id];
-      return cache.geojsonLayer;
-    }
-
-    // Fallback: iterate layers to find a FeatureGroup with style / onEachFeature
+    if (el && map?._layers?.[el._leaflet_id]) { cache.geojsonLayer = map._layers[el._leaflet_id]; return cache.geojsonLayer; }
     let found = null;
-    map.eachLayer(l => {
-      if (l instanceof L.FeatureGroup && (l.options?.style || l.options?.onEachFeature)) found = l;
-    });
+    map?.eachLayer(l => { if (l instanceof L.FeatureGroup && (l.options?.style || l.options?.onEachFeature)) found = l; });
     cache.geojsonLayer = found;
-    console.log('findGeoJSONLayer: found', found);
+    TRACE('findGeoJSONLayer(): resolved', { mapId: map?._leaflet_id, found: !!found, layerId: found?._leaflet_id });
     return found;
   };
 
-  /*
-   * Style refresh helper – applies style function with current selection.
-   */
-  const refreshLayerStyles = (layer, selected) => {
+  const refreshLayerStyles = (layer) => {
+    if (window.VOB_TRACE?.layer) {
+      const ids = (layer?.options?.hideout?.selected || []).map(String).slice(0, 5);
+      console.log('[layer] refresh', { ok: !!layer, children: layer?._layers ? Object.keys(layer._layers).length : 0, sel: (layer?.options?.hideout?.selected || []).length, ids });
+    }
     if (!layer || !layer._layers) return;
-    const sel = Array.isArray(selected) ? selected : [];
-    const ctx = { hideout: { selected: sel } };
+    // No local hydration of selection. Hideout is driven solely by the Dash callback.
+    const existingHideout = (layer.options && layer.options.hideout) ? layer.options.hideout : {};
+    const ctx = { hideout: existingHideout };
     const styleFn = layer.options?.style || window.map_leaflet?.style_function;
     if (!styleFn) { ERR('No style function found to refresh layer styles'); return; }
     flags.refreshStylesCalls += 1;
-    LOG(`refreshLayerStyles (#${flags.refreshStylesCalls}) — selected=${sel.length}`);
-    Object.values(layer._layers).forEach(l => l.feature && l.setStyle(styleFn(l.feature, ctx)));
+    Object.values(layer._layers).forEach(l => {
+      if (l.feature) {
+        try { l.setStyle(styleFn(l.feature, ctx)); } catch (e) { ERR('setStyle failed', e); }
+      }
+    });
+    if (window.VOB_TRACE?.layer) console.log('[layer] refresh.done', { calls: flags.refreshStylesCalls, sel: (layer.options?.hideout?.selected || []).length });
   };
 
-  /* ──────────────────────────────────────────────────────────
-     Map event listeners
-     ─────────────────────────────────────────────────────── */
+  // Selection is managed exclusively by Dash hideout updates; no local mirroring here.
 
   const attachMapEventListeners = map => {
     if (flags.listenersAttached && flags.attachedMapId === map._leaflet_id) return;
     if (!map?.on) { ERR('Invalid map object passed to attachMapEventListeners'); return; }
 
-    LOG('Attaching map listeners');
     flags.attachedMapId = map._leaflet_id;
+    LOG('attachMapEventListeners(): attaching', { mapId: flags.attachedMapId });
+    map.off('zoomend').off('moveend');
 
-    map.off('zoomend').off('moveend'); // remove any previous handlers
-
-    /* zoomend */
     map.on('zoomend', () => {
-      LOG('zoomend');
+      TRACE('event: zoomend', { programmaticZoomAnimating: flags.programmaticZoomAnimating, programmaticZoomInProgress: flags.programmaticZoomInProgress, zoom: map.getZoom?.() });
       if (flags.programmaticZoomAnimating || flags.programmaticZoomInProgress) {
-        // End of animation: keep InProgress true until the following moveend,
-        // so that moveend gets suppressed once.
         flags.programmaticZoomAnimating = false;
-        flags.zoomendProgrammaticCount += 1;
-        LOG(`zoomend (programmatic) — session=${flags.zoomSessionId} source=${flags.zoomSource} count=${flags.zoomendProgrammaticCount}; awaiting moveend to clear suppression`);
-        // Notify Dash cleanup callback via hidden store
-        window.dash_clientside?.set_props?.('zoom-cleanup-trigger-store', {
-          data: { ts: Date.now(), zoom_completed: true }
-        });
-        return; // swallow event
-      }
-      // User-driven zoom end: trigger a moveend processing tick
-      flags.zoomendUserCount += 1;
-      flags.lastZoomEnd = Date.now();
-      window.dash_clientside?.set_props?.('map-moveend-trigger', { data: Date.now() });
-    });
-
-    /* moveend (debounced) */
-    map.on('moveend', debounce(() => {
-      // Suppress the first moveend after a programmatic zoom, then clear flag
-      if (flags.programmaticZoomAnimating || flags.programmaticZoomInProgress) {
-        flags.suppressedMoveendCount += 1;
-        flags.suppressedThisZoomCount += 1;
-        LOG(`moveend (suppressed during programmatic zoom) — session=${flags.zoomSessionId} source=${flags.zoomSource} thisZoom=${flags.suppressedThisZoomCount} total=${flags.suppressedMoveendCount}`);
-        flags.programmaticZoomInProgress = false;
-        flags.programmaticZoomAnimating = false;
-        flags.zoomSessionsCompleted += 1;
-        LOG(`programmatic zoom suppression cleared — session=${flags.zoomSessionId} source=${flags.zoomSource} suppressedThisZoom=${flags.suppressedThisZoomCount} sessions started=${flags.zoomSessionsStarted} completed=${flags.zoomSessionsCompleted}`);
-        flags.zoomSource = null;
-        flags.suppressedThisZoomCount = 0;
-        flags.zoomSessionId = null;
+        window.dash_clientside?.set_props?.('zoom-cleanup-trigger-store', { data: { ts: Date.now(), zoom_completed: true } });
+        LOG('zoomend: programmatic cleanup');
         return;
       }
-      LOG('moveend');
-      flags.moveendProcessedCount += 1;
-      LOG(`moveend processed (#${flags.moveendProcessedCount})`);
+      flags.lastZoomEnd = Date.now();
       window.dash_clientside?.set_props?.('map-moveend-trigger', { data: Date.now() });
-    }));
+      LOG('zoomend: user', { zoom: map.getZoom?.() });
+    });
 
+    map.on('moveend', debounce(() => {
+      TRACE('event: moveend', { programmaticZoomAnimating: flags.programmaticZoomAnimating, programmaticZoomInProgress: flags.programmaticZoomInProgress, center: map.getCenter?.() });
+      if (flags.programmaticZoomAnimating || flags.programmaticZoomInProgress) {
+        flags.programmaticZoomInProgress = false;
+        flags.programmaticZoomAnimating = false;
+        flags.zoomSource = null;
+        LOG('moveend: suppressed (programmatic)');
+        return;
+      }
+      window.dash_clientside?.set_props?.('map-moveend-trigger', { data: Date.now() });
+      LOG('moveend: user');
+    }));
     flags.listenersAttached = true;
   };
 
-  /* ──────────────────────────────────────────────────────────
-     Feature fetching (by bounds and by IDs)
-     ─────────────────────────────────────────────────────── */
+  const hydratedBboxes = new Set();
 
   const fetchPolygonsByBounds = (unitTypes, bounds, cachedIds, yearRange) => {
-    LOG(`fetchPolygonsByBounds — unitTypes=${unitTypes.join(',')} cachedIds=${cachedIds.length} yearRange=${yearRange ? yearRange.min+'-'+yearRange.max : 'none'}`);
+    if (window.VOB_TRACE?.layer) console.log('[fetch] bbox.enter', { types: unitTypes, cached: (cachedIds || []).length, yr: yearRange || null });
     if (!unitTypes.length) return Promise.reject('No unitTypes supplied');
     const [sw, ne] = [bounds.getSouthWest(), bounds.getNorthEast()];
     const boundsObj = { minX: sw.lng, minY: sw.lat, maxX: ne.lng, maxY: ne.lat };
-
     const cacheKey = `${unitTypes.join(',')}|${getBoundsKey(bounds)}|${yearRange?.min ?? ''}-${yearRange?.max ?? ''}`;
     if (cache.pendingRequests[cacheKey]) return cache.pendingRequests[cacheKey];
 
-    // Use POST if we have many cached IDs to avoid URL length limits
-    // Estimate URL length: base URL + params + exclude_ids
-    const excludeIdsParam = cachedIds.length > 0 ? cachedIds.join(',') : '';
-    const estimatedUrlLength = 100 + excludeIdsParam.length; // rough estimate
-    const usePost = estimatedUrlLength > 3000; // Leave some margin under the 4094 limit
+    const themeId = getSelectedThemeId();
+    const hydKey = `${unitTypes.join(',')}|${getBoundsKey(bounds)}|${yearRange?.min ?? ''}-${yearRange?.max ?? ''}|${themeId || 'none'}`;
+    const forced = !!flags.forceNextHydration;
+    flags.forceNextHydration = false;
+    const needsHydration = Boolean(themeId) && (!hydratedBboxes.has(hydKey) || forced);
+    const excludeIdsForRequest = needsHydration ? [] : cachedIds;
+    const excludeIdsParam = excludeIdsForRequest.length > 0 ? excludeIdsForRequest.join(',') : '';
+    const estimatedUrlLength = 100 + excludeIdsParam.length;
+    const usePost = estimatedUrlLength > 3000 || Boolean(themeId);
+    if (window.VOB_TRACE?.layer) console.log('[fetch] bbox.plan', { post: usePost ? 1 : 0, hydrate: needsHydration ? 1 : 0, ex: excludeIdsForRequest.length });
 
     let fetchPromise;
     const url = new URL('/api/polygons/bbox', window.location.origin);
 
     if (usePost) {
-      // Use POST with JSON body for large exclude_ids lists
       const postData = {
         unit_types: unitTypes,
         bounds: boundsObj,
-        exclude_ids: cachedIds,
-        ...(yearRange && { start_year: yearRange.min, end_year: yearRange.max })
+        exclude_ids: excludeIdsForRequest,
+        ...(yearRange && { start_year: yearRange.min, end_year: yearRange.max }),
+        ...(themeId && { theme_id: themeId })
       };
-
-      fetchPromise = fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify(postData)
-      });
+      fetchPromise = fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }, body: JSON.stringify(postData) });
     } else {
-      // Use GET for smaller requests
       Object.entries(boundsObj).forEach(([k, v]) => url.searchParams.set(k, v));
       url.searchParams.set('unit_types', unitTypes.join(','));
-      if (cachedIds.length) url.searchParams.set('exclude_ids', excludeIdsParam);
-      if (yearRange) {
-        url.searchParams.set('start_year', yearRange.min);
-        url.searchParams.set('end_year', yearRange.max);
-      }
-
+      if (excludeIdsForRequest.length) url.searchParams.set('exclude_ids', excludeIdsParam);
+      if (yearRange) { url.searchParams.set('start_year', yearRange.min); url.searchParams.set('end_year', yearRange.max); }
+      if (themeId) url.searchParams.set('theme_id', themeId);
       fetchPromise = fetch(url, { headers: { Accept: 'application/json' } });
     }
 
-    const startedAt = Date.now();
     const p = fetchPromise
       .then(r => r.ok ? r.json() : r.text().then(t => Promise.reject(`${r.status} ${t}`)))
       .then(data => {
+        LOG('fetchPolygonsByBounds(): response', { features: Array.isArray(data?.features) ? data.features.length : 0, withThemeUnits: Array.isArray(data?.withThemeUnits) ? data.withThemeUnits.length : 0 });
         if (!Array.isArray(data?.features)) return { type: 'FeatureCollection', features: [] };
         data.features.forEach(f => {
           cache.featureById[f.id] = f;
-          const t = f.properties?.g_unit_type;
-          if (t) (cache.featuresByUnitType[t] ||= new Set()).add(f.id);
+          const t = f.properties?.g_unit_type; if (t) (cache.featuresByUnitType[t] ||= new Set()).add(f.id);
         });
-        LOG(`fetchPolygonsByBounds: received ${data.features.length} features in ${Date.now()-startedAt}ms`);
+        try {
+          const mapElement = document.getElementById('leaflet-map');
+          const map = mapElement?._leaflet_map;
+          const layer = findGeoJSONLayer(map);
+          if (layer && layer.options) {
+            const prev = layer.options.hideout || {};
+            const wt = Array.isArray(data.withThemeUnits) ? data.withThemeUnits.map(String) : [];
+            if (wt.length) {
+              const merged = Array.from(new Set([...(prev.withTheme || []).map(String), ...wt]));
+              layer.options.hideout = Object.assign({}, prev, { withTheme: merged });
+              if (needsHydration) hydratedBboxes.add(hydKey);
+              if (window.VOB_TRACE?.layer) console.log('[fetch] bbox.withTheme', { prev: (prev.withTheme || []).length, add: wt.length, merged: merged.length });
+            }
+          }
+        } catch (_) { }
         return data;
       })
       .finally(() => delete cache.pendingRequests[cacheKey]);
@@ -292,13 +232,11 @@
   };
 
   const fetchPolygonsByIds = (map, mapState, unitType, ids, yearRange) => {
-    flags.fetchByIdsCalls += 1;
-    LOG(`fetchPolygonsByIds call #${flags.fetchByIdsCalls} — unitType=${unitType} ids=${ids?.length}`);
+    if (window.VOB_TRACE?.layer) console.log('[fetch] ids.enter', { type: unitType, ids: (ids || []).length, yr: yearRange || null });
     if (!ids.length) return Promise.resolve({ type: 'FeatureCollection', features: [] });
-
     const missing = ids.filter(id => !cache.featureById[id]);
     const existing = ids.filter(id => cache.featureById[id]).map(id => cache.featureById[id]);
-    LOG(`fetchPolygonsByIds: have=${ids.length - missing.length} missing=${missing.length}`);
+    if (window.VOB_TRACE?.layer) console.log('[fetch] ids.split', { miss: missing.length, have: existing.length });
 
     const fetchPromise = !missing.length ? Promise.resolve({ features: [] }) : (() => {
       const url = new URL('/api/polygons/ids', window.location.origin);
@@ -310,12 +248,11 @@
     })();
 
     return fetchPromise.then(({ features = [] }) => {
-      // merge newly fetched into cache
+      if (window.VOB_TRACE?.layer) console.log('[fetch] ids.fetched', { features: features.length });
       features.forEach(f => {
         cache.featureById[f.id] = f;
         (cache.featuresByUnitType[f.properties?.g_unit_type] ||= new Set()).add(f.id);
       });
-      // Combine existing-cached and newly fetched, de-duplicate by ID
       const combined = [...existing, ...features];
       const byId = Object.create(null);
       combined.forEach(f => { if (f && f.id != null) byId[String(f.id)] = f; });
@@ -323,153 +260,101 @@
 
       const layer = findGeoJSONLayer(map);
       if (layer) {
-        // Remove any existing layer entries for the IDs we are about to add
         const idsToReplace = new Set(uniqueFeatures.map(f => String(f.id)));
         if (layer._layers) {
           Object.values(layer._layers).forEach(l => {
-            if (l?.feature?.id != null && idsToReplace.has(String(l.feature.id))) {
-              layer.removeLayer(l);
-            }
+            if (l?.feature?.id != null && idsToReplace.has(String(l.feature.id))) layer.removeLayer(l);
           });
         }
-
-        // Add unique features
-        if (uniqueFeatures.length) {
-          layer.addData({ type: 'FeatureCollection', features: uniqueFeatures });
-        }
+        if (uniqueFeatures.length) layer.addData({ type: 'FeatureCollection', features: uniqueFeatures });
+        if (window.VOB_TRACE?.layer) console.log('[layer] addData', { replaced: idsToReplace.size, children: Object.keys(layer._layers || {}).length });
       }
-      const selectedPolygons = getSelectedPolygonsFromPlaces(mapState);
-      refreshLayerStyles(layer, selectedPolygons);
-      LOG(`fetchPolygonsByIds: added=${uniqueFeatures.length} layerSize=${Object.keys(layer?._layers || {}).length}`);
+
+      // Selection is now driven solely by Dash hideout callback; just refresh styles
+      refreshLayerStyles(layer);
       return { type: 'FeatureCollection', features: uniqueFeatures };
     });
   };
 
-  /* ──────────────────────────────────────────────────────────
-     Map update orchestrator
-     ─────────────────────────────────────────────────────── */
-
   const updateMapWithBounds = (map, unitTypes, bounds, mapState, yearRange) => {
-    flags.updateByBoundsCalls += 1;
-    const key = getBoundsKey(bounds);
-    LOG(`updateMapWithBounds call #${flags.updateByBoundsCalls} — unitTypes=${unitTypes.join(',')} bounds=${key}`);
+    if (window.VOB_TRACE?.layer) console.log('[layer] update.enter', { types: unitTypes, yr: yearRange || null });
     const layer = findGeoJSONLayer(map);
     if (!layer) return Promise.reject('GeoJSON layer not ready');
 
     const cachedIds = getCachedFeatureIds(unitTypes);
     return fetchPolygonsByBounds(unitTypes, bounds, cachedIds, yearRange)
       .then(({ features }) => {
-        const selected = getSelectedPolygonsFromPlaces(mapState);
+        let selected = getSelectedPolygonsFromPlaces(mapState);
         const showUnselected = mapState.show_unselected ?? true;
-        const merged = [
-          ...features,
-          ...cachedIds.map(id => cache.featureById[id]).filter(Boolean)
-        ];
-        const toDisplay = showUnselected ? merged : merged.filter(f => selected.includes(String(f.id)));
+        const merged = [...features, ...cachedIds.map(id => cache.featureById[id]).filter(Boolean)];
+        const byId = Object.create(null);
+        merged.forEach(f => { if (f && f.id != null) byId[String(f.id)] = f; });
+        const mergedUnique = Object.values(byId);
+        const toDisplay = showUnselected ? mergedUnique : mergedUnique.filter(f => selected.includes(String(f.id)));
 
         layer.clearLayers();
         if (toDisplay.length) layer.addData({ type: 'FeatureCollection', features: toDisplay });
-        refreshLayerStyles(layer, selected);
-        LOG(`updateMapWithBounds: displayed=${toDisplay.length} selected=${selected.length} show_unselected=${showUnselected}`);
+        if (window.VOB_TRACE?.layer) console.log('[layer] update.refreshed', { fetched: features.length, cached: cachedIds.length, shown: toDisplay.length, showUnselected });
+
+        // Selection is now driven solely by Dash hideout callback; just refresh styles
+        refreshLayerStyles(layer);
         return { type: 'FeatureCollection', features: toDisplay };
       });
   };
 
-  /* ──────────────────────────────────────────────────────────
-     Zoom helper
-     ─────────────────────────────────────────────────────── */
-
   const zoomTo = (map, selectedIds = null, layer = null) => {
     const lyr = layer || findGeoJSONLayer(map);
     if (!lyr?._layers) return;
-
     const ids = selectedIds?.map(String);
     const bounds = L.latLngBounds();
     let count = 0;
     Object.values(lyr._layers).forEach(l => {
       if (!l.feature || !l.getBounds) return;
-      if (!ids || ids.includes(String(l.feature.id))) {
-        bounds.extend(l.getBounds());
-        count += 1;
-      }
+      if (!ids || ids.includes(String(l.feature.id))) { bounds.extend(l.getBounds()); count += 1; }
     });
     if (!count || !bounds.isValid()) return;
-
-    // Mark programmatic zoom to suppress moveend-triggered auto-loads
-    const newSessionId = `${Date.now()}-${Math.floor(Math.random()*10000)}`;
-    flags.zoomSessionId = newSessionId;
-    flags.zoomSessionsStarted += 1;
-    // Capture and clear an external source tag if set
-    try {
-      if (typeof window !== 'undefined' && window._zoomSource) {
-        flags.zoomSource = window._zoomSource;
-        window._zoomSource = null;
-      } else {
-        flags.zoomSource = flags.zoomSource || 'unknown';
-      }
-    } catch (e) {
-      flags.zoomSource = 'unknown';
-    }
-    flags.suppressedThisZoomCount = 0;
-    LOG(`zoomTo: starting programmatic zoom — session=${newSessionId} source=${flags.zoomSource} ids=${ids?.length ?? 'all'}`);
-    flags.programmaticZoomInProgress = true;
-    flags.programmaticZoomAnimating = true;
+    LOG('zoomTo(): fitting', { idsCount: ids ? ids.length : 'ALL', featuresUsed: count });
+    // Mark this zoom as programmatic to suppress auto-load moveend refresh
+    try { flags.programmaticZoomInProgress = true; flags.programmaticZoomAnimating = true; flags.zoomSource = 'zoomTo'; } catch (e) { }
     map.fitBounds(bounds, { padding: ZOOM_PADDING, maxZoom: MAX_ZOOM, animate: true, duration: 0.5 });
   };
 
-  /* ──────────────────────────────────────────────────────────
-     Module initialisation hook – runs for every map instance
-     ─────────────────────────────────────────────────────── */
-
   L.Map.addInitHook(function () {
-    this.getContainer()._leaflet_map = this; // expose map for Dash tests/debug
+    this.getContainer()._leaflet_map = this;
     this.whenReady(() => {
-      LOG('Map ready – initialising polygon management');
-      initialise(this);
+      TRACE('Leaflet.whenReady(): enter', { mapId: this._leaflet_id, zoom: this.getZoom?.(), center: this.getCenter?.() });
+      const waitLayer = () => {
+        const layer = findGeoJSONLayer(this);
+        if (!layer) return setTimeout(waitLayer, 120);
+        attachMapEventListeners(this);
+
+        const now = new Date().getFullYear();
+        const store = (window.vobUtils?.getMapState?.() || {});
+        const unitTypes = store.unit_types?.length ? store.unit_types : ['MOD_REG'];
+        const yrRange = store.year_range ? { min: store.year_range[0], max: store.year_range[1] } : { min: now, max: now };
+        const initState = { ...store, unit_types: unitTypes, year_range: [yrRange.min, yrRange.max] };
+
+        updateMapWithBounds(this, unitTypes, this.getBounds(), initState, yrRange)
+          .then(() => {
+            LOG('Leaflet.whenReady(): initial update complete', { layerChildren: Object.keys(layer._layers || {}).length });
+            if (layer && Object.keys(layer._layers).length) zoomTo(this, null, layer);
+          })
+          .catch(err => ERR('Leaflet.whenReady(): initial update failed', err));
+      };
+      waitLayer();
     });
   });
 
-  const initialise = map => {
-    // Wait until the GeoJSON layer appears, then finish setup
-    const waitLayer = () => {
-      const layer = findGeoJSONLayer(map);
-      if (!layer) return setTimeout(waitLayer, 120);
-      flags.geojsonLayerReady = true;
-      attachMapEventListeners(map);
-
-      /* initial data load */
-      const now = new Date().getFullYear();
-      const store = getMapState() || {};
-      const unitTypes = store.unit_types?.length ? store.unit_types : ['MOD_REG'];
-      const yrRange = store.year_range ? { min: store.year_range[0], max: store.year_range[1] } : { min: now, max: now };
-      const initState = {
-        ...store,
-        unit_types: unitTypes,
-        year_range: [yrRange.min, yrRange.max]
-      };
-      updateMapWithBounds(map, unitTypes, map.getBounds(), initState, yrRange)
-        .then(() => {
-          // auto‑zoom to loaded features
-          if (layer && Object.keys(layer._layers).length) zoomTo(map, null, layer);
-        });
-    };
-    waitLayer();
-  };
-
-  /* ──────────────────────────────────────────────────────────
-     Public API (exported on window)
-     ─────────────────────────────────────────────────────── */
-
   window.polygonManagement = {
-    // flags/cache – exposed for debugging only
     _flags: flags,
     _cache: cache,
-
-    // helpers consumed by Dash clientside callbacks
     findGeoJSONLayer,
     refreshLayerStyles,
     updateMapWithBounds,
     fetchPolygonsByIds,
-    zoomTo
+    zoomTo,
+    // optionally expose for debugging
+    debugDump() { if (!isDebug()) return; console.log(LOG_PREFIX, LOG_STYLE, 'debugDump()', { flags, cache: { featureCount: Object.keys(cache.featureById).length, types: Object.fromEntries(Object.entries(cache.featuresByUnitType).map(([k,v]) => [k, v.size])) } }); console.trace(); },
+    clearCache() { TRACE('clearCache(): enter'); cache.featureById = Object.create(null); cache.featuresByUnitType = Object.create(null); cache.pendingRequests = Object.create(null); LOG('clearCache(): done'); }
   };
 })();
