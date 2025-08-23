@@ -297,6 +297,16 @@ class SimpleSSEClient {
                         const mapEl = document.getElementById('leaflet-map');
                         const map = mapEl?._leaflet_map;
                         if (map && window.polygonManagement && window.polygonManagement.updateMapWithBounds) {
+                            // Immediately clear withTheme so polygons revert to grey while new theme hydrates
+                            try {
+                                const layer = window.polygonManagement.findGeoJSONLayer ? window.polygonManagement.findGeoJSONLayer(map) : null;
+                                if (layer && layer.options) {
+                                    const prev = layer.options.hideout || {};
+                                    const selected = Array.isArray(prev.selected) ? prev.selected.map(String) : [];
+                                    layer.options.hideout = Object.assign({}, prev, { withTheme: [], selected });
+                                    window.polygonManagement.refreshLayerStyles?.(layer);
+                                }
+                            } catch (_) { }
                             const storeNow = window.vobUtils?.getMapState?.() || {};
                             const unitTypes = window.vobUtils.getUnitTypes(map, this.placeStateCache, storeNow);
                             const uniqueUnitTypes = Array.isArray(unitTypes) ? [...new Set(unitTypes)] : [];
