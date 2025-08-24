@@ -14,7 +14,7 @@ Key elements/IDs:
 The surrounding app code and callbacks handle wiring the data into this panel.
 """
 
-from dash import dcc, html
+from dash import dcc, html, dash_table
 import dash_bootstrap_components as dbc
 
 
@@ -117,12 +117,12 @@ def create_visualization_layout():
                                                                         config={
                                                                             "responsive": True
                                                                         },
-                                                                        responsive=True,
-                                                                    )
-                                                                ],
-                                                            )
-                                                        ],
-                                                    ),
+                                            responsive=True,
+                                        )
+                                    ],
+                                )
+                            ],
+                        ),
                                                     dcc.Tab(
                                                         id="categories-tab",
                                                         label="Categories",
@@ -142,6 +142,36 @@ def create_visualization_layout():
                                                                             "responsive": True
                                                                         },
                                                                         responsive=True,
+                                                                    )
+                                                                ],
+                                                            )
+                                                        ],
+                                                    ),
+                                                    dcc.Tab(
+                                                        id="data-tab",
+                                                        label="Data",
+                                                        value="data",
+                                                        children=[
+                                                            html.Div(
+                                                                className="viz-tab-body",
+                                                                children=[
+                                                                    dash_table.DataTable(
+                                                                        id="viz-data-table",
+                                                                        columns=[],
+                                                                        data=[],
+                                                                        fill_width=True,
+                                                                        page_action="native",
+                                                                        page_size=25,
+                                                                        sort_action="native",
+                                                                        filter_action="native",
+                                                                        style_table={"height": "100%", "overflowY": "auto"},
+                                                                        style_cell={
+                                                                            "fontSize": "12px",
+                                                                            "padding": "6px",
+                                                                            "textAlign": "left",
+                                                                            "minWidth": "80px",
+                                                                        },
+                                                                        style_header={"fontWeight": "600"},
                                                                     )
                                                                 ],
                                                             )

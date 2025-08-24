@@ -811,3 +811,77 @@ def register_simple_visualization_callbacks(app):
             }
             return hidden_container, hidden_area, [], go.Figure(), go.Figure(), True
         raise PreventUpdate
+
+    # 5. Table tab: render underlying data
+    @app.callback(
+        Output("viz-data-table", "columns"),
+        Output("viz-data-table", "data"),
+        Input("cube-selector", "value"),
+        Input("place-state", "data"),
+        Input("viz-tabs", "value"),
+        Input("viz-year-slider", "value"),
+        prevent_initial_call=False,
+    )
+    def update_viz_table(selected_cubes, place_state, current_tab, selected_year):
+        try:
+            # Only render data when tab is visible; otherwise return cached/empty
+            if current_tab != "data":
+                raise PreventUpdate
+
+            if not place_state or not place_state.get("places"):
+                return [], []
+
+            places = place_state.get("places", [])
+            selected_units = [p.get("g_unit") for p in places if p.get("g_unit")]
+            if not selected_units:
+                return [], []
+
+            # Normalize cube selection
+            if not selected_cubes:
+                return [], []
+            if not isinstance(selected_cubes, list):
+                selected_cubes = [selected_cubes]
+            selected_cubes = [str(c) for c in selected_cubes if c is not None]
+            if not selected_cubes:
+                return [], []
+
+            # Fetch and combine data
+            all_data_list = []
+            for g_unit in selected_units:
+                try:
+                    cube_data_json = get_all_cube_data.invoke(
+                        {"g_unit": str(g_unit), "cube_ids": selected_cubes}
+                    )
+                    cube_data_df = pd.read_json(io.StringIO(cube_data_json), orient="records")
+                    if not cube_data_df.empty:
+                        all_data_list.append(cube_data_df)
+                except Exception:
+                    continue
+
+            if not all_data_list:
+                return [], []
+
+            df = pd.concat(all_data_list, ignore_index=True)
+            id_vars = ["g_unit", "g_name", "year"]
+            value_vars = [c for c in df.columns if c not in id_vars]
+            if not value_vars:
+                return [], []
+            chart = pd.melt(df, id_vars=id_vars, value_vars=value_vars, var_name="measurement", value_name="value")
+            chart = chart.dropna(subset=["value"])  # keep meaningful rows
+
+            # Data tab shows all years; do not filter by the categories year slider
+
+            # Order columns for readability
+            view_cols = ["g_name", "g_unit", "year", "measurement", "value"]
+            for c in view_cols:
+                if c not in chart.columns:
+                    chart[c] = None
+            out = chart[view_cols].sort_values(["g_name", "measurement", "year"]).reset_index(drop=True)
+
+            columns = [{"name": col, "id": col} for col in view_cols]
+            data = out.to_dict("records")
+            return columns, data
+        except PreventUpdate:
+            raise
+        except Exception:
+            return [], []
