@@ -6,11 +6,13 @@ import json
 import io
 import plotly.graph_objects as go
 import plotly.express as px
+import re
 from dash import no_update, html
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 from vobchat.tools import get_all_cube_data
 from vobchat.state_schema import get_selected_units
+from plotly.subplots import make_subplots
 
 import logging
 
@@ -25,11 +27,14 @@ def register_simple_visualization_callbacks(app):
         Output("visualization-area", "style"),
         Output("cube-selector", "options"),
         Output("cube-selector", "value", allow_duplicate=True),
+        Output("viz-year-slider-container", "style", allow_duplicate=True),
+        Output("cube-selector", "multi", allow_duplicate=True),
         Input("place-state", "data"),  # ONLY listen to place-state
+        Input("viz-tabs", "value"),
         State("cube-selector", "value"),
         prevent_initial_call=True,
     )
-    def handle_visualization_display(place_state, current_cube_selection):
+    def handle_visualization_display(place_state, current_tab, current_cube_selection):
         """Simple visualization display - show/hide based on data availability"""
 
         logger.info(
@@ -46,7 +51,7 @@ def register_simple_visualization_callbacks(app):
         places = (place_state or {}).get("places") if place_state else None
         if not places:
             logger.info("Hiding visualization - no places selected")
-            return hidden_container, hidden_area, [], []
+            return hidden_container, hidden_area, [], [], {"display": "none"}, True
 
         # Check if we have data to visualize beyond places
         has_cubes = bool((place_state or {}).get("cubes"))
@@ -55,7 +60,7 @@ def register_simple_visualization_callbacks(app):
 
         if not should_show:
             logger.info("Hiding visualization - no data available")
-            return hidden_container, hidden_area, [], []
+            return hidden_container, hidden_area, [], [], {"display": "none"}, True
 
         try:
             # Get cubes data
@@ -129,7 +134,14 @@ def register_simple_visualization_callbacks(app):
             # If still no cubes, show empty visualization
             if not cubes:
                 logger.info("No cubes available - showing empty visualization")
-                return visible_container, visible_area, [], []
+                return (
+                    visible_container,
+                    visible_area,
+                    [],
+                    [],
+                    {"display": "none"},
+                    True,
+                )
 
             # Parse cubes data
             if isinstance(cubes, str):
@@ -146,7 +158,14 @@ def register_simple_visualization_callbacks(app):
 
             if not cube_id_col:
                 logger.warning("No cube ID column found")
-                return visible_container, visible_area, [], []
+                return (
+                    visible_container,
+                    visible_area,
+                    [],
+                    [],
+                    {"display": "none"},
+                    True,
+                )
 
             # Create cube options (deduplicated by cube id)
             cube_col = "Cube" if "Cube" in cubes_df.columns else "cube"
@@ -315,20 +334,70 @@ def register_simple_visualization_callbacks(app):
                     else (cube_ids_all_str[:1] if cube_ids_all_str else [])
                 )
 
+            # Filter options and control multi-select depending on active tab
+            multi_flag = True
+            if current_tab == "categories":
+                multi_flag = False
+                way_re = re.compile(r".*?_\d*WAY.*$", re.IGNORECASE)
+                filtered_ids = [
+                    str(cid)
+                    for cid, lbl in option_labels.items()
+                    if way_re.search(str(cid))
+                ]
+                if filtered_ids:
+                    opt_set = set(filtered_ids)
+                    options = [opt for opt in options if opt.get("value") in opt_set]
+                    allowed = set(opt["value"] for opt in options)
+                    # Ensure a single scalar value when exclusive
+                    if isinstance(cube_value, list):
+                        cube_value = [v for v in (cube_value or []) if v in allowed]
+                    if not cube_value:
+                        cube_value = [options[0]["value"]] if options else []
+                    cube_value = (
+                        cube_value[0] if isinstance(cube_value, list) else cube_value
+                    )
+                year_style = {"display": "block"}
+            else:
+                multi_flag = True
+                # Ensure list for multi-select mode
+                if cube_value is None:
+                    cube_value = []
+                elif not isinstance(cube_value, list):
+                    cube_value = [cube_value]
+                year_style = {"display": "none"}
             logger.info(f"Showing visualization with {len(options)} cube options")
-            return visible_container, visible_area, options, cube_value
+            return (
+                visible_container,
+                visible_area,
+                options,
+                cube_value,
+                year_style,
+                multi_flag,
+            )
 
         except Exception as e:
             logger.error(f"Error in visualization callback: {e}", exc_info=True)
-            return hidden_container, hidden_area, [], []
+            return hidden_container, hidden_area, [], [], {"display": "none"}, True
 
     @app.callback(
         Output("data-plot", "figure", allow_duplicate=True),
+        Output("category-plot", "figure", allow_duplicate=True),
+        Output("categories-tab", "disabled", allow_duplicate=True),
+        Output("viz-year-slider", "marks", allow_duplicate=True),
+        Output("viz-year-slider", "min", allow_duplicate=True),
+        Output("viz-year-slider", "max", allow_duplicate=True),
+        Output("viz-year-slider", "value", allow_duplicate=True),
+        Output("viz-year-slider", "step", allow_duplicate=True),
         Input("cube-selector", "value"),
         Input("place-state", "data"),
+        Input("viz-tabs", "value"),
+        Input("viz-year-slider", "value"),
+        State("cube-selector", "options"),
         prevent_initial_call=True,
     )
-    def update_visualization_plot(selected_cubes, place_state):
+    def update_visualization_plot(
+        selected_cubes, place_state, current_tab, selected_year, cube_options
+    ):
         """Simple plot update - generate chart from selected data"""
 
         logger.info(f"Plot update with cubes: {selected_cubes}")
@@ -336,18 +405,17 @@ def register_simple_visualization_callbacks(app):
         # Empty chart function
         def empty_chart(title="No data available"):
             return go.Figure().update_layout(
-                title=dict(text=title, x=0.5, xanchor="center", pad=dict(t=0, b=4)),
+                title=None,
                 xaxis_title="Year",
                 yaxis_title="Value",
                 legend=dict(
                     orientation="h",
                     yanchor="bottom",
-                    y=1.0,
+                    y=1.02,
                     xanchor="left",
                     x=0.0,
-                    title=dict(text="Series"),
                 ),
-                margin={"l": 50, "r": 50, "t": 80, "b": 50},
+                margin={"l": 50, "r": 50, "t": 50, "b": 50},
                 annotations=[
                     {
                         "text": title,
@@ -372,7 +440,16 @@ def register_simple_visualization_callbacks(app):
             raise PreventUpdate
 
         if not selected_cubes:
-            return empty_chart("No data filters selected")
+            return (
+                empty_chart("No data filters selected"),
+                go.Figure(),
+                True,
+                {},
+                0,
+                0,
+                no_update,
+                None,
+            )
 
         try:
             # Get selected units
@@ -380,14 +457,32 @@ def register_simple_visualization_callbacks(app):
             selected_units = [p.get("g_unit") for p in places if p.get("g_unit")]
 
             if not selected_units:
-                return empty_chart("No valid areas found")
+                return (
+                    empty_chart("No valid areas found"),
+                    go.Figure(),
+                    True,
+                    {},
+                    0,
+                    0,
+                    no_update,
+                    None,
+                )
 
             # Ensure selected_cubes is a list of strings and drop Nones
             if not isinstance(selected_cubes, list):
                 selected_cubes = [selected_cubes]
             selected_cubes = [str(c) for c in selected_cubes if c is not None]
             if not selected_cubes:
-                return empty_chart("No data filters selected")
+                return (
+                    empty_chart("No data filters selected"),
+                    go.Figure(),
+                    True,
+                    {},
+                    0,
+                    0,
+                    no_update,
+                    None,
+                )
 
             # Fetch data for each unit
             all_data_list = []
@@ -406,7 +501,16 @@ def register_simple_visualization_callbacks(app):
                     continue
 
             if not all_data_list:
-                return empty_chart("No data available for selected areas")
+                return (
+                    empty_chart("No data available for selected areas"),
+                    go.Figure(),
+                    True,
+                    {},
+                    0,
+                    0,
+                    no_update,
+                    None,
+                )
 
             # Combine and process data
             all_data_df = pd.concat(all_data_list, ignore_index=True)
@@ -416,7 +520,16 @@ def register_simple_visualization_callbacks(app):
             value_vars = [col for col in all_data_df.columns if col not in id_vars]
 
             if not value_vars:
-                return empty_chart("No data columns found")
+                return (
+                    empty_chart("No data columns found"),
+                    go.Figure(),
+                    True,
+                    {},
+                    0,
+                    0,
+                    no_update,
+                    None,
+                )
 
             chart_data = pd.melt(
                 all_data_df,
@@ -432,10 +545,23 @@ def register_simple_visualization_callbacks(app):
             chart_data = chart_data.dropna(subset=["year"])
 
             if chart_data.empty:
-                return empty_chart("No valid data after filtering")
+                return (
+                    empty_chart("No valid data after filtering"),
+                    go.Figure(),
+                    True,
+                    {},
+                    0,
+                    0,
+                    no_update,
+                    None,
+                )
 
-            # Create display names and plot
-            chart_data["display_name"] = chart_data["measurement"]
+            # Create display names and ensure categorical fields are strings
+            chart_data["display_name"] = chart_data["measurement"].astype(str)
+            try:
+                chart_data["g_name"] = chart_data["g_name"].astype(str)
+            except Exception:
+                pass
 
             chart_data = chart_data.sort_values(["g_name", "measurement", "year"])
 
@@ -445,8 +571,8 @@ def register_simple_visualization_callbacks(app):
                 y="value",
                 color="display_name",
                 line_dash="g_name",  # Different marker per place
-                title="Historical Data Visualization",
                 markers=True,
+                template=go.layout.Template(),  # Use empty template to avoid cascade issues
             )
 
             fig.update_layout(
@@ -456,19 +582,11 @@ def register_simple_visualization_callbacks(app):
                 legend=dict(
                     orientation="h",
                     yanchor="bottom",
-                    y=1.0,
+                    y=1.02,  # above the plot area
                     xanchor="left",
                     x=0.0,
-                    title=dict(text="Series"),
                 ),
-                title=dict(
-                    text="Historical Data Visualization",
-                    x=0.5,
-                    xanchor="center",
-                    pad=dict(t=0, b=4),
-                ),
-                margin={"l": 50, "r": 50, "t": 80, "b": 50},
-                height=None,
+                margin={"l": 50, "r": 50, "t": 50, "b": 50},
                 autosize=True,
                 legend_title_text="Series (marker = place)",
             )
@@ -476,17 +594,209 @@ def register_simple_visualization_callbacks(app):
             if (chart_data["value"].dropna() >= 0).all():
                 fig.update_yaxes(rangemode="tozero")
 
-            return fig
+            # Build category pie (enable tab only if *_WAY:<category> measurements exist)
+            cat_fig = go.Figure()
+            cat_disabled = True
+            try:
+                # Choose first selected place and latest year
+                first_place = places[0] if places else None
+                target_unit = first_place.get("g_unit") if first_place else None
+                target_name = (
+                    (first_place.get("g_name") if first_place else None)
+                    or (first_place.get("name") if first_place else None)
+                    or (str(target_unit) if target_unit is not None else "Selection")
+                )
+                sub = chart_data.copy()
+                if target_unit is not None:
+                    sub = sub[sub["g_unit"] == target_unit]
+                sub = sub.dropna(subset=["year"]).copy()
+                sub["year"] = pd.to_numeric(sub["year"], errors="coerce")
+                sub = sub.dropna(subset=["year"])
+                if not sub.empty:
+                    latest_year = int(sub["year"].max())
+                    suby = sub[sub["year"] == latest_year].copy()
+                    way_regex = re.compile(r".*?_\d*WAY.*$", re.IGNORECASE)
+                    mask = suby["measurement"].astype(str).str.contains(way_regex)
+                    suby = suby[mask]
+                    suby["value"] = pd.to_numeric(suby["value"], errors="coerce")
+                    suby = suby.dropna(subset=["value"])
+                    if not suby.empty:
+                        parts = (
+                            suby["measurement"]
+                            .astype(str)
+                            .str.split(":", n=1, expand=True)
+                        )
+                        suby["prefix"] = parts[0]
+                        suby["category"] = parts[1]
+                        counts = (
+                            suby.groupby("prefix").size().sort_values(ascending=False)
+                        )
+                        best_prefix = counts.index[0]
+                        best = suby[suby["prefix"] == best_prefix]
+                        if not best.empty:
+                            cat_fig = px.pie(
+                                best,
+                                names="category",
+                                values="value",
+                            )
+                            cat_fig.update_layout(
+                                legend_title_text="Category",
+                                legend=dict(
+                                    orientation="h",
+                                    yanchor="top",
+                                    y=0.98,
+                                    xanchor="left",
+                                    x=0.0,
+                                ),
+                                margin={"l": 50, "r": 50, "t": 50, "b": 50},
+                            )
+                            cat_disabled = False
+            except Exception:
+                # Keep categories tab disabled if any error occurs
+                cat_fig = go.Figure()
+                cat_disabled = True
+
+            # Augment: build pies for all selected places when categories tab is active and add year options
+            years = sorted(chart_data["year"].dropna().astype(int).unique().tolist())
+            year_options = [{"label": str(y), "value": int(y)} for y in years]
+            current_year_value = years[-1] if years else None
+            try:
+                if current_tab == "categories" and years:
+                    year_to_use = (
+                        int(selected_year)
+                        if (selected_year and int(selected_year) in years)
+                        else years[-1]
+                    )
+                    current_year_value = year_to_use
+                    way_regex = re.compile(r".*?_\d*WAY.*$", re.IGNORECASE)
+                    sub = chart_data.copy()
+                    sub = sub[sub["year"] == year_to_use]
+                    mask = sub["measurement"].astype(str).str.contains(way_regex)
+                    sub = sub[mask].copy()
+                    sub["value"] = pd.to_numeric(sub["value"], errors="coerce")
+                    sub = sub.dropna(subset=["value"])
+                    if not sub.empty:
+                        parts = (
+                            sub["measurement"]
+                            .astype(str)
+                            .str.split(":", n=1, expand=True)
+                        )
+                        sub["prefix"] = parts[0]
+                        sub["category"] = parts[1]
+                        places_rows = (
+                            sub[["g_unit", "g_name"]]
+                            .drop_duplicates()
+                            .reset_index(drop=True)
+                        )
+                        n = len(places_rows)
+                        cols = 3 if n >= 3 else (2 if n == 2 else 1)
+                        rows = (n + cols - 1) // cols
+                        # Build subplot titles to indicate which pie corresponds to which place
+                        place_names = [str(nm) for nm in places_rows["g_name"].tolist()]
+                        total_cells = rows * cols
+                        subplot_titles = [place_names[i] if i < len(place_names) else "" for i in range(total_cells)]
+                        fig_multi = make_subplots(
+                            rows=rows,
+                            cols=cols,
+                            specs=[[{"type": "domain"}] * cols for _ in range(rows)],
+                            subplot_titles=subplot_titles,
+                        )
+                        r = c = 1
+                        pies_added = 0
+                        for _, prow in places_rows.iterrows():
+                            pid = prow["g_unit"]
+                            pname = prow["g_name"]
+                            psub = sub[sub["g_unit"] == pid]
+                            if psub.empty:
+                                continue
+                            counts = (
+                                psub.groupby("prefix")
+                                .size()
+                                .sort_values(ascending=False)
+                            )
+                            best_prefix = counts.index[0]
+                            best = psub[psub["prefix"] == best_prefix]
+                            if best.empty:
+                                continue
+                            fig_multi.add_trace(
+                                go.Pie(
+                                    labels=best["category"],
+                                    values=best["value"],
+                                    showlegend=(r == 1 and c == 1),
+                                ),
+                                row=r,
+                                col=c,
+                            )
+                            pies_added += 1
+                            c += 1
+                            if c > cols:
+                                c = 1
+                                r += 1
+                        if pies_added:
+                            fig_multi.update_layout(
+                                legend=dict(
+                                    orientation="h",
+                                    yanchor="bottom",
+                                    y=1.12,
+                                    xanchor="left",
+                                    x=0.0,
+                                    title=dict(text="Category"),
+                                ),
+                                title=None,
+                                margin={"l": 50, "r": 50, "t": 90, "b": 40},
+                            )
+                            cat_fig = fig_multi
+                            cat_disabled = False
+            except Exception:
+                pass
+
+            # Prepare slider marks/min/max from available years
+            marks = {int(y): str(int(y)) for y in years} if years else {}
+            min_y = int(years[0]) if years else 0
+            max_y = int(years[-1]) if years else 0
+
+            # Final disabled state: enable if any cube option label contains _*WAY*
+            disabled_final = cat_disabled
+            try:
+                if cube_options:
+                    way_opt_re = re.compile(r".*?_\d*WAY.*$", re.IGNORECASE)
+                    has_way_option = any(
+                        way_opt_re.search(str(opt.get("value"))) for opt in cube_options
+                    )
+                    disabled_final = not has_way_option
+            except Exception:
+                pass
+            return (
+                fig,
+                cat_fig,
+                disabled_final,
+                marks,
+                min_y,
+                max_y,
+                current_year_value,
+                None,
+            )
 
         except Exception as e:
             logger.error(f"Error updating plot: {e}", exc_info=True)
-            return empty_chart(f"Error: {str(e)}")
+            return (
+                empty_chart(f"Error: {str(e)}"),
+                go.Figure(),
+                True,
+                {},
+                0,
+                0,
+                no_update,
+                None,
+            )
 
     @app.callback(
         Output("visualization-panel-container", "style", allow_duplicate=True),
         Output("visualization-area", "style", allow_duplicate=True),
         Output("cube-selector", "value", allow_duplicate=True),
         Output("data-plot", "figure", allow_duplicate=True),
+        Output("category-plot", "figure", allow_duplicate=True),
+        Output("categories-tab", "disabled", allow_duplicate=True),
         Input("clear-plot-button", "n_clicks"),
         prevent_initial_call=True,
     )
@@ -499,5 +809,5 @@ def register_simple_visualization_callbacks(app):
                 "display": "none",
                 "flexDirection": "column",
             }
-            return hidden_container, hidden_area, [], go.Figure()
+            return hidden_container, hidden_area, [], go.Figure(), go.Figure(), True
         raise PreventUpdate

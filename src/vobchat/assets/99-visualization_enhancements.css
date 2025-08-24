@@ -197,6 +197,40 @@
     height: calc(100% - 40px) !important;
 }
 
+/* Ensure tab content stretches while headers keep natural height */
+
+#viz-tabs-parent {
+    height: 100% !important;
+    display: flex;
+    flex-direction: column;
+    min-height: 0; /* allow children to expand */
+}
+
+/* Make only the tab CONTENT stretch, not the tab headers */
+#viz-tabs-parent .tab-content {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+#viz-tabs-parent .tab-content > * {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+/* Our explicit content wrapper */
+#viz-tabs-parent .viz-tab-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+#viz-year-slider-container {
+    padding-top: 25px;
+}
+
 /* Icon font definitions to ensure they're always available */
 @font-face {
     font-family: 'FontAwesome';
