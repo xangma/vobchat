@@ -226,6 +226,12 @@
     display: flex;
     flex-direction: column;
 }
+/* Minimal rules to hide disabled Categories tab and stretch remaining tabs */
+/* Current DOM variant: #viz-tabs.tab-container contains child .tab elements */
+#viz-tabs .tab--disabled { display: none !important; }
+#viz-tabs.tab-container { display: flex; width: 100%; }
+#viz-tabs.tab-container > .tab { flex: 1 1 0 !important; text-align: center; }
+#viz-tabs.tab-container > .tab--selected { flex: 1 1 0 !important; }
 
 #viz-year-slider-container {
     padding-top: 25px;
