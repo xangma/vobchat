@@ -237,7 +237,9 @@ def _summarize_recent_conversation(
 # --------------------------------------------------------------------------------------
 
 
-def _trim_for_model_input(state: lg_State) -> list[BaseMessage]:
+def _trim_for_model_input(
+    state: lg_State, *, memory_summary_override: Optional[str] = None
+) -> list[BaseMessage]:
     """Return a list of messages trimmed for the model context.
 
     This does not mutate state. It optionally injects a system message with a
@@ -256,7 +258,10 @@ def _trim_for_model_input(state: lg_State) -> list[BaseMessage]:
         start_on="human",
     )
     trimmed = trimmer.invoke(messages) if messages else []
-    mem = (state.get("memory_summary") or "").strip()
+    mem_src = memory_summary_override
+    if mem_src is None:
+        mem_src = state.get("memory_summary") or ""
+    mem = (mem_src or "").strip()
     if mem:
         # Prepend a light system hint with the summary
         sys = SystemMessage(
@@ -287,7 +292,8 @@ def _maybe_update_memory_summary(state: lg_State) -> dict:
             return {}
 
         # Build a concise update summary using the base model
-        summarizer = get_llm()
+        # Important: mark as no_ui_stream so SSE adapter won't render it
+        summarizer = get_llm(json_mode=False)
         prompt = ChatPromptTemplate.from_messages(
             [
                 (
@@ -302,10 +308,15 @@ def _maybe_update_memory_summary(state: lg_State) -> dict:
             ]
         )
         existing = (state.get("memory_summary") or "").strip()
-        # Invoke the summarizer on the slice of messages
-        new_summary_msg = summarizer.invoke(
-            prompt.invoke({"existing": existing, "history": to_summarize})
+        # Invoke the summarizer on the slice of messages, tagged to avoid UI streaming
+        chain = (prompt | summarizer).with_config(
+            {
+                "tags": ["memory_summary", "no_ui_stream"],
+                "run_name": "memory_summary",
+                "callbacks": [get_llm_callback()],
+            }
         )
+        new_summary_msg = chain.invoke({"existing": existing, "history": to_summarize})
         new_summary = (getattr(new_summary_msg, "content", "") or "").strip()
         if not new_summary:
             return {}
@@ -699,9 +710,7 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
         lip = state.get("last_intent_payload") or {}
         lip_intent = (lip or {}).get("intent")
         lip_args = dict((lip or {}).get("arguments") or {})
-        is_map_click = (
-            str(lip_args.get("source") or "").strip().lower() == "map_click"
-        )
+        is_map_click = str(lip_args.get("source") or "").strip().lower() == "map_click"
         if is_map_click and lip_intent in ("AddPlace", "RemovePlace"):
             target = _intent_to_node(lip_intent)
             if target:
@@ -732,7 +741,20 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
     ui_option_labels = _list_ui_option_labels(state)
     recent_conv = _summarize_recent_conversation(state)
     domain_hints = _build_domain_hints(state, user_text)
-    memory_summary = (state.get("memory_summary") or "(none)").strip() or "(none)"
+    # Use freshly updated memory summary for this turn's prompts if available
+    _effective_mem = None
+    try:
+        if isinstance(mem_update, dict) and mem_update.get("memory_summary"):
+            _effective_mem = mem_update.get("memory_summary")
+        else:
+            _effective_mem = state.get("memory_summary")
+    except Exception:
+        _effective_mem = state.get("memory_summary")
+    memory_summary = (_effective_mem or "(none)").strip() or "(none)"
+    # For model injection, avoid injecting the literal "(none)"
+    memory_summary_for_injection = (
+        _effective_mem.strip() if isinstance(_effective_mem, str) else _effective_mem
+    )
     # Log a short snapshot for debugging (not the full user text)
     logger.info(
         "conversational_agent_node: planning for user input: " + user_text[:120],
@@ -1181,9 +1203,12 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
     prefer_placeinfo = any(_is_intent(a, "PlaceInfo") for a in sub_non) or any(
         _is_intent(a, "PlaceInfo") for a in plan_non
     )
-    if prefer_placeinfo and plan_mut and all(
-        _is_intent(a, "AddPlace") for a in plan_mut
-    ) and not sub_mut:
+    if (
+        prefer_placeinfo
+        and plan_mut
+        and all(_is_intent(a, "AddPlace") for a in plan_mut)
+        and not sub_mut
+    ):
         chosen_pi = [a for a in sub_non if _is_intent(a, "PlaceInfo")]
         if not chosen_pi:
             chosen_pi = [a for a in plan_non if _is_intent(a, "PlaceInfo")]
@@ -1307,7 +1332,9 @@ def conversational_agent_node(state: lg_State) -> dict | Command:
                     }
                 )
                 parts: list[str] = []
-                trimmed_history = _trim_for_model_input(state)
+                trimmed_history = _trim_for_model_input(
+                    state, memory_summary_override=memory_summary_for_injection
+                )
                 try:
                     msgs_reply = streaming_prompt.format_messages(
                         {"messages": trimmed_history}
