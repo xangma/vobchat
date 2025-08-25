@@ -53,10 +53,10 @@ def register_simple_visualization_callbacks(app):
             logger.info("Hiding visualization - no places selected")
             return hidden_container, hidden_area, [], [], {"display": "none"}, True
 
-        # Check if we have data to visualize beyond places
+        # Require a selected theme; prevents showing cached cubes after Reset
         has_cubes = bool((place_state or {}).get("cubes"))
         has_theme = bool((place_state or {}).get("selected_theme"))
-        should_show = has_cubes or has_theme
+        should_show = has_theme
 
         if not should_show:
             logger.info("Hiding visualization - no data available")
@@ -148,6 +148,42 @@ def register_simple_visualization_callbacks(app):
                 cubes_df = pd.read_json(io.StringIO(cubes), orient="records")
             else:
                 cubes_df = pd.DataFrame(cubes)
+            # Filter cubes to match currently selected theme when possible
+            try:
+                selected_theme = place_state.get("selected_theme")
+                ent_id = None
+                if selected_theme:
+                    if isinstance(selected_theme, str):
+                        theme_data = json.loads(selected_theme)
+                    else:
+                        theme_data = selected_theme
+                    if isinstance(theme_data, dict):
+                        ent_id = theme_data.get("ent_id") or theme_data.get("ent_ID")
+                    elif isinstance(theme_data, list) and theme_data and isinstance(theme_data[0], dict):
+                        ent_id = theme_data[0].get("ent_id") or theme_data[0].get("ent_ID")
+                if ent_id:
+                    # Find theme id column case-insensitively
+                    theme_col = None
+                    for col in cubes_df.columns:
+                        cl = str(col).lower()
+                        if cl in ("theme_id", "themeid", "theme_id_"):
+                            theme_col = col
+                            break
+                        if cl == "theme_id":
+                            theme_col = col
+                            break
+                    # Also try known exact names
+                    if theme_col is None:
+                        for col in ("Theme_ID", "theme_ID", "THEME_ID"):
+                            if col in cubes_df.columns:
+                                theme_col = col
+                                break
+                    if theme_col:
+                        before = len(cubes_df)
+                        cubes_df = cubes_df[cubes_df[theme_col].astype(str) == str(ent_id)]
+                        logger.info(f"Filtered cubes by theme {ent_id}: {before} -> {len(cubes_df)}")
+            except Exception as e:
+                logger.warning(f"Theme filter error: {e}")
 
             # Find cube ID column
             cube_id_col = None
@@ -436,7 +472,7 @@ def register_simple_visualization_callbacks(app):
             raise PreventUpdate
         has_cubes = bool(place_state.get("cubes"))
         has_theme = bool(place_state.get("selected_theme"))
-        if not (has_cubes or has_theme):
+        if not (has_theme):
             raise PreventUpdate
 
         if not selected_cubes:
@@ -472,6 +508,13 @@ def register_simple_visualization_callbacks(app):
             if not isinstance(selected_cubes, list):
                 selected_cubes = [selected_cubes]
             selected_cubes = [str(c) for c in selected_cubes if c is not None]
+            # Restrict to allowed options (ensures theme compliance)
+            try:
+                allowed = set([str(opt.get("value")) for opt in (cube_options or []) if opt and opt.get("value") is not None])
+                if allowed:
+                    selected_cubes = [c for c in selected_cubes if c in allowed]
+            except Exception:
+                pass
             if not selected_cubes:
                 return (
                     empty_chart("No data filters selected"),
@@ -820,9 +863,10 @@ def register_simple_visualization_callbacks(app):
         Input("place-state", "data"),
         Input("viz-tabs", "value"),
         Input("viz-year-slider", "value"),
+        State("cube-selector", "options"),
         prevent_initial_call=False,
     )
-    def update_viz_table(selected_cubes, place_state, current_tab, selected_year):
+    def update_viz_table(selected_cubes, place_state, current_tab, selected_year, cube_options):
         try:
             # Only render data when tab is visible; otherwise return cached/empty
             if current_tab != "data":
@@ -842,6 +886,13 @@ def register_simple_visualization_callbacks(app):
             if not isinstance(selected_cubes, list):
                 selected_cubes = [selected_cubes]
             selected_cubes = [str(c) for c in selected_cubes if c is not None]
+            # Restrict to currently allowed options (ensures theme compliance)
+            try:
+                allowed = set([str(opt.get("value")) for opt in (cube_options or []) if opt and opt.get("value") is not None])
+                if allowed:
+                    selected_cubes = [c for c in selected_cubes if c in allowed]
+            except Exception:
+                pass
             if not selected_cubes:
                 return [], []
 

@@ -432,7 +432,14 @@ class SimpleSSEClient {
     updateVisualization(state) {
         const container = document.getElementById('visualization-panel-container');
         const area = document.getElementById('visualization-area');
-        if (state.cubes && state.cubes.length > 0) {
+        const hasTheme = !!state.selected_theme;
+        const hasCubes = Array.isArray(state.cubes) && state.cubes.length > 0;
+        if (!hasTheme) {
+            if (container) container.style.display = 'none';
+            if (area) area.style.display = 'none';
+            return;
+        }
+        if (hasCubes) {
             if (container) container.style.display = 'flex';
             if (area) area.style.display = 'flex';
         } else if (state.show_visualization === false) {
