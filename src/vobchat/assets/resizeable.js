@@ -315,8 +315,24 @@ function refitLeafletMap(reason) {
                     try { window._zoomSource = 'resize_selected'; } catch (_) {}
                     window.polygonManagement.zoomTo(map, selectedIds, layer);
                 } else {
-                    try { window._zoomSource = 'resize_all'; } catch (_) {}
-                    window.polygonManagement.zoomTo(map, null, layer);
+                    // For dense unit types (non-region/county), prefer a fixed fallback zoom instead of fitting all
+                    let uts = [];
+                    try {
+                        uts = (window.vobUtils && window.vobUtils.getUnitTypes)
+                            ? window.vobUtils.getUnitTypes(map, window.vobUtils.getPlaceState?.(), window.vobUtils.getMapState?.())
+                            : [];
+                    } catch (_) {}
+                    const DENSE_UNITS = new Set(['CONSTITUENCY','LG_DIST','MOD_DIST','MOD_WARD']);
+                    const hasDense = Array.isArray(uts) ? uts.some(u => DENSE_UNITS.has(u)) : false;
+                    if (hasDense) {
+                        // Snap to fallback zoom level for better context when many polygons exist
+                        const target = window.VOB_FALLBACK_ZOOM_DENSE || 8;
+                        try { window._zoomSource = 'resize_dense_fallback'; } catch (_) {}
+                        map.setZoom(target, { animate: true });
+                    } else {
+                        try { window._zoomSource = 'resize_all'; } catch (_) {}
+                        window.polygonManagement.zoomTo(map, null, layer);
+                    }
                 }
             }
         } catch (_) { /* ignore */ }

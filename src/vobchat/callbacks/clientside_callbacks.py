@@ -101,17 +101,27 @@ def register_simple_clientside_callbacks(app: Dash):
                     const map = mapElement?._leaflet_map;
                     
                     if (map && window.polygonManagement && window.polygonManagement.updateMapWithBounds) {
-                        const bounds = map.getBounds();
                         const yearRange = new_state.year_range ? { min: new_state.year_range[0], max: new_state.year_range[1] } : null;
-                        
-                        if (window.VOB_DEBUG) console.log('Unit filter: Updating polygons for unit types:', new_state.unit_types);
-                        window.polygonManagement.updateMapWithBounds(map, new_state.unit_types, bounds, new_state, yearRange)
-                            .then(result => {
-                                console.log('Unit filter: Polygon update completed');
-                            })
-                            .catch(error => {
-                                console.error('Unit filter: Error updating polygons:', error);
-                            });
+                        const DENSE_UNITS = new Set(['CONSTITUENCY','LG_DIST','MOD_DIST','MOD_WARD']);
+                        const uts = Array.isArray(new_state.unit_types) ? new_state.unit_types : [];
+                        const hasDense = uts.some(u => DENSE_UNITS.has(u));
+                        const selCount = (new_state.places || []).filter(p => p && p.g_unit != null).length;
+                        const currentZoom = (map && map.getZoom) ? map.getZoom() : null;
+                        const targetZoom = window.VOB_FALLBACK_ZOOM_DENSE || 8;
+                        const tooZoomedOut = (currentZoom == null) || (currentZoom < targetZoom);
+                        // If dense type and no selection and we're too zoomed out, zoom first to limit fetch
+                        if (hasDense && selCount === 0 && tooZoomedOut) {
+                            if (window.VOB_DEBUG) console.log('Unit filter: Pre-zooming before fetching polygons for dense unit types', { currentZoom, targetZoom, uts });
+                            try { window._zoomSource = 'unit_type_prezoom_dense'; } catch (_) {}
+                            // Let auto-load (moveend) perform the fetch once zoomed
+                            map.setZoom(targetZoom, { animate: true });
+                        } else {
+                            const bounds = map.getBounds();
+                            if (window.VOB_DEBUG) console.log('Unit filter: Updating polygons for unit types:', new_state.unit_types, { bounds: bounds.toBBoxString?.() });
+                            window.polygonManagement.updateMapWithBounds(map, new_state.unit_types, bounds, new_state, yearRange)
+                                .then(() => console.log('Unit filter: Polygon update completed'))
+                                .catch(error => console.error('Unit filter: Error updating polygons:', error));
+                        }
                     }
                 }, 0);
             }
@@ -188,15 +198,41 @@ def register_simple_clientside_callbacks(app: Dash):
                         });
                         new_state.places = built;
                         if (window.VOB_TRACE?.select || window.VOB_DEBUG) console.log('[select] places', { after: new_state.places.length });
-
+    
                         // No direct hideout mutation; map-state change will drive highlight
-
+    
                         // Clear any pending chat option buttons if user deselects the polygon
                         try {
                             if (window.simpleSSE && typeof window.simpleSSE.clearButtons === 'function') {
                                 window.simpleSSE.clearButtons();
                             }
                         } catch (e) { /* no-op */ }
+    
+                        // If that was the last selected polygon and the active unit types are dense,
+                        // snap to a sensible fallback zoom instead of fitting all polygons.
+                        setTimeout(() => {
+                            try {
+                                if (!built || built.length > 0) return; // only when selection is now empty
+                                const mapElement = document.getElementById('leaflet-map');
+                                const map = mapElement?._leaflet_map;
+                                if (!map) return;
+                                const DENSE_UNITS = new Set(['CONSTITUENCY','LG_DIST','MOD_DIST','MOD_WARD']);
+                                const uts = Array.isArray(new_state.unit_types) ? new_state.unit_types : [];
+                                const hasDense = uts.some(u => DENSE_UNITS.has(u));
+                                if (hasDense) {
+                                    const target = window.VOB_FALLBACK_ZOOM_DENSE || 8;
+                                    try { window._zoomSource = 'deselect_fallback_dense'; } catch (_) {}
+                                    map.setZoom(target, { animate: true });
+                                } else {
+                                    // For region/county, fit to all currently visible polygons
+                                    const layer = window.polygonManagement?.findGeoJSONLayer?.(map);
+                                    if (layer && window.polygonManagement?.zoomTo) {
+                                        try { window._zoomSource = 'deselect_fit_all'; } catch (_) {}
+                                        window.polygonManagement.zoomTo(map, null, layer);
+                                    }
+                                }
+                            } catch (e) { /* no-op */ }
+                        }, 50);
                     } else {
                         // Add polygon
                         add_trigger = {
@@ -614,10 +650,20 @@ def register_simple_clientside_callbacks(app: Dash):
             }
 
             const bounds = map.getBounds();
-            // Derive unit types using shared helper for consistency
-            const unitTypes = (window.vobUtils && window.vobUtils.getUnitTypes)
-                ? window.vobUtils.getUnitTypes(map, window.vobUtils.getPlaceState?.(), map_state)
-                : (map_state.unit_types || ['MOD_REG']);
+            // Prefer the explicitly requested unit types from map_state when present,
+            // fall back to the helper only if they are absent.
+            let unitTypes = [];
+            try {
+                if (map_state && Array.isArray(map_state.unit_types) && map_state.unit_types.length) {
+                    unitTypes = map_state.unit_types;
+                } else if (window.vobUtils && window.vobUtils.getUnitTypes) {
+                    unitTypes = window.vobUtils.getUnitTypes(map, window.vobUtils.getPlaceState?.(), map_state);
+                } else {
+                    unitTypes = ['MOD_REG'];
+                }
+            } catch (e) {
+                unitTypes = (map_state && Array.isArray(map_state.unit_types) && map_state.unit_types.length) ? map_state.unit_types : ['MOD_REG'];
+            }
             const yearRange = map_state.year_range ? { min: map_state.year_range[0], max: map_state.year_range[1] } : null;
 
             if (window.VOB_DEBUG) console.log('Auto-load: Map bounds changed, loading polygons for unit types:', unitTypes);
