@@ -102,7 +102,7 @@ For easier deployment, VobChat can be run in a Docker container with Redis inclu
 **Setup:**
 1. Clone the repository
 2. Copy the environment template: `cp .env.example .env`
-3. Update `.env` with your database credentials:
+3. Update `.env` with your database credentials and local paths:
    ```bash
    DB_HOST=host.docker.internal
    DB_PORT=5432
@@ -110,6 +110,8 @@ For easier deployment, VobChat can be run in a Docker container with Redis inclu
    DB_USER=postgres
    DB_PASSWORD=your_postgres_password
    SECRET_KEY=your-production-secret-key-here
+   # Auth DB (SQLite inside container; persisted via ./data)
+   DATABASE_URL=sqlite:////app/data/users.db
    ```
 4. Build and run: `docker-compose up --build`
 5. Create a login user: `docker-compose exec vobchat flask --app vobchat.app:server add-user admin@example.com`
@@ -133,6 +135,7 @@ docker-compose up -d --build
 - **External**: Connects to Ollama (port 11434) and PostgreSQL (port 5432) on host system
 - **Networking**: Uses host networking mode for seamless access to host services
 - **Logging**: Persistent log directory mounted as volume
+ - **Data**: `./data` on host is mounted to `/app/data` in the container for the auth DB
 
 **Environment Variables:**
 * `DB_HOST`: Database host (default: host.docker.internal)

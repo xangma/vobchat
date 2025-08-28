@@ -258,8 +258,9 @@ def create_app():
     # Configure Flask server
     server = app.server
     server.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key")
+    # Default DB path points to a writable data dir inside the container.
     server.config["SQLALCHEMY_DATABASE_URI"] = os.getenv(
-        "DATABASE_URL", "sqlite:///users.db"
+        "DATABASE_URL", "sqlite:////app/data/users.db"
     )
     server.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
     server.config.update(
