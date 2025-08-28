@@ -17,6 +17,8 @@ from flask_login import (
     login_required,
     current_user,
 )
+from flask import session
+from uuid import uuid4
 from vobchat.assets.loginpage import LOGIN_PAGE_NO_SIGNUP
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy import String
@@ -112,6 +114,11 @@ def login():
     user = db.session.scalar(db.select(User).filter_by(email=email))
     if user and user.verify_password(pwd):
         login_user(user)
+        try:
+            # New per-login session identifier for thread ownership scoping
+            session["login_session_id"] = str(uuid4())
+        except Exception:
+            pass
         route_prefix, url_base = get_dash_base_paths()
         # Basic safety: only allow local relative redirects
         if (
@@ -131,4 +138,8 @@ def login():
 @login_required
 def logout():
     logout_user()
+    try:
+        session.pop("login_session_id", None)
+    except Exception:
+        pass
     return redirect(url_for("auth.login_page"))

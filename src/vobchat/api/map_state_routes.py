@@ -1,6 +1,8 @@
 # app/api/map_state_routes.py
 
 from flask import jsonify, request
+from flask_login import current_user
+from flask import session
 import logging
 import json
 from typing import Dict, List, Any
@@ -46,6 +48,28 @@ def register_map_state_routes(server):
 
             if not all([thread_id, polygon_id, unit_type]):
                 return jsonify({"error": "Missing required fields: thread_id, polygon_id, unit_type"}), 400
+
+            # Enforce thread ownership: bind if unowned; otherwise require same (user, session)
+            try:
+                from vobchat.utils.thread_owner import get_thread_owner, bind_thread_owner
+
+                if not current_user.is_authenticated:
+                    return jsonify({"error": "Unauthorized"}), 401
+                sess_id = session.get("login_session_id")
+                owner_token = f"{current_user.id}:{sess_id}"
+
+                owner = get_thread_owner(thread_id)
+                if owner is None:
+                    if not bind_thread_owner(thread_id, owner_token):
+                        return jsonify({"error": "Forbidden"}), 403
+                else:
+                    # Backward-compat: accept legacy owner that stored only user_id
+                    if str(owner) != owner_token and not (
+                        ":" not in str(owner) and str(owner) == str(current_user.id)
+                    ):
+                        return jsonify({"error": "Forbidden"}), 403
+            except Exception:
+                return jsonify({"error": "Forbidden"}), 403
 
             # Get current state from Redis
             r = redis_pool_manager.get_sync_client()
@@ -159,6 +183,27 @@ def register_map_state_routes(server):
             JSON: Current selection state
         """
         try:
+            # Enforce thread ownership (user, session)
+            try:
+                from vobchat.utils.thread_owner import get_thread_owner, bind_thread_owner
+
+                if not current_user.is_authenticated:
+                    return jsonify({"error": "Unauthorized"}), 401
+                sess_id = session.get("login_session_id")
+                owner_token = f"{current_user.id}:{sess_id}"
+
+                owner = get_thread_owner(thread_id)
+                if owner is None:
+                    if not bind_thread_owner(thread_id, owner_token):
+                        return jsonify({"error": "Forbidden"}), 403
+                else:
+                    if str(owner) != owner_token and not (
+                        ":" not in str(owner) and str(owner) == str(current_user.id)
+                    ):
+                        return jsonify({"error": "Forbidden"}), 403
+            except Exception:
+                return jsonify({"error": "Forbidden"}), 403
+
             r = redis_pool_manager.get_sync_client()
             state_key = f"workflow_state:{thread_id}"
             state_data = r.get(state_key)
@@ -191,6 +236,27 @@ def register_map_state_routes(server):
             JSON: Confirmation of clearing
         """
         try:
+            # Enforce thread ownership (user, session)
+            try:
+                from vobchat.utils.thread_owner import get_thread_owner, bind_thread_owner
+
+                if not current_user.is_authenticated:
+                    return jsonify({"error": "Unauthorized"}), 401
+                sess_id = session.get("login_session_id")
+                owner_token = f"{current_user.id}:{sess_id}"
+
+                owner = get_thread_owner(thread_id)
+                if owner is None:
+                    if not bind_thread_owner(thread_id, owner_token):
+                        return jsonify({"error": "Forbidden"}), 403
+                else:
+                    if str(owner) != owner_token and not (
+                        ":" not in str(owner) and str(owner) == str(current_user.id)
+                    ):
+                        return jsonify({"error": "Forbidden"}), 403
+            except Exception:
+                return jsonify({"error": "Forbidden"}), 403
+
             r = redis_pool_manager.get_sync_client()
             state_key = f"workflow_state:{thread_id}"
             state_data = r.get(state_key)

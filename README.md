@@ -126,7 +126,7 @@ docker-compose up -d --build
 * Stop container: `docker-compose down`
 * Restart container: `docker-compose restart`
 * Check status: `docker-compose ps`
-* Create user (while running): `docker-compose exec vobchat python create_user.py testuser@email.com password`
+* Create user (while running): `docker-compose exec vobchat flask --app vobchat.app:server add-user admin@example.com`
 
 **Docker Architecture:**
 - **Internal**: Redis server runs inside the container
@@ -148,17 +148,59 @@ docker-compose up -d --build
 * `DATABASE_URL`: User authentication database URL (default: sqlite:///users.db)
 
 **Authentication:**
-The application requires user authentication via Flask-Login. Users must log in with email/password before accessing the chat interface. Use the `flask add-user` command to create accounts.
+The application requires user authentication (Flask‑Login). There is no self‑signup; create accounts via the provided Flask CLI.
+
+- Create a user (Docker):
+  ```bash
+  docker-compose exec vobchat flask --app vobchat.app:server add-user you@example.com
+  ```
+  You will be prompted to set and confirm a password. Re‑running the command for an existing email resets the password.
+
+- Create a user (Local dev):
+  ```bash
+  # From your virtualenv with the app installed
+  flask --app vobchat.app:server add-user you@example.com
+  ```
+
+TTY vs non‑interactive examples (Docker):
+
+- With an interactive TTY (recommended for hidden password prompt):
+  ```bash
+  docker exec -it vobchat flask --app vobchat.app:server add-user you@example.com
+  ```
+- Non‑interactive (provide password as an option; note this may appear in shell history):
+  ```bash
+  docker exec vobchat \
+    flask --app vobchat.app:server add-user you@example.com \
+    --password 'YourStrongP@ss'
+  ```
 
 **Ollama Integration:**
 
-`ollama show deepseek-r1:latest --modelfile > deepseekr1_wt.modelfile`
+The app uses Ollama via `langchain_ollama`. We currently run the following model without any Modelfile changes:
 
-change the model template in that file. Then create a new model file with the command:
+- Model: `hf.co/unsloth/Qwen3-30B-A3B-Thinking-2507-GGUF:Q4_K_M`
 
-```bash
-ollama create deepseek-r1-wt --modelfile deepseekr1_wt.model
-```
+Steps:
+1) Pull the model into your Ollama server:
+   ```bash
+   ollama pull hf.co/unsloth/Qwen3-30B-A3B-Thinking-2507-GGUF:Q4_K_M
+   ```
+2) Set the environment variable in `.env` (or your shell) so VobChat uses it:
+   ```bash
+   VOBCHAT_LLM_MODEL=hf.co/unsloth/Qwen3-30B-A3B-Thinking-2507-GGUF:Q4_K_M
+   # Optional tuning
+   VOBCHAT_LLM_TEMP=0.7
+   VOBCHAT_OLLAMA_REASONING=true
+   ```
+3) Ensure your Ollama endpoint is reachable (defaults in `.env.example`):
+   ```bash
+   OLLAMA_HOST=localhost
+   OLLAMA_PORT=11434
+   OLLAMA_USE_SSL=false
+   ```
+
+No Modelfile edits are required for this model.
 
 ### Future Work
 

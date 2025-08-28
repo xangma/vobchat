@@ -54,7 +54,7 @@ from vobchat.api.bounding_box_routes import register_bounding_box_routes
 from vobchat.api.map_state_routes import register_map_state_routes
 from vobchat.models import register_app_routes
 from vobchat.utils.async_manager import async_manager
-from flask import Response, request, redirect, url_for, jsonify
+from flask import Response, request, redirect, url_for, jsonify, session
 from flask_login import current_user
 import pathlib
 from vobchat.models import db, lm, bp as auth_bp
@@ -90,6 +90,29 @@ def register_simple_sse_routes(server, workflow_adapter):
     @server.get(f"{ROUTE_PREFIX}/sse/<thread_id>")
     def sse_stream(thread_id):
         """Hold the EventSource connection open and push events."""
+        # Enforce thread ownership: bind if unowned; otherwise require same (user, session)
+        try:
+            from vobchat.utils.thread_owner import get_thread_owner, bind_thread_owner
+
+            if not current_user.is_authenticated:
+                return Response("Unauthorized", status=401)
+            sess_id = session.get("login_session_id")
+            owner_token = f"{current_user.id}:{sess_id}"
+
+            owner = get_thread_owner(thread_id)
+            if owner is None:
+                ok = bind_thread_owner(thread_id, owner_token)
+                if not ok:
+                    return Response("Forbidden", status=403)
+            else:
+                # Backward-compat: accept legacy owner that stored only user_id
+                if str(owner) != owner_token and not (
+                    ":" not in str(owner) and str(owner) == str(current_user.id)
+                ):
+                    return Response("Forbidden", status=403)
+        except Exception:
+            # Fail safe: if ownership checks blow up, deny access
+            return Response("Forbidden", status=403)
         import queue
         import time
 
@@ -133,6 +156,27 @@ def register_simple_sse_routes(server, workflow_adapter):
         )
 
     # ------------------------------------------------------------------ #
+    # 1b. THREAD MINT                                                    #
+    # ------------------------------------------------------------------ #
+    @server.post(f"{ROUTE_PREFIX}/threads/new")
+    def mint_thread():
+        """Create a new server-generated thread_id bound to this login session."""
+        try:
+            if not current_user.is_authenticated:
+                return jsonify({"error": "Unauthorized"}), 401
+            sess_id = session.get("login_session_id")
+            owner_token = f"{current_user.id}:{sess_id}"
+            from vobchat.utils.thread_owner import mint_thread_id
+
+            tid = mint_thread_id(owner_token)
+            if not tid:
+                return jsonify({"error": "Failed to mint thread"}), 500
+            return jsonify({"thread_id": tid})
+        except Exception as exc:
+            logger.error(f"Failed to mint thread: {exc}", exc_info=True)
+            return jsonify({"error": "Failed"}), 500
+
+    # ------------------------------------------------------------------ #
     # 2. WORKFLOW ADVANCE  (sync version)                                #
     # ------------------------------------------------------------------ #
     @server.route(f"{ROUTE_PREFIX}/workflow/<thread_id>", methods=["POST"])
@@ -141,6 +185,40 @@ def register_simple_sse_routes(server, workflow_adapter):
         Synchronous handler: accept the button-click payload, enqueue the
         async LangGraph step, and return immediately.
         """
+        # Enforce thread ownership: bind if unowned; otherwise require same (user, session)
+        try:
+            from vobchat.utils.thread_owner import get_thread_owner, bind_thread_owner
+
+            if not current_user.is_authenticated:
+                return (
+                    jsonify({"status": "error", "message": "Unauthorized"}),
+                    401,
+                )
+            sess_id = session.get("login_session_id")
+            owner_token = f"{current_user.id}:{sess_id}"
+
+            owner = get_thread_owner(thread_id)
+            if owner is None:
+                ok = bind_thread_owner(thread_id, owner_token)
+                if not ok:
+                    return (
+                        jsonify({"status": "error", "message": "Forbidden"}),
+                        403,
+                    )
+            else:
+                # Backward-compat: accept legacy owner that stored only user_id
+                if str(owner) != owner_token and not (
+                    ":" not in str(owner) and str(owner) == str(current_user.id)
+                ):
+                    return (
+                        jsonify({"status": "error", "message": "Forbidden"}),
+                        403,
+                    )
+        except Exception:
+            return (
+                jsonify({"status": "error", "message": "Forbidden"}),
+                403,
+            )
         data = request.get_json(silent=True) or {}
         wf_input = data.get("workflow_input")
 
@@ -335,6 +413,14 @@ def create_app():
         if not current_user.is_authenticated:
             # preserve destination so Flask-Login can send them back
             return redirect(url_for("auth.login_page", next=path))
+
+        # Ensure a per-login session id exists for owner-token binding
+        try:
+            if "login_session_id" not in session:
+                import uuid
+                session["login_session_id"] = str(uuid.uuid4())
+        except Exception:
+            pass
 
     # Create database tables
     with server.app_context():

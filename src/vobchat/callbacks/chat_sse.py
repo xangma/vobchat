@@ -65,37 +65,51 @@ def register_simple_chat_callbacks(app, compiled_workflow):
         trigger = ctx.triggered[0]["prop_id"]
         logger.info(f"Chat triggered by: {trigger}")
 
-        # Initialize thread ID if needed
+        # Initialize thread ID if needed (server-minted + bound to session)
         if not thread_id:
-            thread_id = str(uuid4())
-            logger.info(f"Generated new thread ID: {thread_id}")
+            try:
+                from flask_login import current_user
+                from flask import session as flask_session
+                from vobchat.utils.thread_owner import mint_thread_id
+
+                if not current_user.is_authenticated:
+                    raise RuntimeError("User not authenticated")
+                owner_token = f"{current_user.id}:{flask_session.get('login_session_id')}"
+                tid = mint_thread_id(owner_token)
+                if not tid:
+                    raise RuntimeError("Failed to mint thread id")
+                thread_id = tid
+                logger.info(f"Minted new thread ID: {thread_id}")
+            except Exception as e:
+                # Fallback to local UUID if minting fails (will be bound on first route access)
+                thread_id = str(uuid4())
+                logger.warning(f"Fallback to local UUID for thread_id due to error: {e}")
 
         # Handle reset
         if "reset-button" in trigger:
             logger.info(
                 "Reset triggered - generating new thread ID and triggering reset workflow"
             )
-            new_thread_id = str(uuid4())
+            # Mint a server-generated thread id bound to this session
+            try:
+                from flask_login import current_user
+                from flask import session as flask_session
+                from vobchat.utils.thread_owner import mint_thread_id
 
-            # Remove all SSE clients for old threads across all workers
+                owner_token = f"{current_user.id}:{flask_session.get('login_session_id')}"
+                new_thread_id = mint_thread_id(owner_token) or str(uuid4())
+            except Exception:
+                new_thread_id = str(uuid4())
 
-            # Get current active threads for logging
-            active_threads = simple_sse_manager.get_all_active_threads()
-            if active_threads:
-                logger.info(f"Active SSE threads before cleanup: {active_threads}")
-
-            # Broadcast cleanup signal for all threads except the new one
-            logger.info(
-                f"Broadcasting cleanup signal for all threads except {new_thread_id}"
-            )
-            simple_sse_manager.broadcast_cleanup_all_except(new_thread_id)
-
-            # Also cleanup all threads except the new one locally
-            cleaned_count = simple_sse_manager.cleanup_all_threads_except(new_thread_id)
-            if cleaned_count > 0:
-                logger.info(
-                    f"Cleaned up {cleaned_count} local SSE clients during reset"
-                )
+            # If we have an existing thread, cleanup only that thread's SSE clients
+            try:
+                if thread_id:
+                    logger.info(f"Reset: cleaning up SSE clients for old thread {thread_id}")
+                    simple_sse_manager.broadcast_cleanup_signal(thread_id)
+                    # Local cleanup for the old thread as well
+                    simple_sse_manager._cleanup_local_clients(thread_id)
+            except Exception:
+                logger.warning("Reset: failed to cleanup old thread SSE clients", exc_info=True)
 
             # Create workflow input for reset
             reset_workflow_input = {
@@ -290,7 +304,15 @@ def register_simple_chat_callbacks(app, compiled_workflow):
 
         # Ensure thread id exists
         if not thread_id:
-            thread_id = str(uuid4())
+            try:
+                from flask_login import current_user
+                from flask import session as flask_session
+                from vobchat.utils.thread_owner import mint_thread_id
+
+                owner_token = f"{current_user.id}:{flask_session.get('login_session_id')}"
+                thread_id = mint_thread_id(owner_token) or str(uuid4())
+            except Exception:
+                thread_id = str(uuid4())
 
         # Find which marker was clicked
         ctx = dash.callback_context
@@ -362,7 +384,15 @@ def register_simple_chat_callbacks(app, compiled_workflow):
 
         # Ensure we have a thread id
         if not thread_id:
-            thread_id = str(uuid4())
+            try:
+                from flask_login import current_user
+                from flask import session as flask_session
+                from vobchat.utils.thread_owner import mint_thread_id
+
+                owner_token = f"{current_user.id}:{flask_session.get('login_session_id')}"
+                thread_id = mint_thread_id(owner_token) or str(uuid4())
+            except Exception:
+                thread_id = str(uuid4())
 
         # Include current places if available so backend can scope themes
         places_from_client = []

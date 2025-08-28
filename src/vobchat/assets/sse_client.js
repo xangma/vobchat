@@ -140,9 +140,28 @@ class SimpleSSEClient {
     noteClientRemove(_) { /* deprecated */ }
     pruneRecent(_) { /* deprecated */ }
 
-    connect(threadId, workflowInput = null) {
+    async connect(threadId, workflowInput = null) {
         if (this.eventSource) this.disconnect();
         this.threadId = threadId;
+
+        // If no threadId provided, mint one from the server and bind to session
+        if (!this.threadId) {
+            try {
+                const resp = await fetch(this.joinPath(this.basePath, `/threads/new`), { method: 'POST', headers: { 'Accept': 'application/json' } });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data && data.thread_id) {
+                        this.threadId = data.thread_id;
+                    }
+                }
+            } catch (e) {
+                console.error('SSE: failed to mint thread id', e);
+            }
+            if (!this.threadId) {
+                console.error('SSE: no thread id available to connect');
+                return;
+            }
+        }
 
         // Reset UX bits on Reset intent
         if (workflowInput && workflowInput.last_intent_payload?.intent === 'Reset') {
@@ -169,7 +188,7 @@ class SimpleSSEClient {
             } catch (_) { }
         }
 
-        const url = this.joinPath(this.basePath, `/sse/${threadId}`);
+        const url = this.joinPath(this.basePath, `/sse/${this.threadId}`);
         this.eventSource = new EventSource(url);
 
         this.postWorkflowInput = (input) => {
