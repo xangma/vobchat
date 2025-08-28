@@ -14,6 +14,12 @@ def add_user(email, password):
     Create **or** reset-password for an e-mail account.
     Prompts twice to avoid typos.
     """
+    # Ensure tables exist (idempotent)
+    try:
+        db.create_all()
+    except Exception:
+        pass
+
     email = email.strip().lower()
 
     user = db.session.scalar(db.select(User).filter_by(email=email))
@@ -33,5 +39,17 @@ def add_user(email, password):
         click.secho("✖ Database error", fg="red", err=True)
 
 
+@click.command("init-db")
+@with_appcontext
+def init_db():
+    """Initialise the auth database (SQLite/Postgres) by creating tables."""
+    try:
+        db.create_all()
+        click.secho("✔ Database initialised", fg="green")
+    except Exception as e:
+        click.secho(f"✖ Failed to initialise DB: {e}", fg="red", err=True)
+
+
 def register_commands(app):
     app.cli.add_command(add_user)
+    app.cli.add_command(init_db)

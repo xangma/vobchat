@@ -114,8 +114,9 @@ For easier deployment, VobChat can be run in a Docker container with Redis inclu
    DATABASE_URL=sqlite:////app/data/users.db
    ```
 4. Build and run: `docker-compose up --build`
-5. Create a login user: `docker-compose exec vobchat flask --app vobchat.app:server add-user admin@example.com`
-6. Access the application at `http://localhost:8050`
+5. Initialise the auth DB (first run): `docker-compose exec vobchat flask --app vobchat.app:server init-db`
+6. Create a login user: `docker-compose exec vobchat flask --app vobchat.app:server add-user admin@example.com`
+7. Access the application at `http://localhost:8050`
 
 **Running in Background:**
 To run the container in the background (detached mode):
@@ -177,6 +178,11 @@ TTY vs non‑interactive examples (Docker):
     flask --app vobchat.app:server add-user you@example.com \
     --password 'YourStrongP@ss'
   ```
+
+If you see "no such table: users" on first run, initialise the database first:
+```bash
+docker-compose exec vobchat flask --app vobchat.app:server init-db
+```
 
 **Ollama Integration:**
 
