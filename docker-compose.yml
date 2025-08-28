@@ -3,6 +3,8 @@ services:
     build: .
     container_name: vobchat
     image: vobchat:latest
+    env_file:
+      - .env
     ports:
       - "127.0.0.1:8050:8050"
     extra_hosts: [ "host.docker.internal:host-gateway" ]
