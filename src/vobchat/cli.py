@@ -2,7 +2,7 @@
 import click
 from flask.cli import with_appcontext
 from sqlalchemy.exc import IntegrityError
-from vobchat.models import db, User, pwd_ctx
+from vobchat.models import db, User, pwd_ctx, Base
 
 
 @click.command("add-user")
@@ -17,6 +17,12 @@ def add_user(email, password):
     # Ensure tables exist (idempotent)
     try:
         db.create_all()
+        # Ensure Declarative Base tables are created as well (User inherits from Base)
+        try:
+            engine = db.engine  # requires app context
+            Base.metadata.create_all(bind=engine)
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -45,6 +51,11 @@ def init_db():
     """Initialise the auth database (SQLite/Postgres) by creating tables."""
     try:
         db.create_all()
+        try:
+            engine = db.engine
+            Base.metadata.create_all(bind=engine)
+        except Exception:
+            pass
         click.secho("✔ Database initialised", fg="green")
     except Exception as e:
         click.secho(f"✖ Failed to initialise DB: {e}", fg="red", err=True)

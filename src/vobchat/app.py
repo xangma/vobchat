@@ -427,6 +427,13 @@ def create_app():
     with server.app_context():
         try:
             db.create_all()
+            # Also create tables from the Declarative Base used by models.User
+            try:
+                from vobchat.models import Base as _Base
+
+                _Base.metadata.create_all(bind=db.engine)
+            except Exception:
+                pass
             logger.info("Database tables created successfully")
         except Exception as e:
             logger.error(f"Error creating database tables: {e}")
