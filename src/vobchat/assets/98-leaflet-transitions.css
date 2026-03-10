@@ -1,0 +1,9 @@
+/* Smooth transitions for Leaflet polygon style updates */
+.leaflet-container .leaflet-overlay-pane svg path.leaflet-interactive {
+  transition:
+    fill 180ms ease,
+    fill-opacity 180ms ease,
+    stroke 180ms ease,
+    stroke-opacity 180ms ease;
+  will-change: fill, fill-opacity, stroke, stroke-opacity;
+}

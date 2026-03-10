@@ -1,0 +1,273 @@
+/* app/assets/visualization_enhancements.css */
+
+/* Styles for the control panel */
+.viz-control-panel {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background-color: #f8f9fa;
+    border-bottom: 1px solid #e9ecef;
+    padding: 5px 10px;
+    user-select: none;
+    border-radius: 5px 5px 0 0;
+}
+
+.viz-control-handle {
+    cursor: move;
+    padding: 5px;
+    font-size: 16px;
+}
+
+.viz-control-buttons {
+    display: flex;
+    gap: 5px;
+}
+
+.viz-control-button {
+    background: none;
+    border: none;
+    font-size: 14px;
+    cursor: pointer;
+    padding: 5px;
+    border-radius: 3px;
+    transition: background-color 0.2s;
+}
+
+.viz-control-button:hover {
+    background-color: #e9ecef;
+}
+
+.viz-popout {
+    color: #0d6efd;
+}
+
+.viz-minimize {
+    color: #6c757d;
+}
+
+.viz-maximize {
+    color: #198754;
+}
+
+.viz-close {
+    color: #dc3545;
+}
+
+/* Styles for visualization area in different states */
+#visualization-area.viz-floating {
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1), 0 6px 20px rgba(0, 0, 0, 0.1);
+    border-radius: 5px;
+    background-color: white;
+    transition: none;
+    overflow: hidden;
+    padding: 15px;
+    border: 1px solid #dee2e6;
+}
+
+#visualization-area.viz-dragging {
+    opacity: 0.8;
+    transition: none;
+}
+
+#visualization-area.viz-resizing {
+    transition: none;
+}
+
+#visualization-area.viz-minimized {
+    overflow: hidden;
+}
+
+#visualization-area.viz-maximized {
+    border-radius: 0;
+    box-shadow: none;
+}
+
+/* Resize handles */
+.viz-resize-handles {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+.viz-resize-handle {
+    position: absolute;
+    pointer-events: auto;
+    background-color: transparent;
+}
+
+/* Position and size for each resize handle */
+.viz-resize-n {
+    top: 0;
+    left: 10px;
+    right: 10px;
+    height: 6px;
+    cursor: n-resize;
+}
+
+.viz-resize-e {
+    top: 10px;
+    right: 0;
+    bottom: 10px;
+    width: 6px;
+    cursor: e-resize;
+}
+
+.viz-resize-s {
+    bottom: 0;
+    left: 10px;
+    right: 10px;
+    height: 6px;
+    cursor: s-resize;
+}
+
+.viz-resize-w {
+    top: 10px;
+    left: 0;
+    bottom: 10px;
+    width: 6px;
+    cursor: w-resize;
+}
+
+.viz-resize-ne {
+    top: 0;
+    right: 0;
+    width: 10px;
+    height: 10px;
+    cursor: ne-resize;
+}
+
+.viz-resize-se {
+    bottom: 0;
+    right: 0;
+    width: 10px;
+    height: 10px;
+    cursor: se-resize;
+}
+
+.viz-resize-sw {
+    bottom: 0;
+    left: 0;
+    width: 10px;
+    height: 10px;
+    cursor: sw-resize;
+}
+
+.viz-resize-nw {
+    top: 0;
+    left: 0;
+    width: 10px;
+    height: 10px;
+    cursor: nw-resize;
+}
+
+/* Show resize handles only when visualization is floating */
+#visualization-area:not(.viz-floating) .viz-resize-handles {
+    display: none;
+}
+
+/* Show hover effect for resize handles */
+.viz-resize-handle:hover {
+    background-color: rgba(13, 110, 253, 0.2);
+}
+
+/* Add a toggle button to switch between fixed and floating modes */
+.viz-float-toggle {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    background: none;
+    border: none;
+    color: #0d6efd;
+    cursor: pointer;
+    z-index: 1;
+    font-size: 14px;
+    padding: 5px;
+    border-radius: 3px;
+}
+
+.viz-float-toggle:hover {
+    background-color: #e9ecef;
+}
+
+/* Make sure content fits properly in visualization area */
+#visualization-area.viz-floating #data-plot {
+    height: calc(100% - 40px) !important;
+}
+
+/* Ensure tab content stretches while headers keep natural height */
+
+#viz-tabs-parent {
+    height: 100% !important;
+    display: flex;
+    flex-direction: column;
+    min-height: 0; /* allow children to expand */
+}
+
+/* Make only the tab CONTENT stretch, not the tab headers */
+#viz-tabs-parent .tab-content {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+#viz-tabs-parent .tab-content > * {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+/* Our explicit content wrapper */
+#viz-tabs-parent .viz-tab-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+/* Minimal rules to hide disabled Categories tab and stretch remaining tabs */
+/* Current DOM variant: #viz-tabs.tab-container contains child .tab elements */
+#viz-tabs .tab--disabled { display: none !important; }
+#viz-tabs.tab-container { display: flex; width: 100%; }
+#viz-tabs.tab-container > .tab { flex: 1 1 0 !important; text-align: center; }
+#viz-tabs.tab-container > .tab--selected { flex: 1 1 0 !important; }
+
+#viz-year-slider-container {
+    padding-top: 25px;
+}
+
+/* Icon font definitions to ensure they're always available */
+@font-face {
+    font-family: 'FontAwesome';
+    src: url('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/webfonts/fa-solid-900.woff2') format('woff2'),
+        url('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/webfonts/fa-solid-900.woff') format('woff');
+    font-weight: 900;
+    font-style: normal;
+}
+
+/* Custom icon classes that don't rely on FontAwesome being loaded */
+.viz-control-handle i::before {
+    content: "↔";
+    font-family: Arial, sans-serif;
+}
+
+.viz-popout i::before {
+    content: "⇱";
+    font-family: Arial, sans-serif;
+}
+
+.viz-minimize i::before {
+    content: "—";
+    font-family: Arial, sans-serif;
+}
+
+.viz-maximize i::before {
+    content: "⤢";
+    font-family: Arial, sans-serif;
+}
+
+.viz-close i::before {
+    content: "✕";
+    font-family: Arial, sans-serif;
+}

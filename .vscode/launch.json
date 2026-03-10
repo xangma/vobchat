@@ -1,0 +1,126 @@
+{
+  // Use IntelliSense to learn about possible attributes.
+  // Hover to view descriptions of existing attributes.
+  // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Containers: Python - VobChat (Gunicorn)",
+      "type": "docker",
+      "request": "launch",
+      "containerName": "vobchat",
+      "preLaunchTask": "docker-run: debug",
+      "python": {
+        "pathMappings": [
+          {
+            "localRoot": "${workspaceFolder}",
+            "remoteRoot": "/app"
+          }
+        ],
+        "justMyCode": false,
+        "projectType": "flask"
+      },
+      "dockerServerReadyAction": {
+        "action": "openExternally",
+        "pattern": "Running on http://127.0.0.1:([0-9]+)",
+        "uriFormat": "http://localhost:%s/"
+      }
+    },
+    {
+      "name": "Python Debugger: Docker Remote Attach",
+      "type": "debugpy",
+      "request": "attach",
+      "connect": {
+        "host": "localhost",
+        "port": 5678
+      },
+      "pathMappings": [
+        {
+          "localRoot": "${workspaceFolder}",
+          "remoteRoot": "/app"
+        }
+      ]
+    },
+    {
+      "name": "Python Debugger: vobchat Dash",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "/Users/xangma/miniconda3/envs/vobchat/bin/gunicorn",
+      "args": [
+        "-c",
+        "vobchat/gunicorn.conf.py",
+        "vobchat.app:server"
+      ],
+      "cwd": "${workspaceFolder}/src",
+      "console": "integratedTerminal",
+      "subProcess": true,
+      "justMyCode": false,
+      "env": {
+        "OBJC_DISABLE_INITIALIZE_FORK_SAFETY": "YES",
+        "REDIS_URL": "redis://127.0.0.1:6379",
+        "CELERY_BROKER_URL": "redis://127.0.0.1:6379",
+        "BROKER_URL": "redis://127.0.0.1:6379",
+        "GEVENT_SUPPORT": "True",
+      }
+    },
+    {
+      "name": "Python Debugger: vobchat Celery",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "/Users/xangma/miniconda3/envs/vobchat/bin/celery",
+      "args": [
+        "-A",
+        "vobchat.app:celery_app",
+        "worker",
+        "--loglevel=INFO",
+        "--time-limit=1500",
+        "--concurrency=2"
+      ],
+      "cwd": "${workspaceFolder}/src",
+      "console": "integratedTerminal",
+      "subProcess": true,
+      "justMyCode": false,
+      "env": {
+        "REDIS_URL": "redis://127.0.0.1:6379",
+        "CELERY_BROKER_URL": "redis://127.0.0.1:6379",
+        "BROKER_URL": "redis://127.0.0.1:6379",
+        "CELERY_TIMEZONE": "TIME_ZONE",
+        "CELERY_TASK_TRACK_STARTED": "true",
+        "CELERY_TASK_TIME_LIMIT": "30 * 60",
+        "CELERY_RESULT_EXTENDED": "true",
+        "CELERY_worker_state_db": "true"
+      }
+    },
+    {
+      "name": "Python Debugger: Current File",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Containers: Python - Flask",
+      "type": "docker",
+      "request": "launch",
+      "preLaunchTask": "docker-run: debug",
+      "python": {
+        "pathMappings": [
+          {
+            "localRoot": "${workspaceFolder}",
+            "remoteRoot": "/app"
+          }
+        ],
+        "projectType": "flask"
+      }
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Python Debugger: vobchat",
+      "configurations": [
+        "Python Debugger: vobchat Dash",
+        "Python Debugger: vobchat Celery"
+      ]
+    }
+  ]
+}

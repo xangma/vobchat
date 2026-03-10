@@ -1,0 +1,144 @@
+# ====================
+# General
+# ====================
+LICENSE
+README.md
+
+# ====================
+# Version Control
+# ====================
+.git
+.gitignore
+*.git
+
+# ====================
+# Python
+# ====================
+*.py[cod]
+*$py.class
+*.so
+.Python
+__pycache__/
+*.egg
+*.egg-info/
+.installed.cfg
+MANIFEST
+
+# Python build artifacts
+build/
+dist/
+downloads/
+develop-eggs/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# ====================
+# Docker
+# ====================
+Dockerfile
+Dockerfile*
+docker-compose*
+compose*
+.dockerignore
+
+# ====================
+# Node
+# ====================
+node_modules/
+npm-debug.log
+
+# ====================
+# IDE / Editor
+# ====================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.classpath
+.project
+.settings
+.toolstarget
+.vs
+
+# ====================
+# OS Files
+# ====================
+.DS_Store
+Thumbs.db
+
+# ====================
+# Logs
+# ====================
+*.log
+logs/
+backend.log
+frontend.log
+
+# ====================
+# Test files
+# ====================
+test/
+tests/
+*_test.py
+test_*.py
+
+# ====================
+# Cache
+# ====================
+.cache/
+.pytest_cache/
+
+# ====================
+# Environment Variables
+# ====================
+.env
+.env.*
+.env.local
+.env.development
+.env.test
+.env.production
+
+# ====================
+# Kubernetes / Helm
+# ====================
+charts/
+secrets.dev.yaml
+values.dev.yaml
+
+# ====================
+# Documentation
+# ====================
+docs/
+
+# ====================
+# Build Artifacts
+# ====================
+bin/
+obj/
+
+# ====================
+# Temporary
+# ====================
+tmp/
+temp/
+*.tmp
+
+# ====================
+# Unused
+# ====================
+unused/

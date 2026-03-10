@@ -1,0 +1,83 @@
+/* Vision of Britain 2025 Main Stylesheet Integration
+ * This file imports all VoB styles in the correct cascade order
+ * Created for VobChat integration with the wider Vision of Britain website
+ * 
+ * Named with 00- prefix to ensure it loads before other custom CSS files
+ */
+
+/* 1. Base reset and fundamental styles */
+@import url('newcss/basic.css');
+
+/* 2. Main site styling (much will be overridden) */
+@import url('newcss/default.css');
+
+/* 3. Progressive enhancements for modern browsers */
+@import url('newcss/extended.css');
+
+/* 4. Responsive design overrides for 2025 refresh */
+@import url('newcss/vob-responsive.modified.css');
+
+/* 5. Modern styling updates for 2025 refresh */
+@import url('newcss/vob-2025.css');
+
+/* 6. Print styles (media-specific) */
+@import url('newcss/print.css') print;
+
+/* 7. VobChat-specific customizations - loaded separately as 99-*.css files */
+/* These will be loaded automatically by Dash in alphabetical order */
+
+/* Additional VobChat overrides for Vision of Britain integration */
+
+/* Ensure Dash components work well with VoB styling */
+.dash-dropdown {
+    font-family: 'IBM Plex Sans', Helvetica, Arial, sans-serif;
+}
+
+.dash-table-container {
+    font-family: 'IBM Plex Sans', Helvetica, Arial, sans-serif;
+}
+
+/* Fix any Bootstrap conflicts with VoB styles */
+.container-fluid {
+    max-width: 100%;
+    padding: 0;
+}
+
+/* Ensure chat bubbles work with new typography */
+.speech-bubble {
+    font-family: 'IBM Plex Sans', Helvetica, Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.5;
+}
+
+/* Map container adjustments for VoB layout */
+#leaflet-map {
+    width: 100%;
+    height: 100%;
+}
+
+/* Ensure modals and overlays work with VoB styles */
+.modal-content {
+    font-family: 'IBM Plex Sans', Helvetica, Arial, sans-serif;
+}
+
+/* Responsive adjustments for VobChat components */
+@media (max-width: 800px) {
+    .chat-container {
+        padding: 10px;
+    }
+    
+    .visualization-container {
+        padding: 10px;
+    }
+}
+
+/* Override Bootstrap button styles to match VoB */
+.btn {
+    font-family: 'IBM Plex Sans', Helvetica, Arial, sans-serif;
+}
+
+/* Ensure VoB background color is applied */
+body {
+    background-color: #f3f4e9;
+}

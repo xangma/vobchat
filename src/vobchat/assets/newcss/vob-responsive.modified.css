@@ -1,0 +1,152 @@
+body {
+  font-size: 0.9em;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+/* *:not(.tabs *) { */
+*:not(.tabs *):not(.imgBorder) {
+  line-height: 1.5
+}
+
+.rowInner {
+  width: 90vw;
+  max-width: 80rem;
+}
+
+#navigation ul li.current {
+  background: unset;
+  color: #fff;
+  padding-bottom: 0;
+  box-shadow: 0 -5px 0 #21759b inset;
+}
+
+.unit, .cols13 .tab, .rowInner .tab {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.fullyFeatured .timeline .tlTabs {
+  background-size: 100% 19px;
+}
+
+.fullyFeatured .timeline .tlTabs h2 {
+  width: 2.3%;
+}
+
+#footer {
+  height: unset;
+  min-height: 80px;
+}
+
+
+/* cols */
+.cols5bkg {
+  background: none;
+}
+
+[class^="cols"] {
+  box-sizing: border-box !important;
+  margin: 0 !important;
+}
+
+[class^="cols"]:not(.cols18) {
+  padding-right: 30px !important;	
+}
+
+.cols5, .cols5_5 {
+  width: 27.7%;
+}
+
+.cols6 {
+  width: 33.33% !important;
+}
+
+.cols8 {
+  width: 44.44%;
+}
+
+/* Added by jrw */
+.cols9 {
+  width: 50.00%;
+}
+
+.cols10 {
+  width: 55.5%;
+}
+
+.cols13 {
+  width: 72.2%;
+}
+
+.cols18 {
+  width: 100%;
+}
+
+@media screen and (max-width: 800px) {
+  [class^="cols"] {
+    width: 100%;
+  }
+}
+
+.imgRight {
+	line-height: 0;
+	margin: 0 10px 20px 10px;
+}
+
+@media screen and (max-width: 550px) {
+  .imgRight {
+    float: none;
+    width: unset;
+    height: auto;
+    display: inline-block;
+  }
+  #strapLine {
+    margin-top: 0;
+  }
+}
+
+.searchBox .interactiveMaps {
+  width: 98%;
+  margin-bottom: 345px;
+  height: unset;
+  line-height: 0;
+  border: 0;
+  outline: 0;
+}
+
+@media screen and (min-width: 800px) {
+  .searchBox .interactiveMaps {
+    width: calc(100% - 300px);
+    margin-bottom: 1rem;
+    min-height: 310px;
+    max-height: 350px;
+    overflow: hidden;
+  }
+}
+
+.searchBox .interactiveMaps img {
+  width: 100%;
+  height: auto;
+}
+
+.searchBox .map {
+  bottom: 3rem;
+}
+
+.mapArea {
+  width: 100% !important;
+}
+
+.mapSize, .mapSizeSmaller {
+  margin-right: 30px;
+}
+
+table {
+  width: 100% !important;
+}
+
+.results {
+  max-width: 100%;
+  overflow: auto;
+}

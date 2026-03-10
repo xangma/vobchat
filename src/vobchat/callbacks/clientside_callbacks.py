@@ -1,0 +1,839 @@
+# Simple Clientside Callbacks - Clean rewrite
+# Single responsibility: Handle basic UI interactions without state sync complexity
+
+import json
+from dash import Dash, Input, Output, State, ALL
+from vobchat.utils.constants import UNIT_TYPES
+
+
+def register_simple_clientside_callbacks(app: Dash):
+    """Register simplified clientside callbacks - no more state sync loops!"""
+
+    # Constants for JavaScript
+    js_unit_types = json.dumps(UNIT_TYPES)
+    js_default_min_year = 1800
+
+    # 1. Basic user interactions -> map-state updates
+    app.clientside_callback(
+        """
+        function(unit_clicks, reset_clicks, slider_value, geojson_click, toggle_clicks,
+                 ctrl_pressed, map_state, button_ids, click_data, toggle_text) {
+
+            let add_trigger = window.dash_clientside.no_update;
+            let remove_trigger = window.dash_clientside.no_update;
+
+            const triggered = dash_clientside.callback_context.triggered;
+            if (!triggered || triggered.length === 0) {
+                return [window.dash_clientside.no_update, window.dash_clientside.no_update,
+                        window.dash_clientside.no_update, window.dash_clientside.no_update];
+            }
+
+            // Helper functions to work with places array (single source of truth)
+            const getSelectedPolygons = (state) => {
+                const places = state.places || [];
+                return places
+                    .filter(place => place.g_unit !== null && place.g_unit !== undefined)
+                    .map(place => String(place.g_unit));
+            };
+
+            const getSelectedUnitTypes = (state) => {
+                const places = state.places || [];
+                return places
+                    .filter(place => place.g_unit !== null && place.g_unit !== undefined)
+                    .map(place => place.g_unit_type || 'MOD_REG');
+            };
+
+            const triggered_id = triggered[0].prop_id;
+            let new_state = map_state ? JSON.parse(JSON.stringify(map_state)) : {};
+
+            // Initialize defaults
+            if (!new_state.unit_types) new_state.unit_types = ['MOD_REG'];
+            if (!new_state.places) new_state.places = [];
+            if (new_state.show_unselected === undefined) new_state.show_unselected = true;
+            if (!new_state.year_range) {
+                const currentYear = new Date().getFullYear();
+                new_state.year_range = [currentYear, currentYear];
+            }
+
+            let state_changed = false;
+            let new_toggle_text = window.dash_clientside.no_update;
+
+            // Handle Reset
+            if (triggered_id.includes('reset-selections.n_clicks') && reset_clicks) {
+                new_state.places = [];
+                new_toggle_text = "Hide unselected polygons";
+                state_changed = true;
+
+                // Clear any pending chat option buttons when selections are reset
+                try {
+                    if (window.simpleSSE && typeof window.simpleSSE.clearButtons === 'function') {
+                        window.simpleSSE.clearButtons();
+                    }
+                } catch (e) { /* no-op */ }
+            }
+            // Handle Unit Filters
+            else if (triggered_id.includes('unit-filter')) {
+                const button_id_str = triggered_id.split('.')[0];
+                const button_id = JSON.parse(button_id_str);
+                const clicked_type = button_id.unit;
+                let current_types = new Set(new_state.unit_types || ['MOD_REG']);
+
+                if (ctrl_pressed) {
+                    if (current_types.has(clicked_type)) {
+                        current_types.delete(clicked_type);
+                    } else {
+                        current_types.add(clicked_type);
+                    }
+                    if (current_types.size === 0) {
+                        current_types.add('MOD_REG');
+                    }
+                    window.dash_clientside.set_props("ctrl-pressed-store", {data: false});
+                } else {
+                    current_types = new Set([clicked_type]);
+                }
+
+                new_state.unit_types = Array.from(current_types);
+                state_changed = true;
+
+                // Immediately update polygons when unit types change
+                setTimeout(() => {
+                    const mapElement = document.getElementById('leaflet-map');
+                    const map = mapElement?._leaflet_map;
+                    
+                    if (map && window.polygonManagement && window.polygonManagement.updateMapWithBounds) {
+                        const yearRange = new_state.year_range ? { min: new_state.year_range[0], max: new_state.year_range[1] } : null;
+                        const DENSE_UNITS = new Set(['CONSTITUENCY','LG_DIST','MOD_DIST','MOD_WARD']);
+                        const uts = Array.isArray(new_state.unit_types) ? new_state.unit_types : [];
+                        const hasDense = uts.some(u => DENSE_UNITS.has(u));
+                        const selCount = (new_state.places || []).filter(p => p && p.g_unit != null).length;
+                        const currentZoom = (map && map.getZoom) ? map.getZoom() : null;
+                        const targetZoom = window.VOB_FALLBACK_ZOOM_DENSE || 8;
+                        const tooZoomedOut = (currentZoom == null) || (currentZoom < targetZoom);
+                        // If dense type and no selection and we're too zoomed out, zoom first to limit fetch
+                        if (hasDense && selCount === 0 && tooZoomedOut) {
+                            if (window.VOB_DEBUG) console.log('Unit filter: Pre-zooming before fetching polygons for dense unit types', { currentZoom, targetZoom, uts });
+                            try { window._zoomSource = 'unit_type_prezoom_dense'; } catch (_) {}
+                            // Let auto-load (moveend) perform the fetch once zoomed
+                            map.setZoom(targetZoom, { animate: true });
+                        } else {
+                            const bounds = map.getBounds();
+                            if (window.VOB_DEBUG) console.log('Unit filter: Updating polygons for unit types:', new_state.unit_types, { bounds: bounds.toBBoxString?.() });
+                            window.polygonManagement.updateMapWithBounds(map, new_state.unit_types, bounds, new_state, yearRange)
+                                .then(() => console.log('Unit filter: Polygon update completed'))
+                                .catch(error => console.error('Unit filter: Error updating polygons:', error));
+                        }
+                    }
+                }, 0);
+            }
+            // Handle Year Slider
+            else if (triggered_id.includes('year-range-slider.value') && slider_value) {
+                const currentYear = new Date().getFullYear();
+                const y0 = Math.min(slider_value[0], currentYear);
+                const y1 = Math.min(slider_value[1], currentYear);
+
+                if (!new_state.year_range || new_state.year_range[0] !== y0 || new_state.year_range[1] !== y1) {
+                    new_state.year_range = [y0, y1];
+                    state_changed = true;
+                }
+            }
+            // Handle Map Clicks
+            else if (triggered_id.includes('geojson-layer.n_clicks') && click_data) {
+                const fid = String(click_data.id);
+                const unit_type = click_data.properties.g_unit_type;
+                const unit_name = click_data.properties.unit_name || fid;
+
+                if (fid != null) {
+                    const current_places = new_state.places || [];
+                    let placeIndex = current_places.findIndex(p => String(p.g_unit) === fid);
+                    let inStoreSel = placeIndex !== -1;
+                    // Snapshot current rendered selection from layer.hideout
+                    let layerSel = [];
+                    let layerRef = null;
+                    try {
+                        const mapEl0 = document.getElementById('leaflet-map');
+                        const map0 = mapEl0?._leaflet_map;
+                        layerRef = window.polygonManagement?.findGeoJSONLayer?.(map0) || null;
+                        layerSel = (layerRef?.options?.hideout?.selected || []).map(String);
+                    } catch (e) { /* no-op */ }
+                    const inLayerSel = layerSel.includes(fid);
+                    const isSelected = inLayerSel || inStoreSel;
+                    if (window.VOB_TRACE?.select || window.VOB_DEBUG) {
+                        console.log('[select] snap', { inLayerSel, inStoreSel, layerSel: (layerSel || []).slice(0, 5) });
+                        console.log('[select] click', { op: isSelected ? 'remove' : 'add', id: fid });
+                    }
+
+                    if (isSelected) {
+                        // Remove polygon
+                        remove_trigger = {
+                            id: fid,
+                            name: unit_name,
+                            type: unit_type,
+                            timestamp: Date.now()
+                        };
+
+                        // Compute next selection ids from layer snapshot minus fid, then rebuild places
+                        const nextSelIds = layerSel.filter(id => id !== fid);
+                        if (window.VOB_TRACE?.select || window.VOB_DEBUG) console.log('[select] remove.nextSel', { count: nextSelIds.length, ids: nextSelIds.slice(0, 5) });
+                        const byId = Object.create(null);
+                        (current_places || []).forEach(p => { if (p && p.g_unit != null) byId[String(p.g_unit)] = p; });
+                        const built = [];
+                        nextSelIds.forEach(id => {
+                            if (byId[id]) { built.push(byId[id]); return; }
+                            // Build minimal place from layer feature when missing in store
+                            try {
+                                let ut = null, nm = `Place ${id}`;
+                                if (layerRef && layerRef._layers) {
+                                    for (const l of Object.values(layerRef._layers)) {
+                                        if (l?.feature?.id != null && String(l.feature.id) === String(id)) {
+                                            ut = l.feature?.properties?.g_unit_type || null;
+                                            nm = l.feature?.properties?.unit_name || nm;
+                                            break;
+                                        }
+                                    }
+                                }
+                                built.push({ name: nm, g_unit: parseInt(id), g_unit_type: ut, g_place: null, candidate_rows: [], unit_rows: [] });
+                            } catch (_) {
+                                built.push({ name: `Place ${id}`, g_unit: parseInt(id), g_unit_type: null, g_place: null, candidate_rows: [], unit_rows: [] });
+                            }
+                        });
+                        new_state.places = built;
+                        if (window.VOB_TRACE?.select || window.VOB_DEBUG) console.log('[select] places', { after: new_state.places.length });
+    
+                        // No direct hideout mutation; map-state change will drive highlight
+    
+                        // Clear any pending chat option buttons if user deselects the polygon
+                        try {
+                            if (window.simpleSSE && typeof window.simpleSSE.clearButtons === 'function') {
+                                window.simpleSSE.clearButtons();
+                            }
+                        } catch (e) { /* no-op */ }
+    
+                        // If that was the last selected polygon and the active unit types are dense,
+                        // snap to a sensible fallback zoom instead of fitting all polygons.
+                        setTimeout(() => {
+                            try {
+                                if (!built || built.length > 0) return; // only when selection is now empty
+                                const mapElement = document.getElementById('leaflet-map');
+                                const map = mapElement?._leaflet_map;
+                                if (!map) return;
+                                const DENSE_UNITS = new Set(['CONSTITUENCY','LG_DIST','MOD_DIST','MOD_WARD']);
+                                const uts = Array.isArray(new_state.unit_types) ? new_state.unit_types : [];
+                                const hasDense = uts.some(u => DENSE_UNITS.has(u));
+                                if (hasDense) {
+                                    const target = window.VOB_FALLBACK_ZOOM_DENSE || 8;
+                                    try { window._zoomSource = 'deselect_fallback_dense'; } catch (_) {}
+                                    map.setZoom(target, { animate: true });
+                                } else {
+                                    // For region/county, fit to all currently visible polygons
+                                    const layer = window.polygonManagement?.findGeoJSONLayer?.(map);
+                                    if (layer && window.polygonManagement?.zoomTo) {
+                                        try { window._zoomSource = 'deselect_fit_all'; } catch (_) {}
+                                        window.polygonManagement.zoomTo(map, null, layer);
+                                    }
+                                }
+                            } catch (e) { /* no-op */ }
+                        }, 50);
+                    } else {
+                        // Add polygon
+                        add_trigger = {
+                            id: fid,
+                            name: unit_name,
+                            type: unit_type,
+                            timestamp: Date.now()
+                        };
+
+                        // Compute next selection ids as union of layer snapshot and fid, then rebuild places
+                        const nextSelIds = (layerSel.includes(fid) ? layerSel : layerSel.concat([fid]));
+                        if (window.VOB_TRACE?.select || window.VOB_DEBUG) console.log('[select] add.nextSel', { count: nextSelIds.length, ids: nextSelIds.slice(0, 5) });
+                        const byId = Object.create(null);
+                        (current_places || []).forEach(p => { if (p && p.g_unit != null) byId[String(p.g_unit)] = p; });
+                        if (!byId[fid]) byId[fid] = { name: unit_name, g_unit: parseInt(fid), g_unit_type: unit_type, g_place: null, candidate_rows: [], unit_rows: [] };
+                        const built = [];
+                        nextSelIds.forEach(id => {
+                            if (byId[id]) { built.push(byId[id]); return; }
+                            // Build minimal place for any missing id from layer feature
+                            try {
+                                let ut = null, nm = `Place ${id}`;
+                                if (layerRef && layerRef._layers) {
+                                    for (const l of Object.values(layerRef._layers)) {
+                                        if (l?.feature?.id != null && String(l.feature.id) === String(id)) {
+                                            ut = l.feature?.properties?.g_unit_type || null;
+                                            nm = l.feature?.properties?.unit_name || nm;
+                                            break;
+                                        }
+                                    }
+                                }
+                                built.push({ name: nm, g_unit: parseInt(id), g_unit_type: ut, g_place: null, candidate_rows: [], unit_rows: [] });
+                            } catch (_) {
+                                built.push({ name: `Place ${id}`, g_unit: parseInt(id), g_unit_type: null, g_place: null, candidate_rows: [], unit_rows: [] });
+                            }
+                        });
+                        new_state.places = built;
+                        if (window.VOB_TRACE?.select || window.VOB_DEBUG) console.log('[select] places', { after: new_state.places.length });
+
+                        // No direct hideout mutation; map-state change will drive highlight
+
+                        // Explicit zoom to the newly selected polygon for responsive UX
+                        setTimeout(() => {
+                            try {
+                                const mapElementZoom = document.getElementById('leaflet-map');
+                                const mapZoom = mapElementZoom?._leaflet_map;
+                                if (mapZoom && window.polygonManagement && window.polygonManagement.zoomTo) {
+                                    try { window._zoomSource = 'map_click'; } catch (_) {}
+                                    window.polygonManagement.zoomTo(mapZoom, [fid]);
+                                    // Record last local zoom to suppress duplicate SSE zoom
+                                    try { window._lastLocalZoomTs = Date.now(); window._lastLocalZoomIds = [String(fid)]; } catch (_) {}
+                                }
+                            } catch (e) { /* no-op */ }
+                        }, 0);
+                    }
+                    state_changed = true;
+                }
+            }
+            // Handle Toggle Unselected
+            else if (triggered_id.includes('toggle-unselected.n_clicks') && toggle_clicks) {
+                new_state.show_unselected = !new_state.show_unselected;
+                new_toggle_text = new_state.show_unselected ? "Hide unselected polygons" : "Show unselected polygons";
+                state_changed = true;
+
+                // Immediately refresh polygons to reflect visibility change
+                setTimeout(() => {
+                    try {
+                        const mapElement = document.getElementById('leaflet-map');
+                        const map = mapElement?._leaflet_map;
+                        if (map && window.polygonManagement && window.polygonManagement.updateMapWithBounds) {
+                            const bounds = map.getBounds();
+                            const yearRange = new_state.year_range ? { min: new_state.year_range[0], max: new_state.year_range[1] } : null;
+                            if (window.VOB_DEBUG) console.log('Toggle unselected: refreshing polygons. show_unselected =', new_state.show_unselected);
+                            window.polygonManagement.updateMapWithBounds(map, new_state.unit_types || ['MOD_REG'], bounds, new_state, yearRange)
+                                .catch(err => console.error('Toggle unselected: Error updating polygons:', err));
+                        }
+                    } catch (e) { /* no-op */ }
+                }, 0);
+            }
+
+            if (state_changed) {
+                return [new_state, new_toggle_text, add_trigger, remove_trigger];
+            } else {
+                return [window.dash_clientside.no_update, window.dash_clientside.no_update,
+                        window.dash_clientside.no_update, window.dash_clientside.no_update];
+            }
+        }
+        """,
+        Output("map-state", "data"),
+        Output("toggle-unselected", "children"),
+        Output("map-click-add-trigger", "data"),
+        Output("map-click-remove-trigger", "data"),
+        Input({"type": "unit-filter", "unit": ALL}, "n_clicks"),
+        Input("reset-selections", "n_clicks"),
+        Input("year-range-slider", "value"),
+        Input("geojson-layer", "n_clicks"),
+        Input("toggle-unselected", "n_clicks"),
+        State("ctrl-pressed-store", "data"),
+        State("map-state", "data"),
+        State({"type": "unit-filter", "unit": ALL}, "id"),
+        State("geojson-layer", "clickData"),
+        State("toggle-unselected", "children"),
+        prevent_initial_call=True,
+    )
+
+    # 2. Update UI elements based on map-state
+    app.clientside_callback(
+        f"""
+        function(map_state) {{
+            // Helper functions to work with places array (single source of truth)
+            const getSelectedPolygons = (state) => {{
+                const places = state?.places || [];
+                return places
+                    .filter(place => place.g_unit !== null && place.g_unit !== undefined)
+                    .map(place => String(place.g_unit));
+            }};
+
+            const getSelectedUnitTypes = (state) => {{
+                const places = state?.places || [];
+                return places
+                    .filter(place => place.g_unit !== null && place.g_unit !== undefined)
+                    .map(place => place.g_unit_type || 'MOD_REG');
+            }};
+
+            if (!map_state) {{
+                console.log("No map state - using defaults");
+                const currentYear = new Date().getFullYear();
+                const UNIT_TYPES = JSON.parse('{js_unit_types}');
+                // Debug: log the callback context structure
+                console.log("Callback context outputs_list:", dash_clientside.callback_context.outputs_list);
+
+                const button_outputs = dash_clientside.callback_context.outputs_list[5];
+                console.log("Button outputs at index 5:", button_outputs);
+
+                let button_ids = [];
+                if (button_outputs && Array.isArray(button_outputs)) {{
+                    button_ids = button_outputs.map(o => o.id);
+                }} else {{
+                    console.warn("button_outputs is not an array, fallback to empty array");
+                    // Fallback: create default button styles for known unit types
+                    button_ids = Object.keys(UNIT_TYPES).map(unit => ({{unit: unit}}));
+                }}
+
+                // Create proper unit type colored buttons even for initial state
+                const initialButtonStyles = button_ids.map(id => {{
+                    const unit = id.unit;
+                    const unit_info = UNIT_TYPES[unit] || {{}};
+                    const unit_color = unit_info.color || '#333';
+                    return {{
+                        '--unit-color': unit_color,
+                        'borderColor': unit_color,
+                        'backgroundColor': 'white',
+                        'color': unit_color,
+                        'transition': 'background-color 0.3s, color 0.3s'
+                    }};
+                }});
+
+                return [
+                    {{'display': 'none'}},
+                    {js_default_min_year},
+                    currentYear,
+                    {{}},
+                    [currentYear, currentYear],
+                    initialButtonStyles,
+                    {{}},
+                    {{ selected: [] }}
+                ];
+            }}
+
+            const UNIT_TYPES = JSON.parse('{js_unit_types}');
+            const currentYear = new Date().getFullYear();
+            const unit_types = map_state.unit_types || ['MOD_REG'];
+            let selected_polygons = getSelectedPolygons(map_state);
+            // If places key is absent (partial map-state update), preserve previous selection
+            try {{
+                const hasPlacesKey = Object.prototype.hasOwnProperty.call(map_state || {{}}, 'places');
+                if (!hasPlacesKey) {{
+                    const mapElPrev = document.getElementById('leaflet-map');
+                    const mapPrev = mapElPrev?._leaflet_map;
+                    const layerPrev = window.polygonManagement?.findGeoJSONLayer?.(mapPrev);
+                    const prevSel = Array.isArray(layerPrev?.options?.hideout?.selected)
+                        ? layerPrev.options.hideout.selected.map(String)
+                        : [];
+                    if (prevSel.length && (!selected_polygons || selected_polygons.length === 0)) {{
+                        selected_polygons = prevSel;
+                    }}
+                }}
+            }} catch (e) {{ /* no-op */ }}
+            const year_range = map_state.year_range || [currentYear, currentYear];
+            
+
+            // Year slider visibility
+            const timeless_types = Object.keys(UNIT_TYPES).filter(k => UNIT_TYPES[k].timeless);
+            const needsYearFilter = unit_types.some(ut => !timeless_types.includes(ut));
+            const container_style = needsYearFilter ? {{'display': 'block'}} : {{'display': 'none'}};
+
+            // Year slider config
+            const min_year = {js_default_min_year};
+            const max_year = currentYear;
+            const step = Math.max(1, Math.floor((max_year - min_year) / 10));
+            const slider_marks = {{}};
+            for (let y = min_year; y <= max_year; y += step) {{
+                slider_marks[y.toString()] = y.toString();
+            }}
+            if (!slider_marks[max_year.toString()]) {{
+                slider_marks[max_year.toString()] = max_year.toString();
+            }}
+            const slider_value = [
+                Math.max(min_year, Math.min(max_year, year_range[0])),
+                Math.max(min_year, Math.min(max_year, year_range[1]))
+            ];
+
+            // Button styles
+            const active_set = new Set(unit_types);
+            const button_outputs = dash_clientside.callback_context.outputs_list[5];
+            const button_ids = (button_outputs && Array.isArray(button_outputs)) ? button_outputs.map(o => o.id) : [];
+            const button_styles = button_ids.map(id => {{
+                const unit = id.unit;
+                const unit_info = UNIT_TYPES[unit] || {{}};
+                const unit_color = unit_info.color || 'blue';
+                let style = {{
+                    '--unit-color': unit_color,
+                    'borderColor': unit_color,
+                    'backgroundColor': 'white',
+                    'color': '#333',
+                    'transition': 'background-color 0.3s, color 0.3s'
+                }};
+                if (active_set.has(unit)) {{
+                    style.backgroundColor = unit_color;
+                    style.color = 'white';
+                }}
+                return style;
+            }});
+
+            // Counts (robust per-type): derive directly from places array
+            const counts = {{}};
+            Object.keys(UNIT_TYPES).forEach(ut => {{
+                counts[ut] = 0;
+                counts[ut + '_g_units'] = [];
+            }});
+
+            try {{
+                const places = map_state?.places || [];
+                const seen = new Set();
+                for (let i = 0; i < places.length; i++) {{
+                    const pl = places[i];
+                    if (!pl || pl.g_unit == null) continue;
+                    const sid = String(pl.g_unit);
+                    let ut = pl.g_unit_type;
+
+                    if (!ut || !UNIT_TYPES.hasOwnProperty(ut)) {{
+                        try {{
+                            const feat = window.polygonManagement?._cache?.featureById?.[sid];
+                            const t = feat?.properties?.g_unit_type;
+                            if (t && UNIT_TYPES.hasOwnProperty(t)) {{
+                                ut = t;
+                            }}
+                        }} catch (e) {{ /* no-op */ }}
+                    }}
+
+                    if (!ut || !UNIT_TYPES.hasOwnProperty(ut)) {{
+                        continue;
+                    }}
+
+                    if (seen.has(sid)) {{
+                        continue;
+                    }}
+                    seen.add(sid);
+
+                    if (counts.hasOwnProperty(ut)) {{
+                        counts[ut] += 1;
+                        counts[ut + '_g_units'].push(sid);
+                    }}
+                }}
+            }} catch (e) {{ /* no-op */ }}
+
+            return [
+                container_style, min_year, max_year, slider_marks, slider_value,
+                button_styles, counts, {{ selected: selected_polygons }}
+            ];
+        }}
+        """,
+        Output("year-range-container", "style"),
+        Output("year-range-slider", "min"),
+        Output("year-range-slider", "max"),
+        Output("year-range-slider", "marks"),
+        Output("year-range-slider", "value", allow_duplicate=True),
+        Output({"type": "unit-filter", "unit": ALL}, "style"),
+        Output("counts-store", "data"),
+        Output("geojson-layer", "hideout"),
+        Input("map-state", "data"),
+        prevent_initial_call=False,
+    )
+
+    # 3. Update button labels with counts
+    app.clientside_callback(
+        f"""
+        function(counts) {{
+            if (!counts) {{
+                const button_outputs = dash_clientside.callback_context.outputs_list;
+                const button_ids = button_outputs ? button_outputs.map(o => o.id) : [];
+                return Array(button_ids.length).fill(window.dash_clientside.no_update);
+            }}
+
+            const UNIT_TYPES = JSON.parse('{js_unit_types}');
+            const button_outputs = dash_clientside.callback_context.outputs_list;
+            const button_ids = button_outputs ? button_outputs.map(o => o.id) : [];
+
+            return button_ids.map(id => {{
+                const unit = id.unit;
+                const label = UNIT_TYPES[unit] ? UNIT_TYPES[unit].long_name : unit;
+                const count = counts[unit] || 0;
+
+                if (count > 0) {{
+                    const badge = {{
+                        props: {{
+                            children: count.toString(),
+                            color: 'light',
+                            text_color: 'dark',
+                            pill: true,
+                            className: 'ms-1'
+                        }},
+                        type: 'Badge',
+                        namespace: 'dash_bootstrap_components'
+                    }};
+                    return [label + ' ', badge];
+                }} else {{
+                    return label;
+                }}
+            }});
+        }}
+        """,
+        Output({"type": "unit-filter", "unit": ALL}, "children"),
+        Input("counts-store", "data"),
+        prevent_initial_call=True,
+    )
+
+    # 4. Ctrl key detection
+    app.clientside_callback(
+        """
+        function() {
+            if (!window.ctrlKeyListenerAttached) {
+                document.addEventListener("click", function(event) {
+                    const button = event.target.closest('.unit-filter-button');
+                    if (button) {
+                        const isCtrl = event.ctrlKey || event.metaKey;
+                        dash_clientside.set_props("ctrl-pressed-store", {data: isCtrl});
+                    }
+                });
+                window.ctrlKeyListenerAttached = true;
+            }
+            return window.dash_clientside.no_update;
+        }
+        """,
+        Output("ctrl-listener-attached", "data"),
+        Input("document", "id"),
+    )
+
+    # 5. Auto-load polygons when map bounds change (from complex version)
+    app.clientside_callback(
+        """
+        function(moveend_trigger, map_state) {
+            const context = dash_clientside.callback_context;
+
+            //if (!context.triggered || context.triggered.length === 0 || !map_state || !moveend_trigger) {
+            //    return window.dash_clientside.no_update;
+            //}
+
+            const mapElement = document.getElementById('leaflet-map');
+            const map = mapElement?._leaflet_map;
+
+            //if (!map) {
+            //    console.warn('Auto-load: Map element not found');
+            //    return window.dash_clientside.no_update;
+            //}
+
+            if (!window.polygonManagement || !window.polygonManagement.updateMapWithBounds) {
+                console.warn('Auto-load: polygonManagement.updateMapWithBounds not available');
+                return window.dash_clientside.no_update;
+            }
+            // Ensure GeoJSON layer is ready before attempting update
+            try {
+                const lyr = (window.polygonManagement && window.polygonManagement.findGeoJSONLayer)
+                    ? window.polygonManagement.findGeoJSONLayer(map)
+                    : null;
+                if (!lyr) {
+                    if (window.VOB_DEBUG) console.log('Auto-load: GeoJSON layer not ready');
+                    return window.dash_clientside.no_update;
+                }
+            } catch (e) {
+                if (window.VOB_DEBUG) console.log('Auto-load: GeoJSON layer check failed', e);
+                return window.dash_clientside.no_update;
+            }
+
+            //if (!window.geojsonLayerReady) {
+            //    console.warn('Auto-load: GeoJSON layer not ready, skipping update');
+            //    return window.dash_clientside.no_update;
+            //}
+
+            // Skip if programmatic zoom is in progress to avoid conflicts
+            if (window.programmaticZoomInProgress || window.programmaticZoomAnimating) {
+                console.log('Auto-load: Skipping update (programmatic zoom in progress)');
+                return window.dash_clientside.no_update;
+            }
+
+            // Skip if zoom_to_selection flag is set (zoom cycle in progress)
+            if (map_state.zoom_to_selection) {
+                console.log('Auto-load: Skipping update (zoom_to_selection flag set)');
+                return window.dash_clientside.no_update;
+            }
+
+            // Skip if in disambiguation mode (showing place markers)
+            if (window._disambiguationMode) {
+                console.log('Auto-load: Skipping update (disambiguation mode active)');
+                return window.dash_clientside.no_update;
+            }
+
+            const bounds = map.getBounds();
+            // Prefer the explicitly requested unit types from map_state when present,
+            // fall back to the helper only if they are absent.
+            let unitTypes = [];
+            try {
+                if (map_state && Array.isArray(map_state.unit_types) && map_state.unit_types.length) {
+                    unitTypes = map_state.unit_types;
+                } else if (window.vobUtils && window.vobUtils.getUnitTypes) {
+                    unitTypes = window.vobUtils.getUnitTypes(map, window.vobUtils.getPlaceState?.(), map_state);
+                } else {
+                    unitTypes = ['MOD_REG'];
+                }
+            } catch (e) {
+                unitTypes = (map_state && Array.isArray(map_state.unit_types) && map_state.unit_types.length) ? map_state.unit_types : ['MOD_REG'];
+            }
+            const yearRange = map_state.year_range ? { min: map_state.year_range[0], max: map_state.year_range[1] } : null;
+
+            if (window.VOB_DEBUG) console.log('Auto-load: Map bounds changed, loading polygons for unit types:', unitTypes);
+            window.polygonManagement.updateMapWithBounds(map, unitTypes, bounds, map_state, yearRange)
+                .then(result => {
+                    if (window.VOB_DEBUG) console.log('Auto-load: Polygon update completed');
+                })
+                .catch(error => {
+                    console.error('Auto-load: Error updating polygons:', error);
+                });
+
+            return window.dash_clientside.no_update;
+        }
+        """,
+        Output("map-moveend-processed", "data"),
+        Input("map-moveend-trigger", "data"),
+        State("map-state", "data"),
+        prevent_initial_call=True,
+    )
+
+    # 6. SSE connection management (idempotent)
+    app.clientside_callback(
+        """
+        function(thread_id, sse_status) {
+            console.log("SSE callback triggered with thread ID:", thread_id, "and status:", sse_status);
+
+            // Handle SSE connection status that includes workflow input
+            if (sse_status && sse_status.connect_sse && sse_status.thread_id) {
+                console.log("SSE: Connecting with workflow input:", sse_status.workflow_input);
+                try {
+                    // No special reconciliation with recent clicks; selection is store-driven
+                } catch (e) { /* no-op */ }
+                
+                // Clear disambiguation mode if requested
+                if (sse_status.clear_disambiguation_mode && window.simpleSSE?.clearDisambiguationMode) {
+                    console.log("SSE: Clearing disambiguation mode");
+                    window.simpleSSE.clearDisambiguationMode();
+                }
+
+                // If this is a reset, also clear map state
+                if (sse_status.reset) {
+                    console.log("SSE: Reset detected, clearing all state");
+
+                    // Do not mutate hideout directly; map-state reset will clear selection
+                    try {
+                        const mapElement2 = document.getElementById('leaflet-map');
+                        const map2 = mapElement2?._leaflet_map;
+                        const layer2 = window.polygonManagement?.findGeoJSONLayer?.(map2);
+                if (layer2 && window.polygonManagement && window.polygonManagement.refreshLayerStyles) {
+                                window.polygonManagement.refreshLayerStyles(layer2);
+                            }
+                    } catch (e) { /* non-fatal */ }
+
+                    // Force map refresh to show MOD_REG polygons after reset
+                    setTimeout(() => {
+                        if (window.polygonManagement && window.polygonManagement.updateMapWithBounds) {
+                            const mapElement = document.getElementById('leaflet-map');
+                            const map = mapElement?._leaflet_map;
+                            if (map) {
+                                const bounds = map.getBounds();
+                                const resetMapState = {
+                                    places: [],
+                                    unit_types: ['MOD_REG'],
+                                    show_unselected: true
+                                };
+                                console.log("SSE: Forcing map update with MOD_REG polygons after reset");
+                                window.polygonManagement.updateMapWithBounds(map, ['MOD_REG'], bounds, resetMapState, null)
+                                    .then(() => {
+                                        console.log("SSE: Map refreshed with MOD_REG polygons");
+                                    })
+                                    .catch(error => {
+                                        console.error("SSE: Error refreshing map after reset:", error);
+                                    });
+                            }
+                        }
+                    }, 100); // Small delay to ensure unit type change is processed
+
+                    // Also update Dash map-state store to trigger UI updates
+                    if (typeof dash_clientside !== 'undefined' && dash_clientside.set_props) {
+                        const currentYear = new Date().getFullYear();
+                        dash_clientside.set_props('map-state', {
+                            data: {
+                                places: [],
+                                unit_types: ['MOD_REG'],
+                                show_unselected: true,
+                                year_range: [currentYear, currentYear]
+                            }
+                        });
+                    }
+                }
+
+                // Idempotent connect: if already connected to same thread and not a reset, skip reconnect
+                try {
+                    if (window.simpleSSE && window.simpleSSE.isConnected && window.simpleSSE.threadId === sse_status.thread_id && !sse_status.reset) {
+                        console.log("SSE: Already connected to this thread; posting workflow input only");
+                        try { window.simpleSSE.postWorkflowInput?.(sse_status.workflow_input); } catch (e) { console.warn('SSE: postWorkflowInput failed', e); }
+                        return [window.dash_clientside.no_update, window.dash_clientside.no_update];
+                    }
+                } catch (e) { /* continue to connect */ }
+
+                window.simpleSSE.connect(sse_status.thread_id, sse_status.workflow_input);
+                return [true, sse_status.thread_id];
+            }
+
+            // If we have a thread ID and SSE client is available, connect only if not already connected to this thread
+            if (thread_id && window.simpleSSE && !sse_status) {
+                try {
+                    if (!window.simpleSSE.isConnected || window.simpleSSE.threadId !== thread_id) {
+                        console.log("SSE: Connecting to thread ID:", thread_id);
+                        window.simpleSSE.connect(thread_id);
+                        return [true, thread_id];
+                    }
+                } catch (e) {}
+                return [window.dash_clientside.no_update, window.dash_clientside.no_update];
+            }
+
+            // If no thread ID but SSE client is connected, disconnect
+            if (!thread_id && window.simpleSSE && window.simpleSSE.isConnected) {
+                console.log("SSE: Disconnecting from SSE stream");
+                window.simpleSSE.disconnect();
+                return [false, null];
+            }
+
+            return [window.dash_clientside.no_update, window.dash_clientside.no_update];
+        }
+        """,
+        Output("sse-connection-status", "data", allow_duplicate=True),
+        Output("thread-id", "data", allow_duplicate=True),
+        Input("thread-id", "data"),
+        Input("sse-connection-status", "data"),
+        prevent_initial_call=False,
+    )
+
+    # 7. Ensure style refresh on hideout change
+    app.clientside_callback(
+        """
+        function(hideout) {
+            try {
+                const mapEl = document.getElementById('leaflet-map');
+                const map = mapEl?._leaflet_map;
+                const layer = window.polygonManagement?.findGeoJSONLayer?.(map);
+                if (layer) {
+                    // Apply the new hideout directly; do not synthesize or override.
+                    const prev = layer.options.hideout || {};
+                    const next = (hideout && typeof hideout === 'object') ? hideout : {};
+                    const norm = (arr) => (Array.isArray(arr) ? arr.map(String) : []);
+                    const sig = (arr) => norm(arr).slice().sort().join(',');
+                    const sameSel = sig(prev.selected) === sig(next.selected);
+                    const sameWT  = sig(prev.withTheme) === sig(next.withTheme);
+                    if (window.VOB_TRACE?.select || window.VOB_DEBUG) {
+                        console.log('[select] hideout.change', {
+                            prevSel: norm(prev.selected).length, nextSel: norm(next.selected).length,
+                            prevWT: norm(prev.withTheme).length, nextWT: norm(next.withTheme).length,
+                            skip: (sameSel && sameWT),
+                            prevIds: norm(prev.selected).slice(0, 5), nextIds: norm(next.selected).slice(0, 5)
+                        });
+                    }
+                    layer.options.hideout = Object.assign({}, prev, next);
+                    if (sameSel && sameWT) return Date.now();
+                    if (window.polygonManagement && window.polygonManagement.refreshLayerStyles) {
+                        window.polygonManagement.refreshLayerStyles(layer);
+                    }
+                }
+            } catch (e) {
+                if (window.VOB_DEBUG) console.warn('Hideout style refresh failed', e);
+            }
+            return Date.now();
+        }
+        """,
+        Output("refresh-handled", "data", allow_duplicate=True),
+        Input("geojson-layer", "hideout"),
+        prevent_initial_call=True,
+    )

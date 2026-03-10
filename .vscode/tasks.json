@@ -1,0 +1,90 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "type": "docker-build",
+      "label": "docker-build",
+      "platform": "python",
+      "dockerBuild": {
+        "dockerfile": "${workspaceFolder}/Dockerfile",
+        "context": "${workspaceFolder}"
+      }
+    },
+    {
+      
+      "label": "Check unused code",
+      "type": "shell",
+      "command": "conda run -n ai vulture src/vobchat/ --ignore-decorators app.callback,app.clientside_callback,server.route,server.get,bp.route,lm.user_loader,login_required --ignore-names layout,login_view,AddPlace,RemovePlace,AddTheme,RemoveTheme,ShowState,ListThemes,PlaceInfo,Reset,FetchCubes,Chat,UnitTypeInfo,DescribeTheme,n_submit,reset_clicks,chat_display --exclude src/vobchat/gunicorn.conf.py --min-confidence 60",
+      "group": "build",
+      "problemMatcher": []
+    },
+
+    // {
+    //   "label": "Run docker-compose up",
+    //   "type": "docker-compose",
+    //   "dockerCompose": {
+    //     "up": {
+    //       "detached": true,
+    //       "build": true,
+    //       // "services": [
+    //       //   "vobchat",
+    //       // ],
+    //     },
+    //     "files": [
+    //       "${workspaceFolder}/docker-compose.yml",
+    //       // "${workspaceFolder}/docker-compose.debug.yml"
+    //     ],
+    //   },
+    // },
+    // {
+    //   "label": "Run docker-compose down",
+    //   "type": "docker-compose",
+    //   "dockerCompose": {
+    //     "down": {
+    //       "removeOrphans": true
+    //     },
+    //     "files": [
+    //       "${workspaceFolder}/docker-compose.yml",
+    //       // "${workspaceFolder}/docker-compose.debug.yml"
+    //     ]
+    //   }
+    // },
+    {
+      "type": "docker-run",
+      "label": "docker-run: debug",
+      "dependsOn": [
+        // "Run docker-compose up",
+        "docker-build"
+      ],
+      "dockerRun": {
+        "image": "vobchat:latest",
+        "containerName": "vobchat",
+        "command": "sh -c 'redis-server --port 6379 --bind 127.0.0.1 --protected-mode no --save \"\" --stop-writes-on-bgsave-error no & exec python -m debugpy --listen 0.0.0.0:5678 --wait-for-client -m flask run --host 0.0.0.0 --port 8050'",
+        "env": {
+          "FLASK_APP": "vobchat.app:server",
+          "FLASK_ENV": "development"
+        },
+        "volumes": [
+          {
+            "containerPath": "/app", "localPath": "${workspaceFolder}"
+          },
+          {
+            "containerPath": "/app/src", "localPath": "${workspaceFolder}/src"
+          },
+        ]
+      },
+      "python": {
+        "args": [
+          "run",
+          "--debug",
+          "--no-debugger",
+          "--host",
+          "0.0.0.0",
+          "--port",
+          "8050"
+        ],
+        "module": "flask"
+      }
+    }
+  ]
+}

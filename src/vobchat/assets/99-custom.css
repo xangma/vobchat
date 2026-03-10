@@ -1,0 +1,191 @@
+/* assets/custom.css */
+
+/* Place disambiguation marker labels */
+.place-label-tooltip {
+    background: rgba(255, 255, 255, 0.95) !important;
+    border: 1px solid #333 !important;
+    border-radius: 4px !important;
+    font-size: 12px !important;
+    font-weight: bold !important;
+    white-space: nowrap !important;
+    box-shadow: 2px 2px 4px rgba(0,0,0,0.3) !important;
+    color: #000 !important;
+}
+
+.place-label-tooltip.leaflet-tooltip-right:before {
+    border-right-color: #333 !important;
+}
+.unit-filter-button:hover {
+    background-color: var(--unit-color) !important;
+    color: white !important;
+}
+
+.speech-bubble {
+    position: relative;
+    padding: 10px 15px;
+    border-radius: 15px;
+    /* Rounded corners */
+    margin-bottom: 10px;
+    max-width: 70%;
+    white-space: pre-wrap;
+    /* Preserve whitespace and wrap lines */
+    /* Prevent bubbles from being too wide */
+    word-wrap: break-word;
+    /* Wrap long words */
+    clear: both;
+    /* Ensure bubbles don't overlap weirdly if floated */
+}
+
+.user-bubble {
+    background-color: #dcf8c6;
+    /* Light green background */
+    margin-left: auto;
+    /* Align to the right */
+    margin-right: 10px;
+    float: right;
+    /* Float right */
+    border-bottom-right-radius: 5px;
+    /* Slightly different corner for tail effect */
+}
+
+.ai-bubble {
+    background-color: #f0f0f0;
+    /* Light grey background */
+    margin-right: auto;
+    /* Align to the left */
+    margin-left: 10px;
+    float: left;
+    /* Float left */
+    border-bottom-left-radius: 5px;
+    /* Slightly different corner for tail effect */
+}
+
+/* Optional: Add "tails" to the bubbles */
+.speech-bubble::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    width: 0;
+    height: 0;
+    border: 10px solid transparent;
+    /* Size of the tail */
+}
+
+.user-bubble::after {
+    right: -10px;
+    /* Position tail on the right */
+    border-left-color: #dcf8c6;
+    /* Match user bubble background */
+    border-right: 0;
+    border-bottom: 0;
+    margin-top: -10px;
+}
+
+.ai-bubble::after {
+    left: -10px;
+    /* Position tail on the left */
+    border-right-color: #f0f0f0;
+    /* Match AI bubble background */
+    border-left: 0;
+    border-bottom: 0;
+    margin-top: -10px;
+}
+
+#chat-display {
+    /* Ensure flex display and reverse the column direction */
+    display: flex;
+    flex-direction: column-reverse;
+
+    /* Keep existing styles for scrolling, border, padding etc. */
+    flex: 1 1 auto;
+    overflow-y: auto;
+    margin-bottom: 10px;
+    border: 1px solid #dee2e6;
+    border-radius: 5px;
+    padding: 10px;
+}
+
+/* Clear floats within the chat display */
+#chat-display::after {
+    content: "";
+    display: table;
+    clear: both;
+}
+
+/* Theme status and selection panel */
+.theme-status-pill {
+    display: inline-block;
+    background: #ffffff;
+    border: 1px solid #ced4da;
+    border-radius: 16px;
+    padding: 4px 10px;
+    font-size: 12px;
+    color: #333;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    cursor: pointer;
+    user-select: none;
+}
+.theme-status-pill:hover {
+    background: #f8f9fa;
+}
+.theme-selection-panel {
+    position: absolute;
+    right: 0;
+    bottom: 34px;
+    width: 260px;
+    max-height: 260px;
+    overflow-y: scroll; /* Always show scrollbar */
+    scrollbar-gutter: stable both-edges; /* Reserve space for scrollbar */
+    background: #ffffff;
+    border: 1px solid #ced4da;
+    border-radius: 6px;
+    padding: 0; /* Let header span full width; content gets its own padding */
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+.theme-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: 600;
+    margin-bottom: 6px;
+    position: sticky; /* Keep header visible while scrolling */
+    top: 0;
+    background: #ffffff;
+    z-index: 1;
+    border-bottom: 1px solid #e9ecef;
+    padding: 8px 8px 4px 8px; /* Provide spacing within full-width header */
+}
+.theme-panel-close {
+    border: none;
+    background: transparent;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.theme-panel-clear {
+    border: 1px solid #e9ecef;
+    background: #f8f9fa;
+    color: #333;
+    font-size: 12px;
+    padding: 3px 8px;
+    border-radius: 12px;
+    cursor: pointer;
+    margin-right: auto; /* push title to the right spacing */
+    margin-left: 8px;
+}
+.theme-panel-clear:hover {
+    background: #e9ecef;
+}
+
+/* Add padding to the buttons/content area */
+#theme-selection-buttons {
+    padding: 8px;
+}
+
+/* Selected theme highlight */
+.theme-option-btn.selected {
+    border-color: #0d6efd !important;
+    background-color: #0d6efd !important;
+    color: #fff !important;
+}

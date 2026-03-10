@@ -5,10 +5,11 @@ After=network.target
 [Service]
 User=youruser
 Group=yourgroup
-WorkingDirectory=~/repos/vobchat
+WorkingDirectory=~/repos/vobchat/src
 # activate a conda environment
 Environment="PATH=/home/youruser/miniconda3/envs/vobchat/bin"
-ExecStart=gunicorn -c gunicorn.conf.py app:server
+Environment="REDIS_URL=redis://127.0.0.1:6379"
+ExecStart=gunicorn -c gunicorn.conf.py app:server & celery -A app.celery_app worker --loglevel=DEBUG --time-limit=300 --concurrency=2
 Restart=always
 
 [Install]
