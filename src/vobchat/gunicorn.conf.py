@@ -1,5 +1,5 @@
 # gunicorn.conf.py
-# gunicorn -c gunicorn.conf.py app:server
+# gunicorn -c gunicorn.conf.py vobchat.web.app:server
 
 workers = 2  # Adjust based on CPU cores
 bind = "0.0.0.0:8050"

@@ -1,39 +1,28 @@
-argon2_cffi
-authlib
-celery
-configparser
+# Canonical package metadata lives in pyproject.toml.
+# This file mirrors the runtime dependencies for plain pip installs and container builds.
+
+# Web entrypoint
 dash
 dash-bootstrap-components
 dash-extensions
 dash-leaflet
-dash[diskcache]
-debugpy
-diskcache
 flask
-flask_login
-flask_sqlalchemy
-flask-socketio
-geoalchemy2
-geopandas
-gevent
-grandalf
+flask-login
+flask-sqlalchemy
 gunicorn
-langchain
-langchain_community
-langchain_core
-langchain_ollama
-langchain_openai
-langgraph
-matplotlib
-networkx
-numpy
-pandas
+gevent
+httpx
+
+# API entrypoint
+fastapi
+uvicorn
+
+# Auth and storage
+argon2-cffi
 passlib
-plotly
-psycopg2-binary
-pyproj
-redis
-shapely
 sqlalchemy
-sshtunnel
-trio
+psycopg[binary]
+
+# Data and mapping
+pandas
+plotly
