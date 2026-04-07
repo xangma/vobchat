@@ -18,9 +18,11 @@ def test_settings_load_defaults(monkeypatch):
         "AUTH_DATABASE_URL",
         "DATABASE_URL",
         "SECRET_KEY",
-        "OLLAMA_HOST",
-        "OLLAMA_PORT",
-        "OLLAMA_USE_SSL",
+        "LLM_PROVIDER",
+        "LLM_OPENAI_BASE_URL",
+        "LLM_MODEL",
+        "LLM_API_KEY",
+        "LLM_VERIFY_SSL",
     ]:
         monkeypatch.delenv(key, raising=False)
 
@@ -31,7 +33,10 @@ def test_settings_load_defaults(monkeypatch):
     assert settings.dash.route_prefix == ""
     assert settings.database.port == 5432
     assert settings.auth.secret_key == "dev-secret-key"
-    assert settings.ollama.port == 11434
+    assert settings.llm.provider == "openai-compatible"
+    assert settings.llm.openai_base_url == ""
+    assert settings.llm.model == ""
+    assert settings.llm.verify_ssl is True
 
 
 def test_fastapi_health_endpoints():

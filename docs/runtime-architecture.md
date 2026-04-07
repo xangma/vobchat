@@ -8,7 +8,7 @@ The active codebase is split into five runtime areas:
 
 - [`src/vobchat/web/`](../src/vobchat/web): Dash application shell, user-facing auth integration, browser stores, and same-origin chat proxy routes
 - [`src/vobchat/api/`](../src/vobchat/api): FastAPI application, typed routers, orchestrator, and SSE endpoints
-- [`src/vobchat/core/`](../src/vobchat/core): settings, logging, local-model client, planner prompts and schemas
+- [`src/vobchat/core/`](../src/vobchat/core): settings, logging, provider-neutral OpenAI-compatible LLM client, planner prompts and schemas
 - [`src/vobchat/db/`](../src/vobchat/db): SQLAlchemy engine/session layer and typed repositories
 - [`src/vobchat/auth/`](../src/vobchat/auth): Flask-Login auth models, routes, templates, and CLI commands
 
@@ -37,6 +37,23 @@ Chat is intentionally same-origin through the web layer because:
 - the web proxy can enforce authenticated thread ownership before relaying chat traffic
 
 This keeps browser auth simple and avoids a second public API auth scheme.
+
+## LLM runtime boundary
+
+The app talks to an external or local OpenAI-compatible endpoint through the provider-neutral settings in [`src/vobchat/core/settings.py`](../src/vobchat/core/settings.py).
+
+Important constraints:
+
+- model weights are not bundled into the main app image
+- the default `docker-compose.yml` stack does not run a model server
+- the browser never talks directly to the model server
+- the recommended user-facing setup path is `vobchat setup-llm`
+
+Supported modes today:
+
+- existing OpenAI-compatible endpoint
+- local Ollama setup
+- optional separate vLLM helper stack via [`docker-compose.llm-vllm.yml`](../docker-compose.llm-vllm.yml)
 
 ## State
 

@@ -212,14 +212,12 @@ def configure_enhanced_logging() -> logging.Logger:
         llm_logger.debug(
             {
                 "event": "llm_session_start",
-                "model": settings.ollama.model,
-                "temperature": settings.ollama.temperature,
-                "reasoning": settings.ollama.reasoning,
+                "provider": settings.llm.provider,
+                "model": settings.llm.model,
+                "temperature": settings.llm.temperature,
                 "endpoint": {
-                    "host": settings.ollama.host,
-                    "port": settings.ollama.port,
-                    "subpath": settings.ollama.subpath,
-                    "ssl": settings.ollama.use_ssl,
+                    "base_url": settings.llm.openai_base_url,
+                    "verify_ssl": settings.llm.verify_ssl,
                 },
             }
         )
@@ -342,4 +340,3 @@ def log_llm_interaction(
             )
         except Exception:
             pass
-

@@ -97,6 +97,7 @@ class FakeLLMClient:
             yield chunk
 
 
+
 class FakePlanner:
     async def plan(self, state: ChatThreadState, user_message: str) -> PlannerResult:
         lowered = user_message.lower()

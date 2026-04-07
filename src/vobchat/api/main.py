@@ -11,6 +11,7 @@ from vobchat.api.routers import (
     series_router,
     themes_router,
 )
+from vobchat.core.llm import log_llm_startup_status
 from vobchat.core.logging import configure_enhanced_logging
 from vobchat.core.settings import get_settings
 
@@ -18,6 +19,7 @@ from vobchat.core.settings import get_settings
 def create_app() -> FastAPI:
     configure_enhanced_logging()
     settings = get_settings()
+    log_llm_startup_status(component="api")
     app = FastAPI(
         title="VobChat API",
         version="0.4.0",

@@ -7,7 +7,7 @@ The active runtime is the rewritten stack completed on the `codex/fastapi-semant
 - Dash web runtime for the user-facing application shell
 - FastAPI backend for typed domain APIs and chat orchestration
 - SQLAlchemy + psycopg3 repository layer over PostgreSQL/PostGIS
-- OpenAI-compatible local-model client, with Ollama as the default local endpoint
+- Provider-neutral OpenAI-compatible LLM client with optional Ollama or vLLM bootstrap paths
 
 The old LangGraph/Redis prototype runtime has been removed. The only retained legacy-facing entrypoint is [`src/vobchat/app.py`](src/vobchat/app.py), which is now a tiny wrapper around the real web app in [`src/vobchat/web/app.py`](src/vobchat/web/app.py).
 
@@ -27,7 +27,7 @@ The repo is organized around five active runtime areas:
 
 - [`src/vobchat/web/`](src/vobchat/web): Dash app, layout, callbacks, typed API client, and authenticated same-origin proxy routes
 - [`src/vobchat/api/`](src/vobchat/api): FastAPI app, routers, typed schemas, services, chat SSE endpoints
-- [`src/vobchat/core/`](src/vobchat/core): typed settings, shared logging, local-model client, planner, prompts
+- [`src/vobchat/core/`](src/vobchat/core): typed settings, shared logging, provider-neutral OpenAI-compatible LLM client, planner, prompts, setup helpers
 - [`src/vobchat/db/`](src/vobchat/db): SQLAlchemy engine/session setup, typed repository layer, semantic SQL assets
 - [`src/vobchat/auth/`](src/vobchat/auth): Flask-Login auth models, routes, templates, and CLI commands
 
@@ -45,8 +45,9 @@ High-level runtime flow:
 
 - Python 3.9+
 - PostgreSQL/PostGIS access to the Vision of Britain data
-- An OpenAI-compatible local model endpoint
-  - Ollama is the default target and expected to expose an OpenAI-compatible `/v1` surface
+- An OpenAI-compatible model endpoint
+  - You can point the app at an existing OpenAI-compatible server
+  - `vobchat setup-llm` can guide an Ollama or optional vLLM setup if you do not already have one
 
 ### Environment setup
 
@@ -59,18 +60,33 @@ cp .env.example .env
 Important variables:
 
 - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_SCHEMA`
-- `OLLAMA_HOST`, `OLLAMA_PORT`, `OLLAMA_SUBPATH`, `OLLAMA_USE_SSL`
-- `VOBCHAT_LLM_MODEL`
+- `LLM_PROVIDER`
+- `LLM_OPENAI_BASE_URL`
+- `LLM_MODEL`
+- `LLM_API_KEY`
+- `LLM_TEMPERATURE`, `LLM_TIMEOUT_SECONDS`, `LLM_VERIFY_SSL`
 - `SECRET_KEY`
 - `AUTH_DATABASE_URL`
 - `VOBCHAT_API_BASE_URL`
+
+The cleanest way to set the LLM values is:
+
+```bash
+vobchat setup-llm
+```
+
+Then validate them with:
+
+```bash
+vobchat doctor llm
+```
 
 For local two-process development, set:
 
 ```bash
 VOBCHAT_API_BASE_URL=http://127.0.0.1:8000
 SESSION_COOKIE_SECURE=false
-OLLAMA_USE_SSL=false
+LLM_VERIFY_SSL=false
 ```
 
 ### Install dependencies
@@ -93,6 +109,7 @@ Packaging note:
 
 - [`pyproject.toml`](pyproject.toml) is the canonical package metadata.
 - [`requirements.txt`](requirements.txt) mirrors the runtime dependency set for plain `pip` installs and container builds.
+- The installed `vobchat` console script provides `setup-llm` and `doctor llm`.
 
 ### Run the API
 
@@ -115,6 +132,25 @@ python -m vobchat.app
 ```
 
 The compatibility module exists only to preserve `vobchat.app:server` style entrypoints. The real implementation lives in `vobchat.web.app`.
+
+### LLM setup modes
+
+The runtime is provider-agnostic and expects an OpenAI-compatible `/v1` endpoint.
+
+Supported setup modes:
+
+1. Existing endpoint
+   Point `LLM_OPENAI_BASE_URL` and `LLM_MODEL` at an already running OpenAI-compatible server.
+2. Easy local setup with Ollama
+   Run `vobchat setup-llm`, choose `ollama`, then follow the prompts. If Ollama is installed but not running, start it with `ollama serve`.
+3. Higher-performance/shared local setup with vLLM
+   Run `vobchat setup-llm`, choose `vllm`, and optionally start the separate helper stack with:
+
+```bash
+docker compose -f docker-compose.llm-vllm.yml up -d
+```
+
+The default app stack does not include model weights or a model-serving container.
 
 ### Auth database setup
 
@@ -150,7 +186,9 @@ The Compose topology reflects the active architecture:
 External services still expected:
 
 - PostgreSQL/PostGIS
-- OpenAI-compatible local model endpoint, with Ollama as the default target
+- OpenAI-compatible model endpoint
+  - Ollama is the easiest local path
+  - vLLM is the recommended higher-performance/shared local path
 
 ### Start the stack
 
@@ -170,6 +208,7 @@ docker compose up -d --build
 - Browser chat uses same-origin `/proxy/chat/*` routes on `web`.
 - `web` forwards chat requests to `api` using `VOBCHAT_API_BASE_URL=http://api:8000`.
 - `api` is not published as a primary browser-facing service in Compose.
+- The LLM endpoint remains external to the default Compose stack.
 
 ### Auth setup in Compose
 
@@ -209,6 +248,8 @@ Auth CLI commands:
 
 - `flask --app vobchat.web.app:server init-db`
 - `flask --app vobchat.web.app:server add-user EMAIL`
+- `vobchat setup-llm`
+- `vobchat doctor llm`
 
 ## Validation
 
@@ -244,3 +285,4 @@ docker compose config
 
 - Provenance/transparency is not fully implemented. The UI can display the returned datasets and metadata, but there is no full provenance bundle for plotted data yet.
 - Chat thread state is intentionally in-memory in the API service. Reload continuity works within a running process, but chat state is not durable across backend restarts.
+- If no LLM endpoint is configured or reachable, startup logs and chat responses will tell you to run `vobchat setup-llm` or `vobchat doctor llm`.

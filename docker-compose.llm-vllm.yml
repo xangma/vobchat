@@ -1,0 +1,19 @@
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    ports:
+      - "${VLLM_PORT:-8001}:8000"
+    volumes:
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+    command:
+      [
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--model",
+        "${VLLM_MODEL_REPOSITORY:-Qwen/Qwen2.5-7B-Instruct}",
+      ]
+    restart: unless-stopped

@@ -44,6 +44,9 @@ dev = [
     "pytest>=8.0",
 ]
 
+[project.scripts]
+vobchat = "vobchat.cli:main"
+
 [tool.setuptools]
 include-package-data = true
 

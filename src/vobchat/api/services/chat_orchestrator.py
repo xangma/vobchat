@@ -39,9 +39,13 @@ from vobchat.api.services.series import SeriesService, get_series_service
 from vobchat.api.services.themes import ThemesService, get_themes_service
 from vobchat.core.llm import (
     ChatPlanner,
-    OpenAICompatibleLocalModelClient,
+    LLMClientError,
+    LLMConfigurationError,
+    LLMServiceUnavailableError,
+    OpenAICompatibleLLMClient,
     get_chat_planner,
-    get_local_model_client,
+    get_llm_client,
+    llm_setup_guidance,
 )
 from vobchat.core.llm.prompts import build_assistant_messages
 
@@ -53,13 +57,20 @@ class ExecutionOutcome:
     fallback_text: str
 
 
+@dataclass
+class AssistantGenerationResult:
+    text: str
+    notice: str | None = None
+    error: str | None = None
+
+
 class ChatOrchestrator:
     def __init__(
         self,
         *,
         thread_store: InMemoryChatThreadStore | None = None,
         planner: ChatPlanner | None = None,
-        llm_client: OpenAICompatibleLocalModelClient | None = None,
+        llm_client: OpenAICompatibleLLMClient | None = None,
         places_service: PlacesService | None = None,
         themes_service: ThemesService | None = None,
         series_service: SeriesService | None = None,
@@ -68,7 +79,7 @@ class ChatOrchestrator:
     ) -> None:
         self.thread_store = thread_store or get_chat_thread_store()
         self.planner = planner or get_chat_planner()
-        self.llm_client = llm_client or get_local_model_client()
+        self.llm_client = llm_client or get_llm_client()
         self.places_service = places_service or get_places_service()
         self.themes_service = themes_service or get_themes_service()
         self.series_service = series_service or get_series_service()
@@ -132,7 +143,7 @@ class ChatOrchestrator:
                     UIDeltaEventData(turn_id=active_turn_id, ui_delta=outcome.ui_delta),
                 )
 
-            assistant_text = await self._generate_assistant_text(
+            assistant_result = await self._generate_assistant_text(
                 state=state,
                 planner_result=planner_result,
                 execution_summary=outcome.execution_summary,
@@ -141,11 +152,25 @@ class ChatOrchestrator:
                 turn_id=active_turn_id,
                 publish_events=publish_events,
             )
+            if assistant_result.notice and assistant_result.notice not in outcome.ui_delta.notices:
+                outcome.ui_delta.notices.append(assistant_result.notice)
+                if publish_events:
+                    await self.thread_store.publish_event(
+                        request.thread_id,
+                        ChatSSEEventName.UI_DELTA,
+                        UIDeltaEventData(turn_id=active_turn_id, ui_delta=outcome.ui_delta),
+                    )
+            if publish_events and assistant_result.error:
+                await self.thread_store.publish_event(
+                    request.thread_id,
+                    ChatSSEEventName.ERROR,
+                    ErrorEventData(turn_id=active_turn_id, error=assistant_result.error),
+                )
 
             assistant_message = ChatMessage(
                 message_id=str(uuid4()),
                 role="assistant",
-                content=assistant_text,
+                content=assistant_result.text,
                 created_at=utc_now(),
             )
             state.messages.append(assistant_message)
@@ -189,12 +214,12 @@ class ChatOrchestrator:
             )
             ui_delta = ChatUIStateDelta(
                 operation=planner_result.action.operation,
-                notices=["I hit an error while handling that request."],
+                notices=["I hit an error while handling that request. Try again or check the server logs."],
             )
             fallback_message = ChatMessage(
                 message_id=str(uuid4()),
                 role="assistant",
-                content="I hit an error while handling that request.",
+                content="I hit an error while handling that request. Try again or check the server logs.",
                 created_at=utc_now(),
             )
             state.messages.append(fallback_message)
@@ -936,7 +961,7 @@ class ChatOrchestrator:
         thread_id: str,
         turn_id: str,
         publish_events: bool,
-    ) -> str:
+    ) -> AssistantGenerationResult:
         messages = build_assistant_messages(state, planner_result, execution_summary)
         if publish_events:
             accumulated = ""
@@ -952,10 +977,14 @@ class ChatOrchestrator:
                             accumulated_text=accumulated,
                         ),
                     )
-                return accumulated.strip() or fallback_text
-            except Exception:
+                return AssistantGenerationResult(text=accumulated.strip() or fallback_text)
+            except LLMClientError as exc:
                 if accumulated.strip():
-                    return accumulated.strip()
+                    return AssistantGenerationResult(
+                        text=accumulated.strip(),
+                        notice=self._llm_unavailable_notice(exc),
+                        error=str(exc),
+                    )
                 await self.thread_store.publish_event(
                     thread_id,
                     ChatSSEEventName.ASSISTANT_DELTA,
@@ -965,13 +994,60 @@ class ChatOrchestrator:
                         accumulated_text=fallback_text,
                     ),
                 )
-                return fallback_text
+                return AssistantGenerationResult(
+                    text=self._fallback_assistant_text(planner_result, fallback_text, exc),
+                    notice=self._llm_unavailable_notice(exc),
+                    error=str(exc),
+                )
+            except Exception:
+                if accumulated.strip():
+                    return AssistantGenerationResult(text=accumulated.strip())
+                await self.thread_store.publish_event(
+                    thread_id,
+                    ChatSSEEventName.ASSISTANT_DELTA,
+                    AssistantDeltaEventData(
+                        turn_id=turn_id,
+                        delta=fallback_text,
+                        accumulated_text=fallback_text,
+                    ),
+                )
+                return AssistantGenerationResult(text=fallback_text)
 
         try:
             text = await self.llm_client.complete_text(messages)
-            return text.strip() or fallback_text
+            return AssistantGenerationResult(text=text.strip() or fallback_text)
+        except LLMClientError as exc:
+            return AssistantGenerationResult(
+                text=self._fallback_assistant_text(planner_result, fallback_text, exc),
+                notice=self._llm_unavailable_notice(exc),
+                error=str(exc),
+            )
         except Exception:
-            return fallback_text
+            return AssistantGenerationResult(text=fallback_text)
+
+    @staticmethod
+    def _llm_unavailable_notice(exc: Exception) -> str:
+        if isinstance(exc, LLMConfigurationError):
+            return (
+                "The chat model is not configured. "
+                "Run `vobchat setup-llm` or set LLM_OPENAI_BASE_URL and LLM_MODEL."
+            )
+        if isinstance(exc, LLMServiceUnavailableError):
+            return (
+                "The configured chat model endpoint is unavailable. "
+                "Run `vobchat doctor llm` or `vobchat setup-llm` and try again."
+            )
+        return f"LLM unavailable. {llm_setup_guidance()}"
+
+    @staticmethod
+    def _fallback_assistant_text(
+        planner_result: PlannerResult,
+        fallback_text: str,
+        exc: Exception,
+    ) -> str:
+        if planner_result.action.operation in {ChatOperation.REPLY_ONLY, ChatOperation.CLARIFY}:
+            return ChatOrchestrator._llm_unavailable_notice(exc)
+        return fallback_text
 
     @staticmethod
     def _merge_places(

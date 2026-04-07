@@ -14,6 +14,7 @@ from vobchat.auth import (
     login_manager,
     register_auth_commands,
 )
+from vobchat.core.llm import log_llm_startup_status
 from vobchat.core.logging import configure_enhanced_logging
 from vobchat.core.settings import get_settings
 from vobchat.web.callbacks import (
@@ -66,6 +67,7 @@ def _build_layout(settings) -> dbc.Container:
 def create_app(api_client: APIClient | None = None):
     configure_enhanced_logging()
     settings = get_settings()
+    log_llm_startup_status(component="web")
     logger.info(
         "Creating Dash web app: url_base_pathname=%s route_prefix=%s",
         settings.dash.url_base_pathname,

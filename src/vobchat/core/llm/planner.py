@@ -9,7 +9,7 @@ from vobchat.api.schemas.chat import (
     PlannerAction,
     PlannerResult,
 )
-from vobchat.core.llm.client import OpenAICompatibleLocalModelClient, get_local_model_client
+from vobchat.core.llm.client import OpenAICompatibleLLMClient, get_llm_client
 from vobchat.core.llm.prompts import build_planner_messages
 from vobchat.utils.constants import UNIT_TYPES
 
@@ -43,9 +43,9 @@ KNOWN_THEME_TERMS = (
 class ChatPlanner:
     def __init__(
         self,
-        llm_client: OpenAICompatibleLocalModelClient | None = None,
+        llm_client: OpenAICompatibleLLMClient | None = None,
     ) -> None:
-        self.llm_client = llm_client or get_local_model_client()
+        self.llm_client = llm_client or get_llm_client()
 
     async def plan(self, state: ChatThreadState, user_message: str) -> PlannerResult:
         messages = build_planner_messages(state, user_message)
