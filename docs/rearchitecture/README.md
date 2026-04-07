@@ -5,7 +5,7 @@ This directory is the working plan for the **non-backward-compatible rewrite** o
 - **Dash** frontend for chat + map + plotting UI
 - **FastAPI** backend for orchestration, streaming, and data access
 - **PostgreSQL + PostGIS** as the source of truth
-- **OpenAI-compatible local LLM endpoint** (Ollama first, swappable later)
+- **OpenAI-compatible LLM endpoint** (provider-neutral, with Ollama as an easy local option)
 - **Semantic data layer** between the LLM and the database
 
 This rewrite is being done on a **new branch** and the repo is still in prototype stage, so the goal is **clarity and maintainability over compatibility shims**. We should not keep old code around once the new implementation is in place and verified.
@@ -29,7 +29,7 @@ This rewrite is being done on a **new branch** and the repo is still in prototyp
 
 ## What exists today at a high level
 
-The current prototype already has the core product surfaces we want to keep: a Dash chat UI, a Dash Leaflet map, plotting, auth, SSE streaming, Ollama integration, and Postgres-backed data access. But those concerns are tightly coupled inside one Dash/Flask/LangGraph application, with business logic spread across callbacks, workflow nodes, and raw SQL helper functions.
+The current prototype already has the core product surfaces we want to keep: a Dash chat UI, a Dash Leaflet map, plotting, auth, SSE streaming, OpenAI-compatible endpoint integration, and Postgres-backed data access. But those concerns are tightly coupled inside one Dash/Flask/LangGraph application, with business logic spread across callbacks, workflow nodes, and raw SQL helper functions.
 
 ## Success criteria for the rewrite
 

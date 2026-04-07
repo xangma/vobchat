@@ -135,7 +135,7 @@ This phase is not just “move SQL into new files”. It is where Codex should e
 
 ---
 
-## Phase 4 — chat orchestrator and local-model integration
+## Phase 4 — chat orchestrator and LLM integration
 
 ### Tasks
 

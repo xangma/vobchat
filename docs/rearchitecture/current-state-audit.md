@@ -11,7 +11,7 @@ The current app already provides the main user-facing surfaces we need to preser
 - SSE-based streaming responses
 - Dash Leaflet map with polygon loading
 - charting and tabular data display
-- local Ollama-backed LLM integration
+- OpenAI-compatible LLM integration on the audited branch, backed by Ollama in the prototype
 - PostgreSQL-backed data access against Vision of Britain / GBHGIS-style tables
 
 This is good news: we are **not** inventing a product from scratch. The rewrite should preserve these outcomes while replacing the implementation shape underneath them.
@@ -121,14 +121,14 @@ The current prototype uses Flask-Login and a SQLite-backed users table. This is 
 
 ### 5.2 Container shape is single-process-plus-Redis
 
-The Dockerfile starts Redis in the same container and then runs Gunicorn for the Dash app. Docker Compose exposes one service and expects PostgreSQL and Ollama to exist externally.
+The Dockerfile starts Redis in the same container and then runs Gunicorn for the Dash app. Docker Compose exposes one service and expects PostgreSQL and an external OpenAI-compatible LLM endpoint, which is Ollama in the audited prototype.
 
 This means the current stack is:
 
 - one main app container
 - internal Redis side process
 - external Postgres
-- external Ollama
+- external OpenAI-compatible LLM endpoint
 
 For the rewrite, Redis should disappear unless there is a strong demonstrated need.
 

@@ -95,7 +95,7 @@ This file is the operational checklist for the rewrite. Codex should update it a
 
 ### LLM/orchestrator layer
 
-- [x] OpenAI-compatible local-model client implemented
+- [x] OpenAI-compatible provider-neutral LLM client implemented
 - [x] typed planner implemented
 - [x] deterministic tool/service invocation implemented
 - [x] SSE streaming implemented
@@ -279,7 +279,7 @@ Use this section as a running work log.
 - Completed:
   - Added typed chat/thread contracts under `src/vobchat/api/schemas/chat.py`, including typed planner results and SSE payloads.
   - Implemented a simple in-memory rewrite-path thread store with per-thread SSE event fanout.
-  - Added an OpenAI-compatible local-model client, typed planner prompts/schema helpers, and a planner with LLM-first behavior plus safe fallback heuristics.
+  - Added an OpenAI-compatible provider-neutral LLM client, typed planner prompts/schema helpers, and a planner with LLM-first behavior plus safe fallback heuristics.
   - Implemented the deterministic chat orchestrator and wired `/chat/threads`, `/chat/turn`, and `/chat/stream/{thread_id}` into the FastAPI app.
   - Added planner, orchestrator, and chat router tests for the Phase 4 path.
 - In progress:

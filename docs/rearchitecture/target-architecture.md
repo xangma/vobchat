@@ -7,7 +7,7 @@ Keep the product surfaces that already work well:
 - Dash UI shell
 - Dash Leaflet map
 - Plotly charts
-- local-model support
+- provider-neutral LLM endpoint support
 - PostgreSQL/PostGIS analytics
 
 But move the application to a **clear two-layer architecture**:
@@ -226,10 +226,11 @@ These do not need to model the whole GBHGIS schema on day one; they only need to
 
 ### 7.1 Client
 
-Use an OpenAI-compatible client wrapper pointed at a local endpoint:
+Use an OpenAI-compatible client wrapper pointed at an external or local endpoint:
 
-- Ollama initially
-- easy future swap to vLLM or another compatible server
+- provider-neutral runtime settings
+- Ollama as an easy local option
+- vLLM or another compatible server for higher-performance/shared setups
 
 ### 7.2 Planner behavior
 
@@ -288,7 +289,7 @@ Target shape:
 - `web`
 - `api`
 - optional `postgres` only for local development if desired
-- external or sibling `ollama`
+- external or sibling OpenAI-compatible model server, for example Ollama or vLLM
 
 Notably absent:
 

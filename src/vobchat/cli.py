@@ -157,7 +157,7 @@ def _setup_existing_endpoint(
     base_url = _prompt_or_value(
         args.base_url,
         "OpenAI-compatible base URL",
-        current.get("LLM_OPENAI_BASE_URL") or "http://127.0.0.1:11434/v1",
+        current.get("LLM_OPENAI_BASE_URL") or "",
         interactive=interactive,
     )
     model = _prompt_or_value(
