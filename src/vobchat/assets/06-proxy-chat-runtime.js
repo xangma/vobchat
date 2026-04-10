@@ -6,6 +6,7 @@
     threadId: null,
     connectPromise: null,
     bootstrapped: false,
+    storeCache: Object.create(null),
   };
 
   function clone(value) {
@@ -60,16 +61,66 @@
     return window.dash_clientside && window.dash_clientside.set_props;
   }
 
+  function isPersistentStore(id) {
+    return [
+      "thread-state-store",
+      "selection-state-store",
+      "map-state-store",
+      "visualization-state-store",
+      "metadata-state-store",
+    ].includes(id);
+  }
+
+  function readPersistentStore(id) {
+    const storages = [window.sessionStorage, window.localStorage];
+    for (const storage of storages) {
+      if (!storage || typeof storage.getItem !== "function") {
+        continue;
+      }
+      const raw = storage.getItem(id);
+      if (!raw) {
+        continue;
+      }
+      const parsed = safeParse(raw);
+      if (parsed !== null || raw === "null") {
+        return parsed;
+      }
+    }
+    return null;
+  }
+
+  function writePersistentStore(id, data) {
+    if (!isPersistentStore(id) || !window.sessionStorage) {
+      return;
+    }
+    try {
+      window.sessionStorage.setItem(id, JSON.stringify(data));
+    } catch (_) {
+      // Ignore persistence failures and keep the in-memory cache authoritative.
+    }
+  }
+
   function readStore(id) {
     const element = document.getElementById(id);
     if (!element) {
+      if (Object.prototype.hasOwnProperty.call(runtime.storeCache, id)) {
+        return clone(runtime.storeCache[id]);
+      }
+      const persisted = readPersistentStore(id);
+      if (persisted !== null || window.sessionStorage?.getItem?.(id) === "null") {
+        runtime.storeCache[id] = clone(persisted);
+        return clone(persisted);
+      }
       return null;
     }
     if (element._dash_value !== undefined) {
-      return element._dash_value;
+      runtime.storeCache[id] = clone(element._dash_value);
+      return clone(element._dash_value);
     }
     const text = (element.textContent || "").trim();
-    return text ? safeParse(text) : null;
+    const parsed = text ? safeParse(text) : null;
+    runtime.storeCache[id] = clone(parsed);
+    return parsed;
   }
 
   function setProps(id, props) {
@@ -82,24 +133,44 @@
   }
 
   function writeStore(id, data) {
+    runtime.storeCache[id] = clone(data);
+    writePersistentStore(id, data);
     setProps(id, { data });
     return data;
   }
 
   function initialSelectionState() {
     return {
+      current_receipt_id: null,
+      current_receipt_kind: null,
+      ui_projection: null,
+      render_projection: null,
       selected_places: [],
       selected_theme: null,
       selected_cubes: [],
+      reporting_geography: null,
+      analysis_spec: null,
+      exact_slice: null,
+      time_scope: null,
+      active_output_mode: null,
       available_themes: [],
       available_cubes: [],
       pending_place_candidates: [],
+      pending_clarification: null,
+      discovery_result: null,
+      defaults_used: [],
       notices: [],
+      runtime_state: null,
+      provenance_summary: null,
     };
   }
 
   function initialMapState() {
     return {
+      ui_projection: null,
+      render_projection: null,
+      reporting_geography: null,
+      active_output_mode: null,
       unit_type: "MOD_REG",
       year_range: [1801, currentYear()],
       bbox: null,
@@ -107,22 +178,33 @@
       with_theme_ids: [],
       feature_count: 0,
       last_loaded_unit_types: [],
-      status: "Choose a place or unit type to load map features.",
+      notices: [],
+      provenance_summary: null,
+      status: "Choose a place or geography level to load a map.",
     };
   }
 
   function initialVisualizationState() {
     return {
+      current_receipt_id: null,
+      ui_projection: null,
+      render_projection: null,
+      dataset_family: null,
+      exact_slice: null,
+      time_scope: null,
+      active_output_mode: null,
       active_tab: "line",
       time_series: null,
       category_breakdown: null,
       category_year: null,
-      status: "Choose a place, theme, and cube to load chart data.",
+      provenance_summary: null,
+      status: "Choose a place and a data theme to see a chart or table.",
     };
   }
 
   function initialMetadataState() {
     return {
+      render_projection: null,
       place_profile: null,
       place_key_findings: null,
       unit_type_info: null,
@@ -130,6 +212,7 @@
       data_entity_info: null,
       requested_unit_type: null,
       requested_entity_id: null,
+      provenance_summary: null,
     };
   }
 
@@ -206,27 +289,234 @@
   }
 
   function selectedUnitIds(selectionState) {
-    const ids = [];
-    (selectionState.selected_places || []).forEach((place) => {
-      (place.units || []).forEach((unit) => {
-        const unitId = Number(unit.unit_id);
-        if (Number.isFinite(unitId) && !ids.includes(unitId)) {
-          ids.push(unitId);
-        }
-      });
-    });
-    return ids;
+    if (
+      selectionState.reporting_geography &&
+      Array.isArray(selectionState.reporting_geography.unit_ids) &&
+      selectionState.reporting_geography.unit_ids.length > 0
+    ) {
+      return selectionState.reporting_geography.unit_ids
+        .map((unitId) => Number(unitId))
+        .filter((unitId) => Number.isFinite(unitId));
+    }
+    return [];
   }
 
-  function firstSelectedUnitType(selectionState) {
-    for (const place of selectionState.selected_places || []) {
-      for (const unit of place.units || []) {
-        if (unit && unit.unit_type) {
-          return String(unit.unit_type);
+  function projectedSelectedPlaces(source) {
+    if (Array.isArray(source?.selected_places) && source.selected_places.length > 0) {
+      return clone(source.selected_places);
+    }
+    if (Array.isArray(source?.ui_projection?.selected_places)) {
+      return clone(source.ui_projection.selected_places);
+    }
+    return [];
+  }
+
+  function projectedSelectedTheme(source) {
+    if (source?.selected_theme) {
+      return clone(source.selected_theme);
+    }
+    if (source?.ui_projection?.dataset_family) {
+      return clone(source.ui_projection.dataset_family);
+    }
+    return null;
+  }
+
+  function projectedSelectedCubes(source) {
+    if (Array.isArray(source?.selected_cubes) && source.selected_cubes.length > 0) {
+      return clone(source.selected_cubes);
+    }
+    if (Array.isArray(source?.ui_projection?.selected_cubes)) {
+      return clone(source.ui_projection.selected_cubes);
+    }
+    return [];
+  }
+
+  function projectedUnitType(source) {
+    if (source?.ui_projection?.reporting_geography?.unit_type) {
+      return String(source.ui_projection.reporting_geography.unit_type);
+    }
+    if (source?.analysis_state?.reporting_geography?.unit_type) {
+      return String(source.analysis_state.reporting_geography.unit_type);
+    }
+    return null;
+  }
+
+  function authoritativeUIProjection(source) {
+    if (source?.ui_projection) {
+      return source.ui_projection;
+    }
+    if (source?.current_receipt?.ui_projection) {
+      return source.current_receipt.ui_projection;
+    }
+    return null;
+  }
+
+  function authoritativeRenderProjection(source) {
+    if (source?.render_projection) {
+      return source.render_projection;
+    }
+    if (source?.current_receipt?.render_projection) {
+      return source.current_receipt.render_projection;
+    }
+    return null;
+  }
+
+  function applyProjectionToSelectionState(selectionState, source) {
+    const uiProjection = authoritativeUIProjection(source);
+    const renderProjection = authoritativeRenderProjection(source);
+    if (uiProjection) {
+      selectionState.ui_projection = clone(uiProjection);
+      selectionState.selected_places = clone(uiProjection.selected_places || []);
+      selectionState.selected_theme = clone(uiProjection.dataset_family || null);
+      selectionState.selected_cubes = clone(uiProjection.selected_cubes || []);
+      selectionState.reporting_geography = clone(uiProjection.reporting_geography || null);
+      selectionState.analysis_spec = clone(uiProjection.analysis_spec || null);
+      selectionState.exact_slice = clone(uiProjection.exact_slice || null);
+      selectionState.time_scope = clone(uiProjection.time_scope || null);
+      selectionState.active_output_mode = uiProjection.active_output_mode || null;
+      selectionState.available_themes = clone(uiProjection.available_themes || []);
+      selectionState.available_cubes = clone(uiProjection.available_cubes || []);
+      selectionState.pending_clarification = clone(uiProjection.clarification || null);
+      selectionState.discovery_result = clone(uiProjection.discovery_result || null);
+      selectionState.defaults_used = clone(uiProjection.defaults_used || []);
+      selectionState.notices = clone(uiProjection.notices || []);
+      selectionState.runtime_state = clone(uiProjection.runtime_state || null);
+      selectionState.provenance_summary = clone(uiProjection.provenance_summary || null);
+      selectionState.current_receipt_id = uiProjection.current_receipt_id || null;
+      selectionState.current_receipt_kind = uiProjection.current_receipt_kind || null;
+    } else if (source?.runtime_state) {
+      selectionState.runtime_state = clone(source.runtime_state);
+    }
+    if (renderProjection) {
+      selectionState.render_projection = clone(renderProjection);
+    }
+    if (Array.isArray(source?.place_search_results) && source.place_search_results.length > 0) {
+      selectionState.pending_place_candidates = clone(source.place_search_results);
+    } else if (source?.operation) {
+      selectionState.pending_place_candidates = [];
+    }
+    if (source?.cleared_places) {
+      selectionState.selected_places = [];
+      selectionState.selected_theme = null;
+      selectionState.selected_cubes = [];
+      selectionState.reporting_geography = null;
+      selectionState.analysis_spec = null;
+      selectionState.exact_slice = null;
+      selectionState.time_scope = null;
+      selectionState.active_output_mode = null;
+      selectionState.available_themes = [];
+      selectionState.available_cubes = [];
+      selectionState.pending_clarification = null;
+      selectionState.discovery_result = null;
+      selectionState.defaults_used = [];
+      selectionState.runtime_state = null;
+      selectionState.provenance_summary = null;
+    }
+  }
+
+  function applyProjectionToMapState(mapState, source) {
+    const uiProjection = authoritativeUIProjection(source);
+    const renderProjection = authoritativeRenderProjection(source);
+    if (uiProjection) {
+      mapState.ui_projection = clone(uiProjection);
+      mapState.reporting_geography = clone(uiProjection.reporting_geography || null);
+      mapState.active_output_mode = uiProjection.active_output_mode || null;
+      mapState.selected_ids = Array.isArray(uiProjection.reporting_geography?.unit_ids)
+        ? uiProjection.reporting_geography.unit_ids
+            .map((unitId) => Number(unitId))
+            .filter((unitId) => Number.isFinite(unitId))
+        : [];
+      if (uiProjection.reporting_geography?.unit_type) {
+        mapState.unit_type = String(uiProjection.reporting_geography.unit_type);
+      }
+      mapState.notices = clone(uiProjection.notices || []);
+      mapState.provenance_summary = clone(uiProjection.provenance_summary || null);
+    }
+    if (renderProjection) {
+      mapState.render_projection = clone(renderProjection);
+      if (renderProjection.provenance_summary) {
+        mapState.provenance_summary = clone(renderProjection.provenance_summary);
+      }
+      if (renderProjection.boundary_map) {
+        mapState.feature_count = Number(renderProjection.boundary_map.feature_count || 0);
+        if (renderProjection.boundary_map.unit_type) {
+          mapState.unit_type = String(renderProjection.boundary_map.unit_type);
         }
       }
     }
-    return null;
+  }
+
+  function applyProjectionToVisualizationState(visualizationState, source) {
+    const uiProjection = authoritativeUIProjection(source);
+    const renderProjection = authoritativeRenderProjection(source);
+    if (uiProjection) {
+      visualizationState.ui_projection = clone(uiProjection);
+      visualizationState.current_receipt_id = uiProjection.current_receipt_id || null;
+      visualizationState.dataset_family = clone(uiProjection.dataset_family || null);
+      visualizationState.exact_slice = clone(uiProjection.exact_slice || null);
+      visualizationState.time_scope = clone(uiProjection.time_scope || null);
+      visualizationState.active_output_mode = uiProjection.active_output_mode || null;
+      visualizationState.provenance_summary = clone(uiProjection.provenance_summary || null);
+    }
+    if (renderProjection) {
+      visualizationState.render_projection = clone(renderProjection);
+      if (renderProjection.provenance_summary) {
+        visualizationState.provenance_summary = clone(renderProjection.provenance_summary);
+      }
+      if (renderProjection.active_output_mode) {
+        visualizationState.active_output_mode = renderProjection.active_output_mode;
+      }
+      if (renderProjection.chart) {
+        if (String(renderProjection.active_output_mode || "").includes("category")) {
+          visualizationState.category_breakdown = clone(renderProjection.chart);
+          visualizationState.active_tab = "categories";
+          visualizationState.category_year = renderProjection.chart.year || null;
+        } else if (Array.isArray(renderProjection.chart.rows)) {
+          const firstRow = renderProjection.chart.rows[0] || {};
+          if (Object.prototype.hasOwnProperty.call(firstRow, "category_label")) {
+            visualizationState.category_breakdown = clone(renderProjection.chart);
+            visualizationState.active_tab = "categories";
+            visualizationState.category_year = renderProjection.chart.year || null;
+          } else {
+            visualizationState.time_series = clone(renderProjection.chart);
+            visualizationState.active_tab = "line";
+          }
+        }
+      }
+      if (renderProjection.table && visualizationState.active_output_mode === "table") {
+        visualizationState.active_tab = "table";
+      }
+      if (renderProjection.answer_text) {
+        visualizationState.status = renderProjection.answer_text;
+      }
+    }
+  }
+
+  function applyProjectionToMetadataState(metadataState, source) {
+    const renderProjection = authoritativeRenderProjection(source);
+    if (!renderProjection) {
+      return;
+    }
+    metadataState.render_projection = clone(renderProjection);
+    metadataState.provenance_summary = clone(renderProjection.provenance_summary || null);
+    const metadataPayload = renderProjection.metadata_payload || {};
+    [
+      "place_profile",
+      "place_key_findings",
+      "unit_type_info",
+      "data_entity_resolution",
+      "data_entity_info",
+    ].forEach((field) => {
+      metadataState[field] = clone(metadataPayload[field] || null);
+    });
+    if (metadataPayload.unit_type_info?.identifier) {
+      metadataState.requested_unit_type = metadataPayload.unit_type_info.identifier;
+    }
+    if (metadataPayload.data_entity_info?.entity_id) {
+      metadataState.requested_entity_id = metadataPayload.data_entity_info.entity_id;
+    } else if (metadataPayload.data_entity_resolution?.result?.entity_id) {
+      metadataState.requested_entity_id = metadataPayload.data_entity_resolution.result.entity_id;
+    }
   }
 
   function appendUserMessage(userMessage) {
@@ -236,6 +526,14 @@
       selected_places: [],
       selected_theme: null,
       selected_cubes: [],
+      conversation_state: {
+        transcript: [],
+        current_focus: null,
+        pending_clarification: null,
+        current_receipt_id: null,
+        recent_receipt_ids: [],
+        discourse_anchors: {},
+      },
     };
     const next = Object.assign({}, current);
     next.messages = Array.isArray(current.messages) ? current.messages.slice() : [];
@@ -252,24 +550,20 @@
     writeStore("thread-state-store", clone(threadState));
 
     const selectionState = coerceSelectionState();
-    selectionState.selected_places = Array.isArray(threadState.selected_places)
-      ? clone(threadState.selected_places)
-      : [];
-    selectionState.selected_theme = threadState.selected_theme
-      ? clone(threadState.selected_theme)
-      : null;
-    selectionState.selected_cubes = Array.isArray(threadState.selected_cubes)
-      ? clone(threadState.selected_cubes)
-      : [];
+    applyProjectionToSelectionState(selectionState, threadState);
     writeStore("selection-state-store", selectionState);
 
     const mapState = coerceMapState();
-    mapState.selected_ids = selectedUnitIds(selectionState);
-    const unitType = firstSelectedUnitType(selectionState);
-    if (unitType) {
-      mapState.unit_type = unitType;
-    }
+    applyProjectionToMapState(mapState, threadState);
     writeStore("map-state-store", mapState);
+
+    const visualizationState = coerceVisualizationState();
+    applyProjectionToVisualizationState(visualizationState, threadState);
+    writeStore("visualization-state-store", visualizationState);
+
+    const metadataState = coerceMetadataState();
+    applyProjectionToMetadataState(metadataState, threadState);
+    writeStore("metadata-state-store", metadataState);
 
     if (threadState.latest_ui_delta) {
       applyUIDelta(threadState.latest_ui_delta);
@@ -330,89 +624,10 @@
     const metadataState = coerceMetadataState();
     const mapState = coerceMapState();
 
-    selectionState.selected_places = Array.isArray(uiDelta.selected_places)
-      ? clone(uiDelta.selected_places)
-      : [];
-    selectionState.selected_theme = uiDelta.selected_theme
-      ? clone(uiDelta.selected_theme)
-      : null;
-    selectionState.selected_cubes = Array.isArray(uiDelta.selected_cubes)
-      ? clone(uiDelta.selected_cubes)
-      : [];
-    selectionState.notices = Array.isArray(uiDelta.notices)
-      ? clone(uiDelta.notices)
-      : [];
-
-    if (uiDelta.cleared_places) {
-      selectionState.selected_places = [];
-      selectionState.selected_theme = null;
-      selectionState.selected_cubes = [];
-      selectionState.available_themes = [];
-      selectionState.available_cubes = [];
-      mapState.selected_ids = [];
-    }
-
-    if (uiDelta.operation === "search_places") {
-      selectionState.pending_place_candidates = Array.isArray(uiDelta.place_search_results)
-        ? clone(uiDelta.place_search_results)
-        : [];
-    } else if (uiDelta.operation) {
-      selectionState.pending_place_candidates = [];
-    }
-
-    if (uiDelta.themes && Array.isArray(uiDelta.themes.items)) {
-      selectionState.available_themes = clone(uiDelta.themes.items);
-    }
-
-    if (
-      uiDelta.operation === "list_cubes_for_theme_and_unit" ||
-      (Array.isArray(uiDelta.cubes) && uiDelta.cubes.length > 0)
-    ) {
-      selectionState.available_cubes = Array.isArray(uiDelta.cubes)
-        ? clone(uiDelta.cubes)
-        : [];
-    }
-
-    if (uiDelta.time_series) {
-      visualizationState.time_series = clone(uiDelta.time_series);
-      visualizationState.active_tab = "line";
-    }
-
-    if (uiDelta.category_breakdown) {
-      visualizationState.category_breakdown = clone(uiDelta.category_breakdown);
-      visualizationState.category_year = uiDelta.category_breakdown.year || null;
-      visualizationState.active_tab = "categories";
-    }
-
-    if (uiDelta.place_profile) {
-      metadataState.place_profile = clone(uiDelta.place_profile);
-    }
-
-    if (uiDelta.unit_type_info) {
-      metadataState.unit_type_info = clone(uiDelta.unit_type_info);
-      metadataState.requested_unit_type = uiDelta.unit_type_info.identifier || null;
-    }
-
-    if (uiDelta.data_entity_resolution) {
-      metadataState.data_entity_resolution = clone(uiDelta.data_entity_resolution);
-      metadataState.requested_entity_id =
-        uiDelta.data_entity_resolution.result?.entity_id || null;
-    }
-
-    if (uiDelta.data_entity_info) {
-      metadataState.data_entity_info = clone(uiDelta.data_entity_info);
-      metadataState.requested_entity_id = uiDelta.data_entity_info.entity_id || null;
-    }
-
-    mapState.selected_ids = selectedUnitIds(selectionState);
-    if (uiDelta.map_features && uiDelta.map_features.unit_type) {
-      mapState.unit_type = uiDelta.map_features.unit_type;
-    } else {
-      const unitType = firstSelectedUnitType(selectionState);
-      if (unitType) {
-        mapState.unit_type = unitType;
-      }
-    }
+    applyProjectionToSelectionState(selectionState, uiDelta);
+    applyProjectionToVisualizationState(visualizationState, uiDelta);
+    applyProjectionToMetadataState(metadataState, uiDelta);
+    applyProjectionToMapState(mapState, uiDelta);
 
     writeStore("selection-state-store", selectionState);
     writeStore("visualization-state-store", visualizationState);
@@ -806,8 +1021,6 @@
       return;
     }
     if (
-      !document.getElementById("thread-state-store") ||
-      !document.getElementById("selection-state-store") ||
       !document.getElementById("send-button") ||
       !document.getElementById("chat-input")
     ) {

@@ -77,6 +77,7 @@ async def stream_thread_events(
     async def event_stream():
         queue = thread_store.subscribe(thread_id)
         try:
+            yield sse_keepalive()
             while True:
                 try:
                     payload = await asyncio.wait_for(queue.get(), timeout=15.0)

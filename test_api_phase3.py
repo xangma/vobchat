@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient as FastAPITestClient
 
 from vobchat.api.main import app as api_app
+from vobchat.api.routers.chat import stream_thread_events
 from vobchat.api.schemas.maps import MapFeatureCollectionResponse, MapFeatureResponse
 from vobchat.api.schemas.metadata import (
     DataEntityInfoResponse,
@@ -43,6 +46,7 @@ from vobchat.api.services.maps import get_maps_service
 from vobchat.api.services.metadata import get_metadata_service
 from vobchat.api.services.places import get_places_service
 from vobchat.api.services.series import get_series_service
+from vobchat.api.services.chat_threads import InMemoryChatThreadStore
 from vobchat.api.services.themes import get_themes_service
 
 
@@ -65,6 +69,21 @@ def test_health_and_ready_endpoints(client: FastAPITestClient) -> None:
     assert ready.status_code == 200
     assert ready.json()["status"] == "ready"
     assert "auth_db_url" in ready.json()["details"]
+
+
+def test_chat_stream_emits_immediate_keepalive(client: FastAPITestClient) -> None:
+    thread_store = InMemoryChatThreadStore()
+    created = thread_store.create_thread()
+
+    async def capture_first_chunk():
+        response = await stream_thread_events(created.thread_id, thread_store)
+        first_chunk = await response.body_iterator.__anext__()
+        return response, first_chunk
+
+    response, first_chunk = asyncio.run(capture_first_chunk())
+
+    assert response.status_code == 200
+    assert first_chunk == ": keep-alive\n\n"
 
 
 def test_places_routes_return_typed_shapes(client: FastAPITestClient) -> None:
