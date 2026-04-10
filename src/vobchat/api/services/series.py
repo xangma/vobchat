@@ -19,6 +19,8 @@ class SeriesService:
         dataset = self.repository.fetch_series_for_units_and_cubes(
             unit_ids=request.unit_ids,
             cube_ids=request.cube_ids,
+            cellrefs=request.cellrefs,
+            dataitem_ids=request.dataitem_ids,
             start_year=request.start_year,
             end_year=request.end_year,
         )
@@ -36,6 +38,9 @@ class SeriesService:
         dataset = self.repository.fetch_category_breakdown(
             unit_ids=request.unit_ids,
             cube_ids=request.cube_ids,
+            cellrefs=request.cellrefs,
+            dataitem_ids=request.dataitem_ids,
+            cat_ids=request.cat_ids,
             year=request.year,
         )
         return CategoryBreakdownResponse(

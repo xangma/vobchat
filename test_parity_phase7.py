@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient as FastAPITestClient
 
 from vobchat.api.main import app as api_app
-from vobchat.api.schemas.chat import ChatOperation, ChatThreadState
+from vobchat.api.schemas.chat import ChatOperation, ChatThreadState, ExecutionGuardOutcome, PolicyOutcome
 from vobchat.api.schemas.maps import MapFeatureCollectionResponse, MapFeatureResponse
 from vobchat.api.schemas.metadata import (
     DataEntityInfoResponse,
@@ -566,8 +566,13 @@ def test_chat_journey_exact_place_theme_chart_reload_and_resume(parity_chat_clie
     series_payload = series_turn.json()
     assert series_turn.status_code == 200
     assert series_payload["ui_delta"]["operation"] == ChatOperation.FETCH_TIME_SERIES.value
-    assert series_payload["ui_delta"]["time_series"]["row_count"] == 2
-    assert series_payload["thread_state"]["selected_cubes"][0]["cube_id"] == "N_POP_TOTAL"
+    assert series_payload["ui_delta"]["time_series"] is None
+    assert series_payload["ui_delta"]["policy_decision"]["outcome"] == PolicyOutcome.DISCOVERY.value
+    assert (
+        series_payload["ui_delta"]["execution_guard_result"]["outcome"]
+        == ExecutionGuardOutcome.DISCOVERY_RESPONSE.value
+    )
+    assert series_payload["thread_state"]["selected_cubes"] == []
 
     fetched = client.get(f"/chat/threads/{thread_id}")
     assert fetched.status_code == 200
@@ -580,9 +585,10 @@ def test_chat_journey_exact_place_theme_chart_reload_and_resume(parity_chat_clie
         map_state=initial_map_state(),
     )
     assert selection_state["selected_theme"]["label"] == "Population"
-    assert visualization_state["time_series"]["row_count"] == 2
+    assert visualization_state["time_series"] is None
     assert map_state["selected_ids"] == [101]
-    assert metadata_state["place_profile"] is None
+    assert metadata_state["place_profile"]["place_id"] == 1
+    assert metadata_state["unit_type_info"]["identifier"] == "MOD_DIST"
 
     category_turn = client.post(
         "/chat/turn",
@@ -590,7 +596,15 @@ def test_chat_journey_exact_place_theme_chart_reload_and_resume(parity_chat_clie
     )
     category_payload = category_turn.json()
     assert category_turn.status_code == 200
-    assert category_payload["ui_delta"]["category_breakdown"]["row_count"] == 2
+    assert category_payload["ui_delta"]["category_breakdown"] is None
+    assert (
+        category_payload["ui_delta"]["policy_decision"]["outcome"]
+        == PolicyOutcome.UNAVAILABLE_WITH_ALTERNATIVES.value
+    )
+    assert (
+        category_payload["ui_delta"]["execution_guard_result"]["outcome"]
+        == ExecutionGuardOutcome.UNAVAILABLE_WITH_ALTERNATIVES.value
+    )
     assert category_payload["thread_state"]["selected_theme"]["label"] == "Population"
 
 
@@ -687,6 +701,11 @@ def test_map_bbox_loading_and_map_click_selection_use_rewrite_api_path() -> None
     selection_state = initial_selection_state()
     selection_state["selected_places"] = [YORK.model_dump(mode="json")]
     selection_state["selected_theme"] = POPULATION_THEME.model_dump(mode="json")
+    selection_state["reporting_geography"] = {
+        "unit_type": "MOD_DIST",
+        "unit_ids": [101],
+        "label": "Modern District",
+    }
 
     map_state = initial_map_state()
     map_state["selected_ids"] = [101]
@@ -699,7 +718,7 @@ def test_map_bbox_loading_and_map_click_selection_use_rewrite_api_path() -> None
         map_state=map_state,
     )
 
-    assert "Loaded" in status
+    assert status == "Boundary map for York at Modern District level."
     assert api_client.fetch_features_calls
     background_query = api_client.fetch_features_calls[0]
     assert background_query.min_x == -2.0
@@ -731,6 +750,11 @@ def test_visualization_multi_place_category_table_and_metadata_hydration() -> No
     ]
     selection_state["selected_theme"] = POPULATION_THEME.model_dump(mode="json")
     selection_state["selected_cubes"] = [POPULATION_CATEGORY_CUBE.model_dump(mode="json")]
+    selection_state["reporting_geography"] = {
+        "unit_type": "MOD_DIST",
+        "unit_ids": [101, 102],
+        "label": "Modern District",
+    }
 
     visualization_state = load_visualization_data(
         api_client,

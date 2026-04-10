@@ -42,11 +42,21 @@ def _compact_thread_summary(state: ChatThreadState) -> dict[str, object]:
         {"cube_id": cube.cube_id, "label": cube.label}
         for cube in state.selected_cubes
     ]
+    reporting_geography = None
+    if state.analysis_state.reporting_geography is not None:
+        reporting_geography = state.analysis_state.reporting_geography.model_dump(mode="json")
     return {
         "thread_id": state.thread_id,
         "selected_places": selected_places,
         "selected_theme": selected_theme,
         "selected_cubes": selected_cubes,
+        "reporting_geography": reporting_geography,
+        "current_receipt_id": state.current_receipt_id,
+        "pending_clarification": (
+            state.pending_clarification.model_dump(mode="json")
+            if state.pending_clarification is not None
+            else None
+        ),
         "recent_messages": recent_messages,
     }
 

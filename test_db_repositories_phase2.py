@@ -160,7 +160,7 @@ def test_series_repository_normalizes_series_and_categories():
     repo = SeriesRepository(executor)
 
     dataset = repo.fetch_series_for_units_and_cubes([10], ["N_POP_12WAY"])
-    categories = repo.fetch_category_breakdown([10], ["N_POP_12WAY"], 1901)
+    categories = repo.fetch_category_breakdown([10], ["N_POP_12WAY"], year=1901)
 
     assert dataset.unit_ids == (10,)
     assert dataset.cube_ids == ("N_POP_12WAY",)

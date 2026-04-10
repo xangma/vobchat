@@ -48,21 +48,24 @@ class ChatPlanner:
         self.llm_client = llm_client or get_llm_client()
 
     async def plan(self, state: ChatThreadState, user_message: str) -> PlannerResult:
-        messages = build_planner_messages(state, user_message)
         try:
-            raw = await self.llm_client.complete_json(
-                messages,
-                PlannerResult,
-                temperature=0.0,
-            )
-            if isinstance(raw, PlannerResult):
-                result = raw
-            else:
-                result = PlannerResult.model_validate(raw)
-            result.source = "llm"
-            return result
+            return await self.try_llm_plan(state, user_message)
         except Exception:
             return self._fallback_plan(state, user_message)
+
+    async def try_llm_plan(self, state: ChatThreadState, user_message: str) -> PlannerResult:
+        messages = build_planner_messages(state, user_message)
+        raw = await self.llm_client.complete_json(
+            messages,
+            PlannerResult,
+            temperature=0.0,
+        )
+        if isinstance(raw, PlannerResult):
+            result = raw
+        else:
+            result = PlannerResult.model_validate(raw)
+        result.source = "llm"
+        return result
 
     def _fallback_plan(self, state: ChatThreadState, user_message: str) -> PlannerResult:
         message = " ".join((user_message or "").split())

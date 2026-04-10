@@ -15,6 +15,8 @@ def create_chat_layout() -> html.Div:
                 ],
             ),
             html.Div(id="selection-summary", className="mb-2"),
+            html.Div(id="chat-trust-panel", className="mb-2"),
+            html.Div(id="chat-discovery-panel", className="mb-2"),
             html.Div(id="chat-status-banner", className="mb-2"),
             dcc.Loading(
                 type="default",

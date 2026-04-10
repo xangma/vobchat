@@ -67,6 +67,35 @@ class CubeSummary:
 
 
 @dataclass(frozen=True)
+class CategoryEntitySummary:
+    entity_id: str | None
+    label: str | None = None
+    group_label: str | None = None
+    source: str | None = None
+    provenance: str | None = None
+
+
+@dataclass(frozen=True)
+class ExactSliceSummary:
+    theme_id: str
+    cube_id: str
+    cube_label: str
+    cube_text: str | None = None
+    slice_label: str | None = None
+    slice_text: str | None = None
+    cell_ref: str | None = None
+    dataitem_id: str | None = None
+    cat_id: str | None = None
+    view_id: str | None = None
+    start_year: float | None = None
+    end_year: float | None = None
+    observation_count: int = 0
+    has_categories: bool = False
+    category_entity: CategoryEntitySummary | None = None
+    provenance: str | None = None
+
+
+@dataclass(frozen=True)
 class TimeSeriesRow:
     year: float
     unit_id: int
@@ -77,6 +106,8 @@ class TimeSeriesRow:
     cube_text: str | None
     cell_ref: str | None
     value: float | None
+    dataitem_id: str | None = None
+    cat_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -96,6 +127,10 @@ class CategoryRow:
     category_label: str
     value: float | None
     cell_ref: str | None = None
+    dataitem_id: str | None = None
+    cat_id: str | None = None
+    category_entity_id: str | None = None
+    category_source: str | None = None
 
 
 @dataclass(frozen=True)

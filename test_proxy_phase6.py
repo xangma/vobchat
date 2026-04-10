@@ -14,7 +14,9 @@ from vobchat.api.schemas.chat import (
     ChatThreadCreateResponse,
     ChatThreadState,
     ChatUIStateDelta,
+    ReportingGeographyRef,
     SSEEventPayload,
+    UIProjection,
 )
 from vobchat.api.schemas.metadata import PlaceProfileResponse
 from vobchat.api.schemas.places import PlaceCandidateResponse, ResolvedPlaceResponse, UnitDetailResponse
@@ -310,6 +312,29 @@ def test_streamed_helpers_update_thread_and_structured_state() -> None:
                 place_id=1,
                 name="York",
                 text="Historic city",
+            ),
+            ui_projection=UIProjection(
+                projection_id="ui-stream-1",
+                selected_places=[make_resolved_place()],
+                reporting_geography=ReportingGeographyRef(
+                    unit_type="MOD_DIST",
+                    unit_ids=[101],
+                    label="Modern District",
+                ),
+                dataset_family=ThemeSummaryResponse(theme_id="T_POP", label="Population"),
+                selected_cubes=[
+                    CubeSummaryResponse(
+                        theme_id="T_POP",
+                        cube_id="N_POP_TOTAL",
+                        label="Total population",
+                        start_year=1801,
+                        end_year=1901,
+                        observation_count=5,
+                        has_categories=False,
+                    )
+                ],
+                active_output_mode="chart",
+                notices=["Loaded York population."],
             ),
             notices=["Loaded York population."],
         ),
