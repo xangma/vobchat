@@ -94,16 +94,20 @@ LLM_VERIFY_SSL=false
 Preferred development install:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
+conda activate vobchat
 pip install -e ".[dev]"
 ```
 
 Alternative runtime-only install:
 
 ```bash
+conda activate vobchat
 pip install -r requirements.txt
 ```
+
+The supported local development environment for this repo is the `vobchat`
+conda environment. A repo-local `.venv` is not part of the intended workflow
+and can be ignored or removed if it exists.
 
 Packaging note:
 
