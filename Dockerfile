@@ -20,7 +20,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app/src
 
-COPY requirements.txt pyproject.toml README.md /app/
+COPY requirements.txt pyproject.toml /app/
 COPY src/ /app/src/
 
 RUN pip install --no-cache-dir -r requirements.txt
